@@ -1,6 +1,9 @@
-
+using System;
+using System.Net;
 using System.Reflection;
-
+using System.IO;
+using System.Collections.Generic;
+using System.Linq;
 using dc.pr;
 using dc.ui;
 using HaxeProxy.Runtime;
@@ -8,7 +11,6 @@ using Newtonsoft.Json;
 using Hashlink.Virtuals;
 using Serilog;
 using ModCore.Utitities;
-
 
 namespace DeadCellsMultiplayerMod
 {
@@ -59,7 +61,6 @@ namespace DeadCellsMultiplayerMod
                 Hook_TitleScreen.addMenu += AddMenuHook;
                 Hook_TitleScreen.mainMenu += MainMenuHook;
                 Hook_Game.onDispose += GameDisposeHook;
-
                 _menuHooksAttached = true;
             }
             catch (Exception ex)
@@ -67,8 +68,6 @@ namespace DeadCellsMultiplayerMod
                 _log?.Warning("[NetMod] TitleScreen hooks failed: {Message}", ex.Message);
             }
         }
-
-
 
         public static void Initialize(ILogger logger)
         {
@@ -329,6 +328,7 @@ namespace DeadCellsMultiplayerMod
             StoreTitleScreen(self);
             _mainMenuButtonAdded = false;
             orig(self);
+
             EnsureMainMenuMultiplayerButton(self);
         }
 
@@ -355,8 +355,8 @@ namespace DeadCellsMultiplayerMod
                 if (count == 1)
                 {
                     int white = 0xFFFFFF;
-                    var label = MakeHLString("多人游戏");
-                    var helpStr = MakeHLString("创建房间或加入房间");
+                    var label = MakeHLString("Play multiplayer");
+                    var helpStr = MakeHLString("Host or join a multiplayer session");
                     var colorHl = Ref<int>.From(ref white);
                     var cbHl = new HlAction(() => ShowMultiplayerMenu(self));
                     orig(self, label, cbHl, helpStr, null, colorHl);
@@ -380,11 +380,11 @@ namespace DeadCellsMultiplayerMod
             {
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
-                AddMenuButton(screen, "创建房间", () => ShowConnectionMenu(screen, NetRole.Host), "创建多人游戏会话");
-                AddMenuButton(screen, "加入房间", () => ShowConnectionMenu(screen, NetRole.Client), "连接到现有主机");
-                AddMenuButton(screen, "返回", () => screen.mainMenu(), "返回主菜单");
+                AddMenuButton(screen, "Host game", () => ShowConnectionMenu(screen, NetRole.Host), "Create a multiplayer session");
+                AddMenuButton(screen, "Join game", () => ShowConnectionMenu(screen, NetRole.Client), "Connect to an existing host");
+                AddMenuButton(screen, "Back", () => screen.mainMenu(), "Return to main menu");
                 RemoveMenuItems(screen, "About Core Modding", "Play multiplayer");
-                RemoveDuplicatesKeepFirst(screen, "创建游戏", "加入房间");
+                RemoveDuplicatesKeepFirst(screen, "Host game", "Join game");
                 _inHostStatusMenu = false;
                 _inClientWaitingMenu = false;
             }
@@ -413,21 +413,21 @@ namespace DeadCellsMultiplayerMod
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
 
-                AddMenuButton(screen, $"用户名: {_username}", () => EditUsername(screen), "编辑显示名称");
+                AddMenuButton(screen, $"Username: {_username}", () => EditUsername(screen), "Edit display name");
 
-                AddMenuButton(screen, $"IP地址: {_mpIp}", () =>
+                AddMenuButton(screen, $"IP: {_mpIp}", () =>
                 {
-                    OpenTextInput(screen, "IP地址", _mpIp, value =>
+                    OpenTextInput(screen, "IP address", _mpIp, value =>
                     {
                         _mpIp = string.IsNullOrWhiteSpace(value) ? "127.0.0.1" : value;
                         SaveConfig();
                         ShowConnectionMenu(screen, role);
                     });
-                }, "编辑IP");
+                }, "Edit IP");
 
-                AddMenuButton(screen, $"房间密码: {_mpPort}", () =>
+                AddMenuButton(screen, $"Port: {_mpPort}", () =>
                 {
-                    OpenTextInput(screen, "房间密码", _mpPort.ToString(), value =>
+                    OpenTextInput(screen, "Port", _mpPort.ToString(), value =>
                     {
                         if (!int.TryParse(value, out var parsed) || parsed <= 0 || parsed > 65535)
                             parsed = 1234;
@@ -435,16 +435,16 @@ namespace DeadCellsMultiplayerMod
                         SaveConfig();
                         ShowConnectionMenu(screen, role);
                     });
-                }, "编辑密码");
+                }, "Edit port");
 
-                var actionLabel = role == NetRole.Host ? "创建房间" : "加入";
+                var actionLabel = role == NetRole.Host ? "Host" : "Join";
                 if (role == NetRole.Host)
                 {
                     AddMenuButton(screen, actionLabel, () =>
                     {
                         StartHostServerOnly();
                         ShowHostStatusMenu(screen);
-                    }, "开始托管");
+                    }, "Start hosting");
                 }
                 else
                 {
@@ -452,12 +452,12 @@ namespace DeadCellsMultiplayerMod
                     {
                         StartNetwork(role, screen);
                         ShowClientWaitingMenu(screen);
-                    }, "连接到主机");
+                    }, "Connect to host");
                 }
 
-                AddMenuButton(screen, "返回", () => ShowMultiplayerMenu(screen), "返回多人游戏菜单");
+                AddMenuButton(screen, "Back", () => ShowMultiplayerMenu(screen), "Back to multiplayer menu");
                 RemoveMenuItems(screen, "About Core Modding", "Play multiplayer");
-                RemoveDuplicatesKeepFirst(screen, "创建房间", "加入房间", "About Core Modding");
+                RemoveDuplicatesKeepFirst(screen, "Host game", "Join game", "About Core Modding");
                 _inHostStatusMenu = false;
                 _inClientWaitingMenu = false;
                 if (role == NetRole.Host)
@@ -625,19 +625,19 @@ namespace DeadCellsMultiplayerMod
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
 
-                AddInfoLine(screen, $"状态: {BuildStatus(NetRole.Host)}", infoColor: 0xA0C0FF);
-                AddInfoLine(screen, $"玩家: {BuildPlayerList(NetRole.Host)}", infoColor: 0xA0C0FF);
+                AddInfoLine(screen, $"Status: {BuildStatus(NetRole.Host)}", infoColor: 0xA0C0FF);
+                AddInfoLine(screen, $"Players: {BuildPlayerList(NetRole.Host)}", infoColor: 0xA0C0FF);
 
-                AddMenuButton(screen, "开始游戏", () => StartHostRun(screen), "启动游戏");
-                AddMenuButton(screen, "返回", () =>
+                AddMenuButton(screen, "Play", () => StartHostRun(screen), "Launch game");
+                AddMenuButton(screen, "Back", () =>
                 {
                     SetRole(NetRole.None);
                     _menuSelection = NetRole.None;
                     ShowMultiplayerMenu(screen);
-                }, "返回主机设置");
+                }, "Back to host setup");
 
                 RemoveMenuItems(screen, "About Core Modding", "Play multiplayer");
-                RemoveDuplicatesKeepFirst(screen, "开始游戏", "返回");
+                RemoveDuplicatesKeepFirst(screen, "Play", "Back");
                 _inHostStatusMenu = true;
                 _inClientWaitingMenu = false;
             }
@@ -662,11 +662,11 @@ namespace DeadCellsMultiplayerMod
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
 
-                AddInfoLine(screen, "等待房主开始游戏", infoColor: 0xA0C0FF);
-                AddMenuButton(screen, "断开连接", () => DisconnectFromMenu(screen), "断开连接并返回主菜单");
+                AddInfoLine(screen, "Waiting for the host", infoColor: 0xA0C0FF);
+                AddMenuButton(screen, "Disconnect", () => DisconnectFromMenu(screen), "Disconnect and return to main menu");
 
-                RemoveMenuItems(screen, "About Core Modding", "玩多人游戏");
-                RemoveDuplicatesKeepFirst(screen, "断开连接");
+                RemoveMenuItems(screen, "About Core Modding", "Play multiplayer");
+                RemoveDuplicatesKeepFirst(screen, "Disconnect");
                 _inClientWaitingMenu = true;
                 _inHostStatusMenu = false;
             }
@@ -697,7 +697,7 @@ namespace DeadCellsMultiplayerMod
 
         private static void EditUsername(TitleScreen screen)
         {
-            OpenTextInput(screen, "用户名", _username, value =>
+            OpenTextInput(screen, "Username", _username, value =>
             {
                 var cleaned = CleanUsername(value);
                 _username = cleaned;
@@ -1010,27 +1010,27 @@ namespace DeadCellsMultiplayerMod
         {
             var net = NetRef;
             if (net != null && net.HasRemote)
-                return role == NetRole.Host ? "客户端已连接" : "连接到主机";
+                return role == NetRole.Host ? "client connected" : "connected to host";
 
             if (role == NetRole.Client)
-                return _waitingForHost ? "等待房主开始游戏" : "未连接客户端";
+                return _waitingForHost ? "waiting for the host" : "not connected";
 
-            return "等待房主开始游戏";
+            return "waiting for client";
         }
 
         private static string BuildPlayerList(NetRole role)
         {
             var parts = new System.Collections.Generic.List<string>();
-            parts.Add(role == NetRole.Host ? "你是房主" : "加入玩家（你）");
+            parts.Add(role == NetRole.Host ? "Host (you)" : "Client (you)");
 
             var net = NetRef;
             if (net != null && net.HasRemote)
             {
-                parts.Add(role == NetRole.Host ? "玩家已经加入" : "在线主持");
+                parts.Add(role == NetRole.Host ? "Client joined" : "Host online");
             }
             else
             {
-                parts.Add(role == NetRole.Host ? "没有玩家加入端连接" : "等待主机");
+                parts.Add(role == NetRole.Host ? "No client connected" : "Waiting for host");
             }
 
             return string.Join(", ", parts);
@@ -1050,7 +1050,7 @@ namespace DeadCellsMultiplayerMod
                         var text = s?.ToString() ?? string.Empty;
                         onValidate(text);
                     }),
-                    MakeHLString("确认 | 取消"),
+                    MakeHLString("Cancel"),
                     MakeHLString(string.Empty),
                     (dc.hxd.res.Sound?)null);
             }
@@ -1169,15 +1169,15 @@ namespace DeadCellsMultiplayerMod
             try
             {
                 var arr = GetMemberValue(screen, "menuItems", true);
-                var existingIdx = FindMenuIndexByLabel(arr, "多人游戏");
+                var existingIdx = FindMenuIndexByLabel(arr, "Play multiplayer");
                 if (existingIdx < 0)
                 {
-                    TryAddMenuButton(screen, "多人游戏", () => ShowMultiplayerMenu(screen), "创建房间或加入房间");
+                    TryAddMenuButton(screen, "Play multiplayer", () => ShowMultiplayerMenu(screen), "Host or join a multiplayer session");
                     arr = GetMemberValue(screen, "menuItems", true);
                 }
 
                 _mainMenuButtonAdded = true;
-                MoveButtonAfterPlay(arr, "多人游戏", "Play");
+                MoveButtonAfterPlay(arr, "Play multiplayer", "Play");
             }
             catch (Exception ex)
             {
