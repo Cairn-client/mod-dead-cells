@@ -12,6 +12,7 @@ using dc.ui.hud;
 using Hashlink.Virtuals;
 using HaxeProxy.Runtime;
 using ModCore.Utitities;
+using Serilog;
 
 namespace DeadCellsMultiplayerMod;
 
@@ -26,8 +27,7 @@ public class MultiplayerUI
     private int lastMaxLife = 0;
 
     public FlowBox box { get; set; } = null!;
-    public Hero hero = ModCore.Modules.Game.Instance.HeroInstance!;
-    private bool newgame = true;
+
     public MultiplayerUI(ModEntry Entry)
     {
         mod = Entry;
@@ -45,7 +45,6 @@ public class MultiplayerUI
     {
         orig(self);
         initkingLife(self);
-
     }
     private bool initlif = true;
     private void Hook_Hero_kinglifupdate(Hook_Hero.orig_updateLifeBar orig, Hero self)
@@ -58,10 +57,7 @@ public class MultiplayerUI
         _net = ModEntry._net;
         var net = _net;
         if (net == null) return;
-        if (self.life <= 0)
-        {
-            king.destroy();
-        }
+
 
         if (lastLife != self.life || lastMaxLife != self.maxLife)
         {
@@ -69,17 +65,28 @@ public class MultiplayerUI
             lastLife = self.life;
             lastMaxLife = self.maxLife;
         }
+
         if (!net.TryGetRemoteHP(out int life, out int maxLife, out int lif, out int bonusLife, out int recover))
             return;
+
         kingLifeUpdate(king!, life, maxLife, lif, bonusLife, recover);
-        if (this.kingLife.curState.life < 0)
+        if (self.life <= 0)
         {
-            if (newgame)
-            {
-                self.startDeathCine();
-                newgame = false;
-            }
+            life = -1;
         }
+        if (this.kingLife.curState.life < 0 || self.life <= 0 || life < 0)
+        {
+            //self.startDeathCine();
+            Main me = Main.Class.ME;
+            HlFunc<dc.libs.Process> pause = new HlFunc<dc.libs.Process>(this.process);
+            me.transition(null, pause, Ref<bool>.Null, null, null);
+        }
+    }
+
+    private dc.libs.Process process()
+    {
+        bool? titleLib = null;
+        return new TitleScreen(titleLib);
     }
 
     private void Hook_HUD_initLeftFlowT(Hook_HUD.orig_initLeftFlowT orig, HUD self)
@@ -90,6 +97,8 @@ public class MultiplayerUI
         kingLifeBar.init(100, 100);
         this.kingLife = kingLifeBar;
     }
+
+
 
     public void initkingLife(HUD self)
     {
