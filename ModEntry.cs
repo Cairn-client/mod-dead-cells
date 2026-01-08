@@ -30,7 +30,7 @@ namespace DeadCellsMultiplayerMod
         private bool _ready;
 
         private NetRole _netRole = NetRole.None;
-        private static NetNode? _net;
+        public static NetNode? _net;
 
 
         public dc.pr.Game? game;

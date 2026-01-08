@@ -3,7 +3,9 @@ using System.Security.Cryptography;
 using dc;
 using dc.en;
 using dc.h2d;
+using dc.level.@struct;
 using dc.pr;
+using dc.tool;
 using dc.tool.log;
 using dc.ui;
 using dc.ui.hud;
@@ -18,6 +20,11 @@ public class MultiplayerUI
     public ModEntry mod { get; set; }
     public dc.ui.hud.LifeBar kingLife { get; set; } = null!;
     public dc.h2d.Flow toplib { get; set; } = null!;
+    private static NetNode? _net;
+
+    private int lastLife = 0;
+    private int lastMaxLife = 0;
+
     public FlowBox box { get; set; } = null!;
     public MultiplayerUI(ModEntry Entry)
     {
@@ -45,7 +52,19 @@ public class MultiplayerUI
         orig(self);
         var king = ModEntry._companionKing;
         if (king == null) return;
-        kinglifeupdate(king, king.life, king.maxLife, king.life, king.bonusLife, king.radius);
+        _net = ModEntry._net;
+        var net = _net;
+        if(net == null) return;
+        
+        if (lastLife != self.life || lastMaxLife != self.maxLife) 
+        {
+            net.SendHP(self.life, self.maxLife, self.life, self.bonusLife, self.radius);
+            lastLife = self.life;
+            lastMaxLife = self.maxLife;
+        }
+        if(!net.TryGetRemoteHP(out int life, out int maxLife, out int lif, out int bonusLife, out int recover))
+            return;
+        kingLifeUpdate(king, life, maxLife, lif, bonusLife, recover);
     }
 
     private void Hook_HUD_initLeftFlowT(Hook_HUD.orig_initLeftFlowT orig, HUD self)
@@ -58,16 +77,14 @@ public class MultiplayerUI
 
     public void initkingLife(HUD self)
     {
-        double wh = 40;
-        double hh = 15;
+        double wh = 30;
+        double hh = 8;
         bool logo = true;
         FlowBox uibox = FlowBox.Class.createBoxValidation(null, Ref<double>.From(ref wh), Ref<double>.From(ref hh), Ref<bool>.From(ref logo), null);
         this.box = uibox;
 
-        dc.String str = "gamer:".AsHaxeString();
         dc.String remoteUsername = GameMenu.RemoteUsername.AsHaxeString();
-        dc.String combined = dc.String.Class.__add__(str, remoteUsername);
-        dc.h2d.Text text_h2d = Assets.Class.makeText(combined, dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), false, this.box);
+        dc.h2d.Text text_h2d = Assets.Class.makeText(remoteUsername, dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), false, this.box);
         self.topRightFlowT.addChild(this.box);
 
         this.toplib.set_verticalAlign(new FlowAlign.Top());
@@ -96,12 +113,12 @@ public class MultiplayerUI
         this.kingLife.enableText();
     }
 
-    public void kinglifeupdate(KingSkin king, double max, double maxLife, double lif, double? bonusLife, double recover)
+    public void kingLifeUpdate(KingSkin king, int max, int maxLife, int lif, int bonusLife, int recover)
     {
         var k = this.kingLife;
         k.init(max, maxLife);
-        k.curState.life = lif;
+        k.curState.life = (double)lif;
         k.curState.bonusLife = (double)bonusLife!;
-        k.curState.recover = recover;
+        k.curState.recover = (double)recover;
     }
 }
