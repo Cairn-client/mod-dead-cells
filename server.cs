@@ -39,6 +39,12 @@ public sealed class NetNode : IDisposable
     private bool? _remoteAnimG;
     private bool _hasRemoteAnim;
 
+    private int _remoteLife;
+    private int _remoteMaxLife;
+    private int _remoteLif;
+    private int _remoteBonusLife;
+    private int _remoteRecover;
+
     public bool HasRemote { get { lock (_sync) return _hasRemote; } }
     public bool IsAlive =>
         (_role == NetRole.Host && _listener != null) ||
@@ -310,6 +316,36 @@ public sealed class NetNode : IDisposable
                         continue;
                     }
 
+                    if (line.StartsWith("HP|", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var payload = line[(line.IndexOf('|') + 1)..];
+                        var partsHealth = payload.Split('|');
+                        int life = 0;
+                        int maxLife = 0;
+                        int lif = 0;
+                        int bonusLife = 0;
+                        int recover = 0;
+                        if (partsHealth.Length >= 1 && int.TryParse(partsHealth[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLife))
+                            life = parsedLife;
+                        if (partsHealth.Length >= 2 && int.TryParse(partsHealth[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedMaxLife))
+                            maxLife = parsedMaxLife;
+                        if (partsHealth.Length >= 3 && int.TryParse(partsHealth[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLif))
+                            lif = parsedLif;
+                        if (partsHealth.Length >= 4 && int.TryParse(partsHealth[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBonusLife))
+                            bonusLife = parsedBonusLife;
+                        if (partsHealth.Length >= 5 && int.TryParse(partsHealth[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedRecover))
+                            recover = parsedRecover;
+                        lock (_sync)
+                        {
+                            _remoteLife = life;
+                            _remoteMaxLife = maxLife;
+                            _remoteLif = lif;
+                            _remoteBonusLife = bonusLife;
+                            _remoteRecover = recover;
+                        }
+                        continue;
+                    }
+
                     if (line.StartsWith("KICK"))
                     {
                         GameMenu.NotifyRemoteDisconnected(_role);
@@ -449,11 +485,21 @@ public sealed class NetNode : IDisposable
         _log.Information("[NetNode] Sent Generate payload ({Length} bytes)", json.Length);
     }
 
+
+    public void SendHP(double life, double maxLife, double lif, double bonusLife, double recover)
+    {
+        if (_stream == null || _client == null || !_client.Connected)
+        {
+            return;
+        }
+        SendRaw($"HP|{life}|{maxLife}|{lif}|{bonusLife}|{recover}");
+        _log.Debug($"Sent HP|{life}|{maxLife}|{lif}|{bonusLife}|{recover}");
+    }
+
     public void SendLevelId(string levelId)
     {
         if (_stream == null || _client == null || !_client.Connected)
         {
-            _log.Information("[NetNode] Skip sending level id: no connected client");
             return;
         }
 
@@ -518,6 +564,19 @@ public sealed class NetNode : IDisposable
         {
             levelId = _remoteLevelId;
             return _hasRemote && !string.IsNullOrEmpty(levelId);
+        }
+    }
+
+    public bool TryGetRemoteHP(out int life, out int maxLife, out int lif, out int bonusLife, out int recover)
+    {
+        lock (_sync)
+        {
+            life = _remoteLife;
+            maxLife = _remoteMaxLife;
+            lif = _remoteLif;
+            bonusLife = _remoteBonusLife;
+            recover = _remoteRecover;
+            return _hasRemote;
         }
     }
 
