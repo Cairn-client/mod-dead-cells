@@ -12,6 +12,7 @@ using dc.ui.hud;
 using Hashlink.Virtuals;
 using HaxeProxy.Runtime;
 using ModCore.Utitities;
+using Serilog;
 
 namespace DeadCellsMultiplayerMod;
 
@@ -26,7 +27,7 @@ public class MultiplayerUI
     private int lastMaxLife = 0;
 
     public FlowBox box { get; set; } = null!;
-    public Hero hero = ModCore.Modules.Game.Instance.HeroInstance!;
+
     public MultiplayerUI(ModEntry Entry)
     {
         mod = Entry;
@@ -44,17 +45,19 @@ public class MultiplayerUI
     {
         orig(self);
         initkingLife(self);
-
     }
-
+    private bool initlif = true;
     private void Hook_Hero_kinglifupdate(Hook_Hero.orig_updateLifeBar orig, Hero self)
     {
         orig(self);
+        if (initlif) this.kingLife.init(100, 100);
+        initlif = false;
         var king = ModEntry._companionKing;
         if (king == null) return;
         _net = ModEntry._net;
         var net = _net;
         if (net == null) return;
+
 
         if (lastLife != self.life || lastMaxLife != self.maxLife)
         {
@@ -62,9 +65,28 @@ public class MultiplayerUI
             lastLife = self.life;
             lastMaxLife = self.maxLife;
         }
+
         if (!net.TryGetRemoteHP(out int life, out int maxLife, out int lif, out int bonusLife, out int recover))
             return;
-        kingLifeUpdate(king, life, maxLife, lif, bonusLife, recover);
+
+        kingLifeUpdate(king!, life, maxLife, lif, bonusLife, recover);
+        if (self.life <= 0)
+        {
+            life = -1;
+        }
+        if (this.kingLife.curState.life < 0 || self.life <= 0 || life < 0)
+        {
+            //self.startDeathCine();
+            Main me = Main.Class.ME;
+            HlFunc<dc.libs.Process> pause = new HlFunc<dc.libs.Process>(this.process);
+            me.transition(null, pause, Ref<bool>.Null, null, null);
+        }
+    }
+
+    private dc.libs.Process process()
+    {
+        bool? titleLib = null;
+        return new TitleScreen(titleLib);
     }
 
     private void Hook_HUD_initLeftFlowT(Hook_HUD.orig_initLeftFlowT orig, HUD self)
@@ -72,8 +94,11 @@ public class MultiplayerUI
         orig(self);
         this.toplib = self.topRightFlowT;
         dc.ui.hud.LifeBar kingLifeBar = new dc.ui.hud.LifeBar(new LifeBarColorMode.Normal(), this.toplib);
+        kingLifeBar.init(100, 100);
         this.kingLife = kingLifeBar;
     }
+
+
 
     public void initkingLife(HUD self)
     {
