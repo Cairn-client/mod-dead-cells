@@ -102,13 +102,13 @@ public class MultiplayerUI
 
     public void initkingLife(HUD self)
     {
-        double wh = 30;
-        double hh = 8;
+        dc.String remoteUsername = GameMenu.RemoteUsername.AsHaxeString();
+        double wh = remoteUsername.length + 2;
+        double hh = 6;
         bool logo = true;
         FlowBox uibox = FlowBox.Class.createBoxValidation(null, Ref<double>.From(ref wh), Ref<double>.From(ref hh), Ref<bool>.From(ref logo), null);
         this.box = uibox;
 
-        dc.String remoteUsername = GameMenu.RemoteUsername.AsHaxeString();
         dc.h2d.Text text_h2d = Assets.Class.makeText(remoteUsername, dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), false, this.box);
         text_h2d.textColor = 16766720;
         self.topRightFlowT.addChild(this.box);
@@ -125,7 +125,7 @@ public class MultiplayerUI
         int topMargin = (int)(5 * pixelScale);
 
 
-        int w = (int)(300 * pixelScale);
+        int w = (int)(100 * pixelScale);
         int h = (int)(10 * pixelScale);
 
         int targetX = getw - w - rightMargin;

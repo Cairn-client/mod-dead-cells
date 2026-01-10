@@ -4,6 +4,7 @@ using dc.hl.types;
 using Hashlink.Virtuals;
 using dc.level;
 using HaxeProxy.Runtime;
+using dc.tool;
 
 
 namespace DeadCellsMultiplayerMod
@@ -30,10 +31,14 @@ namespace DeadCellsMultiplayerMod
         bool mode,
         LaunchMode gdata)
         {
+            _log.Error("user_hook_new_game");
             isCustom = false;
             mode = false;
             Seed = lvl;
+            ModEntry.me = null;
             ModEntry._companionKing = null;
+            ModEntry.kingInitialized = false;
+            ModEntry._ghost = null;
             var net = GameMenu.NetRef;
             if (net != null && net.IsHost)
             {
@@ -47,7 +52,6 @@ namespace DeadCellsMultiplayerMod
                     var history = self.mainGame.serverStats.history;
                     var Custom = self.mainGame.serverStats.isCustom;
                     var meta = self.mainGame.serverStats.meta;
-                    _log.Debug("succsesfully");
                 }
                 catch { }
 
@@ -73,11 +77,11 @@ namespace DeadCellsMultiplayerMod
         virtual_baseLootLevel_biome_bonusTripleScrollAfterBC_cellBonus_dlc_doubleUps_eliteRoomChance_eliteWanderChance_flagsProps_group_icon_id_index_loreDescriptions_mapDepth_minGold_mobDensity_mobs_name_nextLevels_parallax_props_quarterUpsBC3_quarterUpsBC4_specificLoots_specificSubBiome_transitionTo_tripleUps_worldDepth_ resetCount,
         Ref<bool> resetCount2)
         {
-            ldat = Seed;
+            // ldat = Seed;
             ModEntry._companionKing = null;
-            var net = GameMenu.NetRef;
+            // var net = GameMenu.NetRef;
 
-            SendHeroSkin(seed, net);
+            // SendHeroSkin(seed, net);
             return orig(self, seed, ldat, resetCount, resetCount2);
         }
 

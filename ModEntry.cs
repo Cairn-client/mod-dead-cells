@@ -6,6 +6,7 @@ using System.Net;
 using dc.en;
 using dc.pr;
 using ModCore.Utitities;
+using ModCore.Modules;
 using dc.level;
 using dc.hl.types;
 using dc;
@@ -38,8 +39,8 @@ namespace DeadCellsMultiplayerMod
         public dc.pr.Game? game;
 
         public static KingSkin _companionKing = null;
-        static Hero me = null;
-        private static GhostHero? _ghost;
+        public static Hero me = null;
+        public static GhostHero _ghost= null;
 
         private GameDataSync gds;
         private MultiplayerUI UI { get; set; } = null!;
@@ -51,9 +52,6 @@ namespace DeadCellsMultiplayerMod
         private double? _lastAnimPlayRatio;
         private const double AnimLoopThreshold = 0.995;
         private const double RatioDropThreshold = 0.5;
-        private const double DefaultAnimFps = 60d;
-        private const double MinAnimDuration = 0.05;
-        private const double MaxAnimDuration = 3.0;
         private const double LoopDetectionCooldown = 0.08;
 
         public static MiniMap miniMap;
@@ -98,10 +96,18 @@ namespace DeadCellsMultiplayerMod
             Hook_MiniMap.track += Hook_MiniMap_track;
             Hook_KingSkin.initGfx += Hook_KingSkin_initgfx;
             Hook__LevelStruct.get += Hook__LevelStruct_get;
+            Hook_Boot.update += hook_boot_update;
             this.UI = new MultiplayerUI(this);
             this.UI.init();
         }
 
+
+
+        private void hook_boot_update(Hook_Boot.orig_update orig, Boot self, double dt)
+        {
+            
+            orig(self, dt);
+        }
 
 
 
@@ -110,7 +116,6 @@ namespace DeadCellsMultiplayerMod
         virtual_baseLootLevel_biome_bonusTripleScrollAfterBC_cellBonus_dlc_doubleUps_eliteRoomChance_eliteWanderChance_flagsProps_group_icon_id_index_loreDescriptions_mapDepth_minGold_mobDensity_mobs_name_nextLevels_parallax_props_quarterUpsBC3_quarterUpsBC4_specificLoots_specificSubBiome_transitionTo_tripleUps_worldDepth_ l,
         dc.libs.Rand rng)
         {
-
             levelId = l.id.ToString();
 
             SendLevel(levelId);
@@ -121,7 +126,6 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook_KingSkin_initgfx(Hook_KingSkin.orig_initGfx orig, KingSkin self)
         {
-
             if (remoteSkin == null) remoteSkin = "PrisonerDefault";
             orig(self);
             dc.String group = "idle".AsHaxeString();
@@ -166,14 +170,16 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook_MiniMap_track(Hook_MiniMap.orig_track orig, MiniMap self, Entity col, int? iconId, dc.String forcedIconColor, int? blink, bool? customTile, Tile text, dc.String itemKind, dc.String isInfectedFood)
         {
+            
             miniMap = self;
             orig(self, col, iconId, forcedIconColor, blink, customTile, text, itemKind, isInfectedFood);
         }
 
         private AnimManager Hook_AnimManager_play(Hook_AnimManager.orig_play orig, AnimManager self, dc.String plays, int? queueAnim, bool? g)
         {
+            Logger.Debug("Hook_AnimManager_play");
             var play = plays.ToString();
-            if (me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
+            if (me != null && me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
             {
                 SendHeroAnim(play, queueAnim, g, force: true);
             }
@@ -188,7 +194,6 @@ namespace DeadCellsMultiplayerMod
             me = self;
             SendLevel(levelId);
             orig(self, oldLevel);
-            Logger.Debug($"game.user.meta: {game!.data.blueprints}");
             if (_ghost == null) _ghost = new GhostHero(game, me, Logger, this);
             _ghost.SetLabel(me, GameMenu.Username);
 

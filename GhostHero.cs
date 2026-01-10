@@ -7,7 +7,7 @@ using dc;
 
 namespace DeadCellsMultiplayerMod
 {
-    internal class GhostHero
+    public class GhostHero
     {
         private readonly dc.pr.Game _game;
         private readonly Hero _me;
