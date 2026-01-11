@@ -113,7 +113,7 @@ namespace DeadCellsMultiplayerMod
             for (int i = 0; i < mobs; i++)
             {
                 var m = b[i];
-                Logger.Information($"[DEBUG|MOB] mobs at index {i}: {m}");
+                // Logger.Information($"[DEBUG|MOB] mobs at index {i}: {m}");
 
             }
         }
@@ -125,7 +125,7 @@ namespace DeadCellsMultiplayerMod
             for (int i = 0; i < count; i++)
             {
                 var mobs = extraMobs.array[i];
-                Logger.Information($"[DEBUG|MOB] mobs at index {i}: {mobs}");
+                // Logger.Information($"[DEBUG|MOB] mobs at index {i}: {mobs}");
             }
         }
 
