@@ -19,6 +19,7 @@ using Hashlink.Virtuals;
 using dc.tool;
 using dc.hxd;
 using System.Timers;
+using HaxeProxy.Runtime;
 
 
 namespace DeadCellsMultiplayerMod
@@ -40,7 +41,7 @@ namespace DeadCellsMultiplayerMod
 
         public static KingSkin _companionKing = null;
         public static Hero me = null;
-        public static GhostHero _ghost= null;
+        public static GhostHero _ghost = null;
 
         private GameDataSync gds;
         private MultiplayerUI UI { get; set; } = null!;
@@ -99,13 +100,38 @@ namespace DeadCellsMultiplayerMod
             Hook_Boot.update += hook_boot_update;
             this.UI = new MultiplayerUI(this);
             this.UI.init();
+            Hook_LevelGen.genMobs += Hook_LevelGen_genmobs;
+            Hook_MobsGen.addElites += Hook_MobsGen_addElites;
         }
 
 
+        private void Hook_MobsGen_addElites(Hook_MobsGen.orig_addElites orig, MobsGen self, ArrayObj mobsPerRooms)
+        {
+            orig(self, mobsPerRooms);
+            dynamic mobs = mobsPerRooms.array.Count;
+            dynamic b = mobsPerRooms.array;
+            for (int i = 0; i < mobs; i++)
+            {
+                var m = b[i];
+                Logger.Information($"[DEBUG|MOB] mobs at index {i}: {m}");
+
+            }
+        }
+
+        private void Hook_LevelGen_genmobs(Hook_LevelGen.orig_genMobs orig, LevelGen self, User maps, ArrayObj extraMobs, ArrayObj bonusTotalMobCount1, Ref<int> bonusTotalMobCount)
+        {
+            orig(self, maps, extraMobs, bonusTotalMobCount1, bonusTotalMobCount);
+            dynamic count = extraMobs.array.Count;
+            for (int i = 0; i < count; i++)
+            {
+                var mobs = extraMobs.array[i];
+                Logger.Information($"[DEBUG|MOB] mobs at index {i}: {mobs}");
+            }
+        }
 
         private void hook_boot_update(Hook_Boot.orig_update orig, Boot self, double dt)
         {
-            
+
             orig(self, dt);
         }
 
@@ -170,14 +196,13 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook_MiniMap_track(Hook_MiniMap.orig_track orig, MiniMap self, Entity col, int? iconId, dc.String forcedIconColor, int? blink, bool? customTile, Tile text, dc.String itemKind, dc.String isInfectedFood)
         {
-            
+
             miniMap = self;
             orig(self, col, iconId, forcedIconColor, blink, customTile, text, itemKind, isInfectedFood);
         }
 
         private AnimManager Hook_AnimManager_play(Hook_AnimManager.orig_play orig, AnimManager self, dc.String plays, int? queueAnim, bool? g)
         {
-            Logger.Debug("Hook_AnimManager_play");
             var play = plays.ToString();
             if (me != null && me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
             {
@@ -194,7 +219,7 @@ namespace DeadCellsMultiplayerMod
             me = self;
             SendLevel(levelId);
             orig(self, oldLevel);
-            if (_ghost == null) _ghost = new GhostHero(game, me, Logger, this);
+            if (_ghost == null) _ghost = new GhostHero(game!, me, Logger, this);
             _ghost.SetLabel(me, GameMenu.Username);
 
 

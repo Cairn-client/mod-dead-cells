@@ -25,6 +25,7 @@ public class MultiplayerUI
 
     private int lastLife = 0;
     private int lastMaxLife = 0;
+    private int kingmaxlife = 100;
 
     public FlowBox box { get; set; } = null!;
 
@@ -35,7 +36,6 @@ public class MultiplayerUI
 
     public void init()
     {
-        Hook_HUD.initLeftFlowT += Hook_HUD_initLeftFlowT;
         Hook_HUD.initHero += Hook_HUD_initking;
 
         Hook_Hero.updateLifeBar += Hook_Hero_kinglifupdate;
@@ -70,6 +70,7 @@ public class MultiplayerUI
             return;
 
         kingLifeUpdate(king!, life, maxLife, lif, bonusLife, recover);
+        this.kingmaxlife = maxLife;
         if (self.life <= 0)
         {
             life = -1;
@@ -89,19 +90,13 @@ public class MultiplayerUI
         return new TitleScreen(titleLib);
     }
 
-    private void Hook_HUD_initLeftFlowT(Hook_HUD.orig_initLeftFlowT orig, HUD self)
-    {
-        orig(self);
-        this.toplib = self.topRightFlowT;
-        dc.ui.hud.LifeBar kingLifeBar = new dc.ui.hud.LifeBar(new LifeBarColorMode.Normal(), this.toplib);
-        kingLifeBar.init(100, 100);
-        this.kingLife = kingLifeBar;
-    }
+
 
 
 
     public void initkingLife(HUD self)
     {
+        this.toplib = self.topRightFlowT;
         dc.String remoteUsername = GameMenu.RemoteUsername.AsHaxeString();
         double wh = remoteUsername.length + 2;
         double hh = 6;
@@ -111,10 +106,14 @@ public class MultiplayerUI
 
         dc.h2d.Text text_h2d = Assets.Class.makeText(remoteUsername, dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), false, this.box);
         text_h2d.textColor = 16766720;
-        self.topRightFlowT.addChild(this.box);
+        this.toplib.addChild(this.box);
+
+        dc.ui.hud.LifeBar kingLifeBar = new dc.ui.hud.LifeBar(new LifeBarColorMode.Normal(), this.toplib);
+        kingLifeBar.init(100, 100);
+        this.kingLife = kingLifeBar;
 
         this.toplib.set_verticalAlign(new FlowAlign.Top());
-        this.toplib.set_horizontalAlign(new FlowAlign.Left());
+        this.toplib.set_horizontalAlign(new FlowAlign.Right());
 
         var geth = Viewport.Class.NATIVE_HEIGHT;
         var getw = Viewport.Class.NATIVE_WIDTH;
