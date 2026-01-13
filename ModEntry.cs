@@ -103,8 +103,15 @@ namespace DeadCellsMultiplayerMod
             Hook__LevelStruct.get += Hook__LevelStruct_get;
             Hook_Boot.update += hook_boot_update;
 
-            Hook_LevelGen.genMobs += Hook_LevelGen_genmobs;
-            Hook_MobsGen.addElites += Hook_MobsGen_addElites;
+            //Hook_LevelGen.genMobs += Hook_LevelGen_genmobs;
+            //Hook_MobsGen.addElites += Hook_MobsGen_addElites;
+            Hook_Hero.disposeGfx += Hook_Hero_dispose;
+        }
+
+        private void Hook_Hero_dispose(Hook_Hero.orig_disposeGfx orig, Hero self)
+        {
+            orig(self);
+            _ghost.disposeKing(_companionKing);
         }
 
 
@@ -335,6 +342,7 @@ namespace DeadCellsMultiplayerMod
         {
             if (_netRole == NetRole.None) return;
             var net = _net;
+            var animManager = me?.spr?._animManager;
             if (net == null || string.IsNullOrWhiteSpace(anim)) return;
             if (!force &&
                 string.Equals(_lastAnimSent, anim, StringComparison.Ordinal) &&
