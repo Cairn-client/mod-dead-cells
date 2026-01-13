@@ -21,6 +21,7 @@ public class MultiplayerUI
     private ModEntry mod { get; set; }
     public dc.ui.hud.LifeBar kingLife { get; set; } = null!;
     public dc.h2d.Flow toplib { get; set; } = null!;
+    public static dc.h2d.Flow flowContainer = null!;
     private static NetNode? _net;
 
     private int lastLife = 0;
@@ -92,8 +93,6 @@ public class MultiplayerUI
 
 
 
-
-
     public void initkingLife(HUD self)
     {
         this.toplib = self.topRightFlowT;
@@ -146,4 +145,39 @@ public class MultiplayerUI
         k.curState.bonusLife = (double)bonusLife!;
         k.curState.recover = (double)recover;
     }
+    private static dc.h2d.Text debugText = null!;
+    private static Queue<dc.h2d.Text> textQueue = new Queue<dc.h2d.Text>();
+    private const int MAX_TEXTS = 30;
+
+    public void DebugUI(string @string)
+    {
+        if (flowContainer == null)
+        {
+            flowContainer = new dc.h2d.Flow(HUD.Class.ME.root);
+            flowContainer.multiline = true;
+            flowContainer.isVertical = true;
+            flowContainer.set_verticalAlign(new FlowAlign.Top());
+            flowContainer.set_horizontalAlign(new FlowAlign.Left());
+        }
+
+        dc.h2d.Text text_h2d = Assets.Class.makeText(@string.AsHaxeString(),
+            dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()),
+            false, flowContainer);
+        text_h2d.scaleX = 1.5;
+        text_h2d.scaleY = 1.5;
+        text_h2d.textColor = 16766720;
+
+        textQueue.Enqueue(text_h2d);
+
+        if (textQueue.Count > MAX_TEXTS)
+        {
+            var oldestText = textQueue.Dequeue();
+            flowContainer.removeChild(oldestText);
+            oldestText.remove();
+        }
+
+
+    }
+
+
 }

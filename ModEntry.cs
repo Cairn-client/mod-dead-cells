@@ -87,6 +87,10 @@ namespace DeadCellsMultiplayerMod
         {
             Instance = this;
             gds = new GameDataSync(Logger);
+            this.UI = new MultiplayerUI(this);
+            this.UI.init();
+            MobsSynchronization.MobsSynchronization mobs = new MobsSynchronization.MobsSynchronization(this);
+            mobs.HookInitialize();
             GameMenu.Initialize(Logger);
             Hook_Game.init += Hook_gameinit;
             Hook_Hero.wakeup += hook_hero_wakeup;
@@ -98,8 +102,7 @@ namespace DeadCellsMultiplayerMod
             Hook_KingSkin.initGfx += Hook_KingSkin_initgfx;
             Hook__LevelStruct.get += Hook__LevelStruct_get;
             Hook_Boot.update += hook_boot_update;
-            this.UI = new MultiplayerUI(this);
-            this.UI.init();
+
             Hook_LevelGen.genMobs += Hook_LevelGen_genmobs;
             Hook_MobsGen.addElites += Hook_MobsGen_addElites;
         }
@@ -163,21 +166,14 @@ namespace DeadCellsMultiplayerMod
             self.initColorMap(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
 
             // glow
-
-            bool flg = false;
             ArrayObj glowData = CdbTypeConverter.Class.getGlowData(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
             if (glowData != null)
             {
-                flg = true;
-            }
-            if (flg)
-            {
                 GlowKey s2 = new GlowKey(glowData);
-                if (s2 == null)
+                if (s2 != null)
                 {
-                    return;
+                    self.spr.addShader(s2);
                 }
-                self.spr.addShader(s2);
             }
 
 
