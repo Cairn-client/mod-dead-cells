@@ -1,20 +1,13 @@
 ﻿using dc.en;
 using dc.pr;
-using HaxeProxy.Runtime;
 using ModCore.Utitities;
 using Serilog;
-using dc.h3d.mat;
-using dc.libs.heaps.slib;
 using dc;
-using Hashlink.Virtuals;
-using dc.hl.types;
-using dc.en.inter.door;
-
 
 
 namespace DeadCellsMultiplayerMod
 {
-    internal class GhostHero
+    public class GhostHero
     {
         private readonly dc.pr.Game _game;
         private readonly Hero _me;
@@ -26,48 +19,29 @@ namespace DeadCellsMultiplayerMod
 
         private const double RestartFrameIndex = 0;
 
-        public KingSkin king;
+        public KingSkin king = null!;
+        private ModEntry modEntry = null!;
+        private MultiplayerUI UI { get; set; } = null!;
 
 
-
-
-        public GhostHero(dc.pr.Game game, Hero me, ILogger logger)
+        public GhostHero(dc.pr.Game game, Hero me, ILogger logger, ModEntry entry)
         {
             _game = game;
             _me = me;
             _log = logger;
+            modEntry = entry;
         }
 
 
         public KingSkin CreateGhostKing(Level level)
         {
 
-            king = new KingSkin(level, (int)_me.spr.x, (int)_me.spr.y);
+            king = new KingSkin(level, (int)1, (int)1);
             king.init();
-            king.set_level(level);
-            king.set_team(_me._team);
-            king.setPosCase(_me.cx, _me.cy, _me.xr, _me.yr);
-            king.visible = true;
             king.initGfx();
-            var miniMap = ModEntry.miniMap;
-            if (miniMap != null && _me._level.map == king._level.map)
-            {
-                miniMap.track(king, 14888237, "minimapHero".AsHaxeString(), null, true, null, null, null);
-            }
-            SetLabel(king, GameMenu.RemoteUsername);
-
-            return king;
-        }
-
-
-        public KingSkin reInitKing(Level level)
-        {
-            if (king == null)
-            {
-                king.init();
-            }
             king.set_level(level);
-            king.initGfx();
+            king.set_team(level.teamHero);
+            king.setPosCase(Game.Class.ME.hero.cx, Game.Class.ME.hero.cy, Game.Class.ME.hero.xr, Game.Class.ME.hero.yr);
             king.visible = true;
             var miniMap = ModEntry.miniMap;
             if (miniMap != null && _me._level.map == king._level.map)
@@ -75,9 +49,14 @@ namespace DeadCellsMultiplayerMod
                 miniMap.track(king, 14888237, "minimapHero".AsHaxeString(), null, true, null, null, null);
             }
             SetLabel(king, GameMenu.RemoteUsername);
+            this.UI = new MultiplayerUI(modEntry);
+            dynamic key = Data.Class.item.all.getDyn(278);
+            Log.Debug($"{key}");
+            dynamic props = key.props;
+            props.prct = 0;
             return king;
         }
-        
+
         public void TeleportByPixels(double x, double y)
         {
             king?.setPosPixel(x, y - 0.2d);
@@ -115,6 +94,7 @@ namespace DeadCellsMultiplayerMod
         public void SetLabel(Entity entity, string? text)
         {
             if (entity == null) return;
+            if (text == null) text = "Guest";
             _Assets _Assets = Assets.Class;
             dc.h2d.Text text_h2d = _Assets.makeText(text.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), true, entity.spr);
             text_h2d.y -= 80;
@@ -125,5 +105,6 @@ namespace DeadCellsMultiplayerMod
             text_h2d.scaleY = 0.6d;
             text_h2d.textColor = 0;
         }
+
     }
 }

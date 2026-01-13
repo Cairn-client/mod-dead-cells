@@ -1,37 +1,26 @@
-using Hashlink.Proxy.DynamicAccess;
-using System;
+
 using ModCore.Events.Interfaces.Game;
 using ModCore.Events.Interfaces.Game.Hero;
 using ModCore.Mods;
-using ModCore.Events.Interfaces.Game.Save;
-using Serilog;
 using System.Net;
-using System.Reflection;
-using System.Collections;
 using dc.en;
 using dc.pr;
-using dc.cine;
 using ModCore.Utitities;
-using ModCore.Events;
-
-using dc.en.inter;
+using ModCore.Modules;
 using dc.level;
 using dc.hl.types;
-using HaxeProxy.Runtime;
 using dc;
 using dc.shader;
 using dc.libs.heaps.slib;
 using dc.h3d.mat;
-using Serilog.Core;
 using dc.ui.hud;
-using dc.haxe.io;
 using dc.h2d;
 using Hashlink.Virtuals;
 using dc.tool;
-using dc.light;
-using System.ComponentModel;
-using dc.libs.heaps;
-using Math = System.Math;
+using dc.hxd;
+using System.Timers;
+using HaxeProxy.Runtime;
+
 
 namespace DeadCellsMultiplayerMod
 {
@@ -45,29 +34,25 @@ namespace DeadCellsMultiplayerMod
         private bool _ready;
 
         private NetRole _netRole = NetRole.None;
-        private static NetNode? _net;
+        public static NetNode? _net;
 
 
         public dc.pr.Game? game;
 
         public static KingSkin _companionKing = null;
-        static Hero me = null;
-        private static GhostHero? _ghost;
+        public static Hero me = null;
+        public static GhostHero _ghost = null;
 
         private GameDataSync gds;
+        private MultiplayerUI UI { get; set; } = null!;
 
         private string? _lastAnimSent;
         private int? _lastAnimQueueSent;
         private bool? _lastAnimGSent;
         private double _animResendElapsed;
-        private const double AnimResendInterval = 0.4;
-        private double _currentAnimDuration = AnimResendInterval;
         private double? _lastAnimPlayRatio;
         private const double AnimLoopThreshold = 0.995;
         private const double RatioDropThreshold = 0.5;
-        private const double DefaultAnimFps = 60d;
-        private const double MinAnimDuration = 0.05;
-        private const double MaxAnimDuration = 3.0;
         private const double LoopDetectionCooldown = 0.08;
 
         public static MiniMap miniMap;
@@ -102,41 +87,64 @@ namespace DeadCellsMultiplayerMod
         {
             Instance = this;
             gds = new GameDataSync(Logger);
+            this.UI = new MultiplayerUI(this);
+            this.UI.init();
+            MobsSynchronization.MobsSynchronization mobs = new MobsSynchronization.MobsSynchronization(this);
+            mobs.HookInitialize();
             GameMenu.Initialize(Logger);
             Hook_Game.init += Hook_gameinit;
-            Logger.Debug("[NetMod] Hook_mygameinit attached");
             Hook_Hero.wakeup += hook_hero_wakeup;
-            Logger.Debug("[NetMod] Hook_Hero.wakeup attached");
             Hook_Hero.onLevelChanged += hook_level_changed;
-            Logger.Debug("[NetMod] Hook_Hero.onLevelChanged attached");
             Hook_User.newGame += GameDataSync.user_hook_new_game;
-            Logger.Debug("[NetMod] Hook_User.newGame attached");
             Hook_LevelGen.generate += GameDataSync.hook_generate;
-            Logger.Debug("[NetMod] Hook_LevelGen.generate attached");
             Hook_AnimManager.play += Hook_AnimManager_play;
-            Logger.Debug("[NetMod] Hook_AnimManager.play attached");
             Hook_MiniMap.track += Hook_MiniMap_track;
-            Logger.Debug("[NetMod] Hook_MiniMap.track attached");
             Hook_KingSkin.initGfx += Hook_KingSkin_initgfx;
-            Logger.Debug("[NetMod] Hook_KingSkin.initGfx attached");
             Hook__LevelStruct.get += Hook__LevelStruct_get;
-            Logger.Debug("[NetMod] Hook__LevelStruct.get attached");
-            Hook_HeroHead.customHeadFx += Hook_HeroHead_headfx;
+            Hook_Boot.update += hook_boot_update;
 
+            Hook_LevelGen.genMobs += Hook_LevelGen_genmobs;
+            Hook_MobsGen.addElites += Hook_MobsGen_addElites;
         }
 
-        private void Hook_HeroHead_headfx(Hook_HeroHead.orig_customHeadFx orig, HeroHead self)
+
+        private void Hook_MobsGen_addElites(Hook_MobsGen.orig_addElites orig, MobsGen self, ArrayObj mobsPerRooms)
         {
-            orig(self);
+            orig(self, mobsPerRooms);
+            dynamic mobs = mobsPerRooms.array.Count;
+            dynamic b = mobsPerRooms.array;
+            for (int i = 0; i < mobs; i++)
+            {
+                var m = b[i];
+                // Logger.Information($"[DEBUG|MOB] mobs at index {i}: {m}");
 
+            }
         }
+
+        private void Hook_LevelGen_genmobs(Hook_LevelGen.orig_genMobs orig, LevelGen self, User maps, ArrayObj extraMobs, ArrayObj bonusTotalMobCount1, Ref<int> bonusTotalMobCount)
+        {
+            orig(self, maps, extraMobs, bonusTotalMobCount1, bonusTotalMobCount);
+            dynamic count = extraMobs.array.Count;
+            for (int i = 0; i < count; i++)
+            {
+                var mobs = extraMobs.array[i];
+                // Logger.Information($"[DEBUG|MOB] mobs at index {i}: {mobs}");
+            }
+        }
+
+        private void hook_boot_update(Hook_Boot.orig_update orig, Boot self, double dt)
+        {
+
+            orig(self, dt);
+        }
+
+
 
         private LevelStruct Hook__LevelStruct_get(Hook__LevelStruct.orig_get orig,
         User user,
         virtual_baseLootLevel_biome_bonusTripleScrollAfterBC_cellBonus_dlc_doubleUps_eliteRoomChance_eliteWanderChance_flagsProps_group_icon_id_index_loreDescriptions_mapDepth_minGold_mobDensity_mobs_name_nextLevels_parallax_props_quarterUpsBC3_quarterUpsBC4_specificLoots_specificSubBiome_transitionTo_tripleUps_worldDepth_ l,
         dc.libs.Rand rng)
         {
-
             levelId = l.id.ToString();
 
             SendLevel(levelId);
@@ -159,8 +167,14 @@ namespace DeadCellsMultiplayerMod
 
             // glow
             ArrayObj glowData = CdbTypeConverter.Class.getGlowData(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
-            GlowKey s2 = new GlowKey(glowData);
-            self.spr.addShader(s2);
+            if (glowData != null)
+            {
+                GlowKey s2 = new GlowKey(glowData);
+                if (s2 != null)
+                {
+                    self.spr.addShader(s2);
+                }
+            }
 
 
             // Ambient light
@@ -170,39 +184,6 @@ namespace DeadCellsMultiplayerMod
             General = 0.9 + Math;
             var decayStart = 5.0 * General;
             self.createLight(1161471, radiusCase, decayStart, 0.35);
-
-
-
-            //head
-            // var fx = Assets.Class.fx;
-            // var tile = fx.pages.array[0];
-
-            // var fxspr = Assets.Class.getDynamicLoadAtlasEnumFromString("customHead".AsHaxeString());
-            // Log.Debug($"[GATASSETS|DEBUG]获取assets{fxspr}");
-
-            // int db = 0;
-            // var particle = new HSprite(fx, "fxSmallStar".AsHaxeString(), new Ref<int>(ref db), self.spr);
-            // particle.pivot.centerFactorX = 0.5;
-            // particle.pivot.centerFactorY = 0.5;
-            // particle.pivot.usingFactor = true;
-            // particle.x = self.get_headX();
-            // particle.y = self.get_headY();
-            // particle.scaleX = particle.scaleY = 1.0;
-            // particle.alpha = 1.0;
-            // particle.rotation = 90f;
-
-
-            // self._level.scroller.addChildAt(particle, Const.Class.DP_ROOM_MAIN_HERO);
-
-            // HeroHead h = new HeroHead();
-            // virtual_atlas_glowData_item_particleEffects_properties_ virtual_atlas_glowData_item_particleEffects_properties_;
-            // virtual_atlas_glowData_item_particleEffects_properties_ = Main.Class.ME.user.getHeroHeadSkinInfos();
-            // h._customHeadInfoCache = virtual_atlas_glowData_item_particleEffects_properties_;
-            // DynamicLoadAtlas dynamicLoadAtlasEnumFromString = Assets.Class.getDynamicLoadAtlasEnumFromString(virtual_atlas_glowData_item_particleEffects_properties_.atlas);
-
-            // Kinghead kinghead = new Kinghead(me);
-            // kinghead.kinghd(self);
-
         }
 
 
@@ -211,6 +192,7 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook_MiniMap_track(Hook_MiniMap.orig_track orig, MiniMap self, Entity col, int? iconId, dc.String forcedIconColor, int? blink, bool? customTile, Tile text, dc.String itemKind, dc.String isInfectedFood)
         {
+
             miniMap = self;
             orig(self, col, iconId, forcedIconColor, blink, customTile, text, itemKind, isInfectedFood);
         }
@@ -218,7 +200,7 @@ namespace DeadCellsMultiplayerMod
         private AnimManager Hook_AnimManager_play(Hook_AnimManager.orig_play orig, AnimManager self, dc.String plays, int? queueAnim, bool? g)
         {
             var play = plays.ToString();
-            if (me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
+            if (me != null && me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
             {
                 SendHeroAnim(play, queueAnim, g, force: true);
             }
@@ -229,26 +211,17 @@ namespace DeadCellsMultiplayerMod
 
         public void hook_level_changed(Hook_Hero.orig_onLevelChanged orig, Hero self, Level oldLevel)
         {
-            ReceiveGhostLevel();
             kingInitialized = false;
             me = self;
             SendLevel(levelId);
             orig(self, oldLevel);
-            // Log.Debug($"Hero level room {me._level.map.getRoomAt(me.cy, me._level.uniqId)}");
-            Logger.Debug($"game.user.meta: {game.data.blueprints}");
-            if (_ghost == null) _ghost = new GhostHero(game, me, Logger);
+            if (_ghost == null) _ghost = new GhostHero(game!, me, Logger, this);
             _ghost.SetLabel(me, GameMenu.Username);
 
 
             if (_companionKing == null)
             {
                 _companionKing = _ghost.CreateGhostKing(me._level);
-                if (levelId != remoteLevelId)
-                {
-                    _companionKing.destroy();
-                    // _companionKing.dispose();
-                    // _companionKing.disposeGfx();
-                }
             }
             else
             {
@@ -287,36 +260,24 @@ namespace DeadCellsMultiplayerMod
         }
 
 
-
+        private HashSet<string> _loopAnimations = new HashSet<string>
+        {
+            "idle", "run", "jumpUp", "jumpDown", "crouch", "land",
+            "rollStart", "rolling", "rollEnd"
+        };
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
             if (_companionKing == null || me == null || _ghost == null) return;
-            // Kinghead kinghead = new Kinghead(me);
-            // kinghead.kinghd(_companionKing);
             SendHeroCoords();
             ReceiveGhostCoords();
             _ghost?.HandleRemoteAnim(_net);
-            if (_lastAnimSent == "idle" || _lastAnimSent == "run" || _lastAnimSent == "jumpUp" || _lastAnimSent == "jumpDown" || _lastAnimSent == "crouch" || _lastAnimSent == "land" || _lastAnimSent == "rollStart" || _lastAnimSent == "rolling" || _lastAnimSent == "rollEnd")
+            if (_lastAnimSent != null && _loopAnimations.Contains(_lastAnimSent))
             {
                 ResendCurrentAnim(dt);
             }
-            checkOnLevel();
-
         }
 
-        public void checkOnLevel()
-        {
-            ReceiveGhostLevel();
 
-            if (kingInitialized) return;
-            var hero = me;
-            if (hero == null || hero._level == null) return;
-            if (string.IsNullOrWhiteSpace(remoteLevelId)) return;
-            if (!string.Equals(levelId, remoteLevelId, StringComparison.Ordinal)) return;
-            if (_companionKing == null || _ghost == null) return;
-            _companionKing = _ghost.reInitKing(hero._level);
-            kingInitialized = true;
-        }
 
 
         private void SendLevel(string lvl)
@@ -331,36 +292,22 @@ namespace DeadCellsMultiplayerMod
         }
 
 
-        private static void ReceiveGhostLevel()
-        {
-            var net = _net;
-            if (net == null) return;
-
-            if (!net.TryGetRemoteLevelId(out var remoteLevel))
-                return;
-
-            if (string.Equals(remoteLevelId, remoteLevel))
-                return;
-
-            remoteLevelId = remoteLevel;
-        }
-
-
         double last_x, last_y;
 
         private void SendHeroCoords()
         {
             if (_netRole == NetRole.None) return;
+            float dx = (float)(me.spr.x - last_x);
+            float dy = (float)(me.spr.y - last_y);
+            float distSq = dx * dx + dy * dy;
 
-            var net = _net;
-            var hero = me;
+            if (distSq < 4.0f) return;
+            if (_net == null || me == null || _companionKing == null) return;
+            if (me.spr.x == last_x && me.spr.y == last_y) return;
 
-            if (net == null || hero == null || _companionKing == null) return;
-            if (hero.spr.x == last_x && hero.spr.y == last_y) return;
-
-            net.TickSend(hero.spr.x, hero.spr.y);
-            last_x = hero.spr.x;
-            last_y = hero.spr.y;
+            _net.TickSend(me.spr.x, me.spr.y);
+            last_x = me.spr.x;
+            last_y = me.spr.y;
         }
 
 
@@ -388,7 +335,6 @@ namespace DeadCellsMultiplayerMod
         {
             if (_netRole == NetRole.None) return;
             var net = _net;
-            var animManager = me?.spr?._animManager;
             if (net == null || string.IsNullOrWhiteSpace(anim)) return;
             if (!force &&
                 string.Equals(_lastAnimSent, anim, StringComparison.Ordinal) &&
@@ -402,7 +348,6 @@ namespace DeadCellsMultiplayerMod
             _lastAnimGSent = g;
             _animResendElapsed = 0;
             _lastAnimPlayRatio = null;
-            _currentAnimDuration = CalculateAnimDurationSeconds(animManager);
         }
 
         private void ResendCurrentAnim(double dt)
@@ -412,19 +357,17 @@ namespace DeadCellsMultiplayerMod
             var animManager = me?.spr?._animManager;
             if (net == null || animManager == null) return;
             if (string.IsNullOrWhiteSpace(_lastAnimSent)) return;
-
             _animResendElapsed += dt;
-
-            var duration = _currentAnimDuration > 0 ? _currentAnimDuration : AnimResendInterval;
-            var timerElapsed = _animResendElapsed >= duration;
+            if (_animResendElapsed < 0.033f) return;
 
             bool looped = DidLoop(animManager);
 
-            if (!looped && !timerElapsed) return;
-
-            net.SendAnim(_lastAnimSent, _lastAnimQueueSent, _lastAnimGSent);
-            _animResendElapsed = 0;
-            _currentAnimDuration = CalculateAnimDurationSeconds(animManager);
+            if (!looped) return;
+            if (_animResendElapsed >= 0.2)
+            {
+                net.SendAnim(_lastAnimSent, _lastAnimQueueSent, _lastAnimGSent);
+                _animResendElapsed = 0;
+            }
         }
 
         private bool DidLoop(AnimManager animManager)
@@ -456,32 +399,6 @@ namespace DeadCellsMultiplayerMod
             return looped;
         }
 
-        private double CalculateAnimDurationSeconds(AnimManager? animManager)
-        {
-            if (animManager == null)
-                return AnimResendInterval;
-
-            try
-            {
-                var durationSeconds = animManager.getDurationS(DefaultAnimFps);
-                if (durationSeconds > 0)
-                    return ClampDuration(durationSeconds);
-            }
-            catch { }
-
-            try
-            {
-                var frames = animManager.getDurationF();
-                if (frames > 0)
-                    return ClampDuration(frames / DefaultAnimFps);
-            }
-            catch { }
-
-            return AnimResendInterval;
-        }
-
-        private static double ClampDuration(double value) =>
-            System.Math.Max(MinAnimDuration, System.Math.Min(MaxAnimDuration, value));
 
         private bool TryGetPlayRatio(AnimManager animManager, out double ratio)
         {
