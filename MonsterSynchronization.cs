@@ -1,12 +1,15 @@
 using dc;
 using dc.en;
+using dc.en.mob;
 using dc.h2d;
 using dc.hl.types;
+using dc.hxd;
 using dc.tool;
 using dc.ui.hud;
 using DeadCellsMultiplayerMod;
 using HaxeProxy.Runtime;
 using ModCore.Events.Interfaces.Game.Hero;
+using ModCore.Modules;
 using Serilog;
 using System.Collections.Generic;
 using System.Linq; // 如果需要使用LINQ，但这里暂时不需要
@@ -18,7 +21,6 @@ namespace MobsSynchronization
         private ModEntry modEntry;
         private MultiplayerUI uI;
         private static List<Mob> trackedMobs = new List<Mob>();
-        private int frameCount = 0;
 
         public MobsSynchronization(ModEntry entry)
         {
@@ -28,7 +30,8 @@ namespace MobsSynchronization
 
         public void HookInitialize()
         {
-            Hook__MMTracker.__constructor__ += Hook__MMTracker_TRACKER;
+            //Hook__MMTracker.__constructor__ += Hook__MMTracker_TRACKER;
+            //dc.en.Hook_Mob.setNemesisTarget += Hook_Mob_setNemesisTarget;
         }
 
 
@@ -85,6 +88,21 @@ namespace MobsSynchronization
             }
         }
 
+        private void Hook_Mob_setNemesisTarget(dc.en.Hook_Mob.orig_setNemesisTarget orig, dc.en.Mob self,
+            Entity e)
+        {
+            if (e == Game.Instance.HeroInstance)
+            {
+                var team = self._team;
+                var th = team.get_targetHelper();
+                th.filterUntargetables();
+                e = th.getBest();
+
+                orig(self, th.getBest());
+                return;
+            }
+            orig(self, e);
+        }
 
     }
 }

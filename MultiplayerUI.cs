@@ -78,10 +78,10 @@ public class MultiplayerUI
         }
         if (this.kingLife.curState.life < 0 || self.life <= 0 || life < 0)
         {
-            //self.startDeathCine();
-            Main me = Main.Class.ME;
-            HlFunc<dc.libs.Process> pause = new HlFunc<dc.libs.Process>(this.process);
-            me.transition(null, pause, Ref<bool>.Null, null, null);
+            self.startDeathCine();
+            // Main me = Main.Class.ME;
+            // HlFunc<dc.libs.Process> pause = new HlFunc<dc.libs.Process>(this.process);
+            // me.transition(null, pause, Ref<bool>.Null, null, null);
         }
     }
 
@@ -145,7 +145,6 @@ public class MultiplayerUI
         k.curState.bonusLife = (double)bonusLife!;
         k.curState.recover = (double)recover;
     }
-    private static dc.h2d.Text debugText = null!;
     private static Queue<dc.h2d.Text> textQueue = new Queue<dc.h2d.Text>();
     private const int MAX_TEXTS = 30;
 
@@ -161,7 +160,7 @@ public class MultiplayerUI
         }
 
         dc.h2d.Text text_h2d = Assets.Class.makeText(@string.AsHaxeString(),
-            dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()),
+            dc.ui.Text.Class.COLORS.get("WO".AsHaxeString()),
             false, flowContainer);
         text_h2d.scaleX = 1.5;
         text_h2d.scaleY = 1.5;

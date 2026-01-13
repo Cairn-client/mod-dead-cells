@@ -3,6 +3,9 @@ using dc.pr;
 using ModCore.Utitities;
 using Serilog;
 using dc;
+using HaxeProxy.Runtime;
+using dc.shader;
+using dc.hl.types;
 
 
 namespace DeadCellsMultiplayerMod
@@ -38,9 +41,17 @@ namespace DeadCellsMultiplayerMod
 
             king = new KingSkin(level, (int)1, (int)1);
             king.init();
-            king.initGfx();
             king.set_level(level);
             king.set_team(level.teamHero);
+            king._targetable = true;
+            king.hasWineGlass = false;
+            king.lifeBarAbove = true;
+            king.initLife(100, 100);
+            king.hasRepelling = true;
+            king.collisionMode = new CollisionMode.Normal();
+            king.hasEntityTouchChecks = true;
+            bool sics = true;
+            king.enableAllPhysics(Ref<bool>.From(ref sics));
             king.setPosCase(Game.Class.ME.hero.cx, Game.Class.ME.hero.cy, Game.Class.ME.hero.xr, Game.Class.ME.hero.yr);
             king.visible = true;
             var miniMap = ModEntry.miniMap;
@@ -50,26 +61,39 @@ namespace DeadCellsMultiplayerMod
             }
             SetLabel(king, GameMenu.RemoteUsername);
             this.UI = new MultiplayerUI(modEntry);
-            dynamic key = Data.Class.item.all.getDyn(278);
-            Log.Debug($"{key}");
-            dynamic props = key.props;
-            props.prct = 0;
+            // dynamic key = Data.Class.item.all.getDyn(278);
+            // Log.Debug($"{key}");
+            // dynamic props = key.props;
+            // props.prct = 0;
             return king;
         }
 
-
-        public KingSkin reInitKing(Level level)
+        public void disposeKing(KingSkin k)
         {
-            king.set_level(level);
-            king.initGfx();
-            king.visible = true;
-            var miniMap = ModEntry.miniMap;
-            if (miniMap != null && _me._level.map == king._level.map)
+            if (k.spr != null)
             {
-                miniMap.track(king, 14888237, "minimapHero".AsHaxeString(), null, true, null, null, null);
+                ColorMap shader = (ColorMap)k.spr.getShader(ColorMap.Class);
+
+                if (shader != null)
+                {
+                    k.spr.removeShader(shader);
+                    k.spr.lib = null;
+                }
             }
-            SetLabel(king, GameMenu.RemoteUsername);
-            return king;
+
+            if (k.speechSfxDeck != null)
+            {
+                k.speechSfxDeck.clear();
+            }
+
+            if (k.runAnims != null)
+            {
+                k.runAnims = null;
+            }
+            k.removeAllLights(true);
+            k.disposeGfx();
+            k.dispose();
+            k.destroy();
         }
 
         public void TeleportByPixels(double x, double y)
@@ -109,6 +133,7 @@ namespace DeadCellsMultiplayerMod
         public void SetLabel(Entity entity, string? text)
         {
             if (entity == null) return;
+            if (entity.spr == null) return;
             if (text == null) text = "Guest";
             _Assets _Assets = Assets.Class;
             dc.h2d.Text text_h2d = _Assets.makeText(text.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), true, entity.spr);
