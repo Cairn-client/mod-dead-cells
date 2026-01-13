@@ -84,6 +84,7 @@ namespace DeadCellsMultiplayerMod
             if (k.speechSfxDeck != null)
             {
                 k.speechSfxDeck.clear();
+
             }
 
             if (k.runAnims != null)
