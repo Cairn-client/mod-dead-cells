@@ -23,6 +23,7 @@ using HaxeProxy.Runtime;
 using dc.en.mob;
 using dc.haxe;
 using dc.cine;
+using CineHookInitialize;
 
 
 namespace DeadCellsMultiplayerMod
@@ -92,6 +93,7 @@ namespace DeadCellsMultiplayerMod
             this.gds = new GameDataSync(Logger);
             this.UI = new MultiplayerUI(this);
             this.UI.init();
+            CineHooks cine = new CineHooks();
             MobsSynchronization.MobsSynchronization mobs = new MobsSynchronization.MobsSynchronization(this);
             GameMenu.Initialize(Logger);
             Hook_Game.init += Hook_gameinit;
@@ -268,6 +270,7 @@ namespace DeadCellsMultiplayerMod
         };
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
+            this.UI.Debugkeys();
             if (_companionKing == null || me == null || _ghost == null) return;
             SendHeroCoords();
             ReceiveGhostCoords();
