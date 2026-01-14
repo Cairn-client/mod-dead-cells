@@ -519,8 +519,8 @@ namespace DeadCellsMultiplayerMod
 
         private static void StartHostServerOnly()
         {
-            try
-            {
+            // try
+            // {
                 if (ModEntry.Instance == null)
                 {
                     _log?.Warning("[NetMod] ModEntry instance unavailable for host start");
@@ -535,11 +535,11 @@ namespace DeadCellsMultiplayerMod
 
                 ModEntry.Instance.StartHostFromMenu(_mpIp, _mpPort);
                 _waitingForHost = false;
-            }
-            catch (Exception ex)
-            {
-                _log?.Warning("[NetMod] Host start failed: {Message}", ex.Message);
-            }
+            // }
+            // catch (Exception ex)
+            // {
+            //     _log?.Warning("[NetMod] Host start failed: {Message}", ex.Message);
+            // }
         }
 
         private static void StartHostRun(TitleScreen screen)

@@ -21,6 +21,15 @@ public sealed class NetNode : IDisposable
     private TcpClient?   _client;     // client OR accepted
     private NetworkStream? _stream;
 
+    private int ID;
+
+    public int id => ID;  
+
+
+    private static readonly int[] ClientIds = { 2, 3, 4 };
+
+    private static readonly HashSet<int> UsedClientIds = new();
+
     private readonly IPEndPoint _bindEp;   // host bind
     private readonly IPEndPoint _destEp;   // client connect
 
@@ -64,24 +73,25 @@ public sealed class NetNode : IDisposable
 
         if (role == NetRole.Host)
         {
-            // только loopback
             _bindEp = ep;
             _destEp = new IPEndPoint(IPAddress.None, 0);
             StartHost();
+            ID = 1;
         }
         else
         {
-            _destEp = ep; // 127.0.0.1:XXXX из server.txt
+            _destEp = ep;
             _bindEp = new IPEndPoint(IPAddress.None, 0);
             StartClient();
+            ID = 0;
         }
     }
 
     // ================= HOST =================
     private void StartHost()
     {
-        try
-        {
+        // try
+        // {
             _cts = new CancellationTokenSource();
             _listener = new TcpListener(_bindEp);
             _listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
@@ -92,13 +102,13 @@ public sealed class NetNode : IDisposable
             _log.Information("[NetNode] Host started OK. Bound to {0}:{1}", lep.Address, lep.Port);
 
             _acceptTask = Task.Run(() => AcceptLoop(_cts.Token));
-        }
-        catch (Exception ex)
-        {
-            _log.Error("[NetNode] Host start failed: {msg}", ex.Message);
-            Dispose();
-            throw;
-        }
+        // }
+        // catch (Exception ex)
+        // {
+        //     _log.Error("[NetNode] Host start failed: {msg}", ex.Message);
+        //     Dispose();
+        //     throw;
+        // }
     }
 
     private async Task AcceptLoop(CancellationToken ct)
@@ -122,6 +132,20 @@ public sealed class NetNode : IDisposable
 
                 lock (_sync) _hasRemote = true;
                 GameMenu.NotifyRemoteConnected(_role);
+
+                int assignedId;
+                lock (UsedClientIds)
+                {
+                    assignedId = ClientIds.FirstOrDefault(id => !UsedClientIds.Contains(id));
+                    if (assignedId == 0)
+                    {
+                        _log.Warning("[NetNode] Max players reached, kicking client");
+                        tcp.Close();
+                        return;
+                    }
+                    UsedClientIds.Add(assignedId);
+                }
+                await SendLineSafe($"ID|{assignedId}\n").ConfigureAwait(false);
 
                 _recvTask = Task.Run(() => RecvLoop(ct));
                 break;
@@ -206,6 +230,17 @@ public sealed class NetNode : IDisposable
                     var line = text[..idx].Trim();
                     sb.Remove(0, idx + 1);
                     if (line.Length == 0) continue;
+
+                    if (line.StartsWith("ID|"))
+                    {
+                        var part = line["ID|".Length..];
+                        if (int.TryParse(part, out var parsedId))
+                        {
+                            ID = parsedId;
+                            _log.Information("[NetNode] Assigned ID {Id}", ID);
+                        }
+                        continue;
+                    }
 
 
                     if (line.StartsWith("WELCOME"))
@@ -383,6 +418,13 @@ public sealed class NetNode : IDisposable
                 _hasRemoteAnim = false;
             }
             GameMenu.NotifyRemoteDisconnected(_role);
+            if (_role == NetRole.Host && ID >= 2)
+            {
+                lock (UsedClientIds)
+                {
+                    UsedClientIds.Remove(ID);
+                }
+            }
         }
     }
 

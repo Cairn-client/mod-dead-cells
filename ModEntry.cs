@@ -39,7 +39,7 @@ namespace DeadCellsMultiplayerMod
         private NetRole _netRole = NetRole.None;
         public static NetNode? _net;
 
-
+        private static int? id = null;
         public dc.pr.Game? game;
 
         public static KingSkin _companionKing = null;
@@ -433,18 +433,20 @@ namespace DeadCellsMultiplayerMod
         {
             var ep = BuildEndpoint(ipText, port);
             StartHostWithEndpoint(ep);
+            id = _net.id;
         }
 
         public void StartClientFromMenu(string ipText, int port)
         {
             var ep = BuildEndpoint(ipText, port);
             StartClientWithEndpoint(ep);
+            id = _net.id;
         }
 
         private void StartHostWithEndpoint(IPEndPoint ep)
         {
-            try
-            {
+            // try
+            // {
                 _net?.Dispose();
 
                 _net = NetNode.CreateHost(Logger, ep);
@@ -455,14 +457,14 @@ namespace DeadCellsMultiplayerMod
                 var lep = _net.ListenerEndpoint;
                 if (lep != null)
                     Logger.Information($"[NetMod] Host listening at {lep.Address}:{lep.Port}");
-            }
-            catch (Exception ex)
-            {
-                Logger.Error($"[NetMod] Host start failed: {ex.Message}");
-                _netRole = NetRole.None;
-                _net = null;
-                GameMenu.SetRole(_netRole);
-            }
+            // }
+            // catch (Exception ex)
+            // {
+            //     Logger.Error($"[NetMod] Host start failed: {ex.Message}");
+            //     _netRole = NetRole.None;
+            //     _net = null;
+            //     GameMenu.SetRole(_netRole);
+            // }
         }
 
         private void StartClientWithEndpoint(IPEndPoint ep)

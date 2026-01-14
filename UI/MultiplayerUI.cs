@@ -123,10 +123,10 @@ public class MultiplayerUI
         if (this.kingLife.curState.life < 0 || self.life <= 0 || life < 0)
         {
             //self.startDeathCine();
-            GameMenu.Initialize(mod.Logger);
-            Main me = Main.Class.ME;
-            HlFunc<dc.libs.Process> pause = new HlFunc<dc.libs.Process>(this.process);
-            me.transition(null, pause, Ref<bool>.Null, null, null);
+            // GameMenu.Initialize(mod.Logger);
+            // Main me = Main.Class.ME;
+            // HlFunc<dc.libs.Process> pause = new HlFunc<dc.libs.Process>(this.process);
+            // me.transition(null, pause, Ref<bool>.Null, null, null);
         }
     }
 
