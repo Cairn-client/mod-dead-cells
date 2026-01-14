@@ -89,11 +89,9 @@ namespace DeadCellsMultiplayerMod
         public override void Initialize()
         {
             Instance = this;
-            gds = new GameDataSync(Logger);
+            this.gds = new GameDataSync(Logger);
             this.UI = new MultiplayerUI(this);
-            this.UI.init();
             MobsSynchronization.MobsSynchronization mobs = new MobsSynchronization.MobsSynchronization(this);
-            mobs.HookInitialize();
             GameMenu.Initialize(Logger);
             Hook_Game.init += Hook_gameinit;
             Hook_Hero.wakeup += hook_hero_wakeup;
@@ -269,7 +267,6 @@ namespace DeadCellsMultiplayerMod
         };
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
-            UI.Debugkeys();
             if (_companionKing == null || me == null || _ghost == null) return;
             SendHeroCoords();
             ReceiveGhostCoords();

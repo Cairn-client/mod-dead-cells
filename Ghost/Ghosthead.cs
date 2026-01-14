@@ -12,7 +12,7 @@ using ModCore.Utitities;
 
 namespace DeadCellsMultiplayerMod;
 
-public class Kinghead(Hero _me, KingSkin _kingSkin, Level level)
+public class Ghosthead(Hero _me, KingSkin _kingSkin, Level level)
 {
     private Hero me = _me;
     private KingSkin king = _kingSkin;

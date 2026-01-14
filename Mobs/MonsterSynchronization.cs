@@ -21,6 +21,7 @@ namespace MobsSynchronization
         {
             modEntry = entry;
             uI = new MultiplayerUI(entry);
+            HookInitialize();
         }
 
         public void HookInitialize()
