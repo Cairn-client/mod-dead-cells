@@ -3,6 +3,11 @@ using dc.pr;
 using ModCore.Utitities;
 using Serilog;
 using dc;
+using HaxeProxy.Runtime;
+using dc.shader;
+using dc.hl.types;
+using Hashlink.Virtuals;
+using dc.libs.heaps.slib;
 
 
 namespace DeadCellsMultiplayerMod
@@ -38,9 +43,17 @@ namespace DeadCellsMultiplayerMod
 
             king = new KingSkin(level, (int)1, (int)1);
             king.init();
-            king.initGfx();
             king.set_level(level);
             king.set_team(level.teamHero);
+            king._targetable = true;
+            king.hasWineGlass = false;
+            king.lifeBarAbove = true;
+            king.initLife(100, 100);
+            king.hasRepelling = true;
+            king.collisionMode = new CollisionMode.Normal();
+            king.hasEntityTouchChecks = true;
+            bool sics = true;
+            king.enableAllPhysics(Ref<bool>.From(ref sics));
             king.setPosCase(Game.Class.ME.hero.cx, Game.Class.ME.hero.cy, Game.Class.ME.hero.xr, Game.Class.ME.hero.yr);
             king.visible = true;
             var miniMap = ModEntry.miniMap;
@@ -57,6 +70,71 @@ namespace DeadCellsMultiplayerMod
             return king;
         }
 
+        private bool stopanim = false;
+        public void disposeKing(KingSkin k)
+        {
+            Log.Debug("开始销毁幽灵");
+            stopanim = true;
+            if (k.spr != null)
+            {
+                ColorMap shader = (ColorMap)k.spr.getShader(ColorMap.Class);
+
+                if (shader != null)
+                {
+                    k.spr.removeShader(shader);
+                    k.spr.lib = null;
+                }
+            }
+
+            if (k.spriteClones != null)
+            {
+                int num = 0;
+                ArrayObj arrayObj = k.spriteClones;
+                for (; ; )
+                {
+                    int length = arrayObj.length;
+                    if (num >= length)
+                    {
+                        break;
+                    }
+                    length = arrayObj.length;
+                    virtual_e_followHead_notActualClone_offX_offY_scaleBonus_? virtual_e_followHead_notActualClone_offX_offY_scaleBonus_;
+                    if (num >= length)
+                    {
+                        virtual_e_followHead_notActualClone_offX_offY_scaleBonus_ = null;
+                    }
+                    else
+                    {
+                        virtual_e_followHead_notActualClone_offX_offY_scaleBonus_ = (virtual_e_followHead_notActualClone_offX_offY_scaleBonus_)arrayObj.array[num]!;
+                    }
+                    num++;
+                    HSprite hsprite = virtual_e_followHead_notActualClone_offX_offY_scaleBonus_!.e;
+                    if (hsprite != null)
+                    {
+                        if (hsprite.parent != null)
+                        {
+                            hsprite.parent.removeChild(hsprite);
+                        }
+                    }
+                }
+            }
+
+            if (k.speechSfxDeck != null)
+            {
+                k.speechSfxDeck.clear();
+            }
+
+            if (k.runAnims != null)
+            {
+                k.runAnims = null;
+            }
+            k.removeAllLights(true);
+            k.disposeGfx();
+            k.destroy();
+            k.dispose();
+
+        }
+
         public void TeleportByPixels(double x, double y)
         {
             king?.setPosPixel(x, y - 0.2d);
@@ -66,6 +144,7 @@ namespace DeadCellsMultiplayerMod
         {
             if (king == null || king.spr == null || king.spr._animManager == null) return;
             if (string.IsNullOrWhiteSpace(anim)) return;
+            if (stopanim == true) return;
             var animManager = king.spr._animManager;
 
             try

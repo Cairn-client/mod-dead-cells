@@ -20,6 +20,9 @@ using dc.tool;
 using dc.hxd;
 using System.Timers;
 using HaxeProxy.Runtime;
+using dc.en.mob;
+using dc.haxe;
+using dc.cine;
 
 
 namespace DeadCellsMultiplayerMod
@@ -103,8 +106,7 @@ namespace DeadCellsMultiplayerMod
             Hook__LevelStruct.get += Hook__LevelStruct_get;
             Hook_Boot.update += hook_boot_update;
 
-            Hook_LevelGen.genMobs += Hook_LevelGen_genmobs;
-            Hook_MobsGen.addElites += Hook_MobsGen_addElites;
+
         }
 
 
@@ -159,7 +161,6 @@ namespace DeadCellsMultiplayerMod
             orig(self);
             dc.String group = "idle".AsHaxeString();
             SpriteLib heroLib = Assets.Class.getHeroLib(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
-            self.spr.lib = heroLib;
             Texture normalMapFromGroup = heroLib.getNormalMapFromGroup(group);
             int? dp_ROOM_MAIN_HERO = Const.Class.DP_ROOM_MAIN_HERO;
             self.initSprite(heroLib, group, 0.5, 0.5, dp_ROOM_MAIN_HERO, true, null, normalMapFromGroup);
@@ -230,6 +231,7 @@ namespace DeadCellsMultiplayerMod
                 _companionKing.disposeGfx();
                 _companionKing = _ghost.CreateGhostKing(me._level);
             }
+
         }
 
 
@@ -267,6 +269,7 @@ namespace DeadCellsMultiplayerMod
         };
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
+            UI.Debugkeys();
             if (_companionKing == null || me == null || _ghost == null) return;
             SendHeroCoords();
             ReceiveGhostCoords();
@@ -335,6 +338,7 @@ namespace DeadCellsMultiplayerMod
         {
             if (_netRole == NetRole.None) return;
             var net = _net;
+            var animManager = me?.spr?._animManager;
             if (net == null || string.IsNullOrWhiteSpace(anim)) return;
             if (!force &&
                 string.Equals(_lastAnimSent, anim, StringComparison.Ordinal) &&

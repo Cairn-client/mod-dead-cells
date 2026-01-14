@@ -47,11 +47,6 @@ public class Kinghead(Hero _me, KingSkin _kingSkin, Level level)
     }
 
 
-
-
-
-
-
     public void KingHeadTile(dc.pr.Level level, int layer)
     {
         SpriteLib fx = Assets.Class.fx;
