@@ -1,9 +1,13 @@
 
 using System.Security.Cryptography;
 using dc;
+using dc.cine;
 using dc.en;
+using dc.en.mob;
 using dc.h2d;
+using dc.hxd;
 using dc.level.@struct;
+using dc.libs._Cooldown;
 using dc.pr;
 using dc.tool;
 using dc.tool.log;
@@ -13,6 +17,7 @@ using Hashlink.Virtuals;
 using HaxeProxy.Runtime;
 using ModCore.Utitities;
 using Serilog;
+using Cooldown = CooldownHelper.Cooldown;
 
 namespace DeadCellsMultiplayerMod;
 
@@ -46,6 +51,45 @@ public class MultiplayerUI
     {
         orig(self);
         initkingLife(self);
+    }
+    public bool CanUseJumpHit()
+    {
+        int key = Cooldown.Encode(Cooldown.Keys.JUMP_HIT);
+        return !ModEntry.me.cd.fastCheck.exists(key);
+    }
+
+    public bool CanUseAirSkill()
+    {
+        int key = Cooldown.Encode(Cooldown.Keys.AIR_SKILL);
+        return !ModEntry.me.cd.fastCheck.exists(key);
+    }
+    public void Debugkeys()
+    {
+
+        if (Key.Class.isPressed(97))//num1
+        {
+            LevelTransition.Class.@goto("Custom".AsHaxeString());
+
+        }
+        if (Key.Class.isPressed(98))//num2
+        {
+            var hero = ModCore.Modules.Game.Instance.HeroInstance!;
+            Zombie zombie = new Zombie(hero._level, hero.cx, hero.cy, 0, 100);
+            zombie.init();
+            int key = Cooldown.Encode(Cooldown.Keys.JUMP_HIT);
+            ModEntry.me.cd.fastCheck.set(key, new CdInst(key, 3.0));
+        }
+        if (Key.Class.isPressed(99))//num3
+        {
+            int key = Cooldown.Encode(Cooldown.Keys.JUMP_HIT);
+            ModEntry.me.cd.fastCheck.remove(key);
+        }
+        if (!CanUseJumpHit())
+        {
+            Log.Debug("跳跃命中冷却中");
+            return;
+        }
+
     }
     private bool initlif = true;
     private void Hook_Hero_kinglifupdate(Hook_Hero.orig_updateLifeBar orig, Hero self)

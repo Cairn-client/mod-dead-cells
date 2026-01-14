@@ -22,6 +22,7 @@ using System.Timers;
 using HaxeProxy.Runtime;
 using dc.en.mob;
 using dc.haxe;
+using dc.cine;
 
 
 namespace DeadCellsMultiplayerMod
@@ -268,12 +269,7 @@ namespace DeadCellsMultiplayerMod
         };
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
-            if (Key.Class.isPressed(37))
-            {
-                var hero = ModCore.Modules.Game.Instance.HeroInstance!;
-                Zombie zombie = new Zombie(hero._level, hero.cx, hero.cy, 0, 100);
-                zombie.init();
-            }
+            UI.Debugkeys();
             if (_companionKing == null || me == null || _ghost == null) return;
             SendHeroCoords();
             ReceiveGhostCoords();

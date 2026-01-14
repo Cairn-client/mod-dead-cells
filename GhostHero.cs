@@ -63,17 +63,16 @@ namespace DeadCellsMultiplayerMod
             }
             SetLabel(king, GameMenu.RemoteUsername);
             this.UI = new MultiplayerUI(modEntry);
-            // dynamic key = Data.Class.item.all.getDyn(278);
-            // Log.Debug($"{key}");
-            // dynamic props = key.props;
-            // props.prct = 0;
+            dynamic key = Data.Class.item.all.getDyn(278);
+            Log.Debug($"{key}");
+            dynamic props = key.props;
+            props.prct = 0;
             return king;
         }
 
         private bool stopanim = false;
         public void disposeKing(KingSkin k)
         {
-            //level.entities.removeDyn(k);
             Log.Debug("开始销毁幽灵");
             stopanim = true;
             if (k.spr != null)
