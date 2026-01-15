@@ -18,7 +18,10 @@ namespace DeadCellsMultiplayerMod
         public bool CanGohostCreate()
         {
             int k = Cooldown.Encode(Cooldown.Keys.KING_Create);
-            return ModEntry._companionKing.cd.fastCheck.exists(k);
+            var king = ModEntry.GetPrimaryClient();
+            if (king == null)
+                return false;
+            return king.cd.fastCheck.exists(k);
         }
 
     }

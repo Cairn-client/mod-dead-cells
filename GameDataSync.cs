@@ -42,7 +42,7 @@ namespace DeadCellsMultiplayerMod
 
             Seed = lvl;
             ModEntry.me = null;
-            ModEntry._companionKing = null;
+            ModEntry.ResetClientSlots();
             ModEntry.kingInitialized = false;
             ModEntry._ghost = null;
             var net = GameMenu.NetRef;
@@ -88,7 +88,7 @@ namespace DeadCellsMultiplayerMod
         Ref<bool> resetCount2)
         {
             // ldat = Seed;
-            ModEntry._companionKing = null;
+            ModEntry.ResetClientSlots();
             // var net = GameMenu.NetRef;
 
             // SendHeroSkin(seed, net);

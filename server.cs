@@ -89,6 +89,28 @@ public sealed class NetNode : IDisposable
         }
     }
 
+    public readonly struct RemoteHpSnapshot
+    {
+        public readonly int Id;
+        public readonly int Life;
+        public readonly int MaxLife;
+        public readonly int Lif;
+        public readonly int BonusLife;
+        public readonly int Recover;
+        public readonly string? Username;
+
+        public RemoteHpSnapshot(int id, int life, int maxLife, int lif, int bonusLife, int recover, string? username)
+        {
+            Id = id;
+            Life = life;
+            MaxLife = maxLife;
+            Lif = lif;
+            BonusLife = bonusLife;
+            Recover = recover;
+            Username = username;
+        }
+    }
+
     private TcpListener? _listener;   // host
     private TcpClient? _client;     // client
     private NetworkStream? _stream;
@@ -98,6 +120,21 @@ public sealed class NetNode : IDisposable
     public int id => ID;
 
     private static readonly int[] ClientIds = { 2, 3, 4 };
+    public static int MaxClientSlots => ClientIds.Length;
+    public int ConnectedClientCount
+    {
+        get
+        {
+            if (_role == NetRole.Host)
+            {
+                lock (_clientsLock)
+                    return _clients.Count;
+            }
+            if (_role == NetRole.Client)
+                return HasRemote ? 1 : 0;
+            return 0;
+        }
+    }
 
     private static readonly HashSet<int> UsedClientIds = new();
 
@@ -238,6 +275,7 @@ public sealed class NetNode : IDisposable
                     GameMenu.NotifyRemoteConnected(_role);
                 });
                 await SendLineToClientSafe(connection, $"ID|{assignedId}\n").ConfigureAwait(false);
+                await SendKnownUsersToClientSafe(connection).ConfigureAwait(false);
 
                 _ = Task.Run(() => RecvLoop(connection.Stream, ct, assignedId, connection));
             }
@@ -873,6 +911,26 @@ public sealed class NetNode : IDisposable
         await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
+    private async Task SendKnownUsersToClientSafe(ClientConnection connection)
+    {
+        List<RemoteState> snapshot;
+        lock (_sync)
+        {
+            if (_remotes.Count == 0)
+                return;
+            snapshot = new List<RemoteState>(_remotes.Values);
+        }
+
+        foreach (var state in snapshot)
+        {
+            var username = state.Username;
+            if (string.IsNullOrWhiteSpace(username))
+                continue;
+            var line = BuildTaggedLine("USER", state.Id, username);
+            await SendLineToClientSafe(connection, line).ConfigureAwait(false);
+        }
+    }
+
     private async Task SendLineToStreamSafe(NetworkStream? stream, SemaphoreSlim? sendLock, string line)
     {
         if (stream == null || sendLock == null) return;
@@ -1080,6 +1138,29 @@ public sealed class NetNode : IDisposable
 
                 if (hasAnim)
                     state.HasAnim = false;
+            }
+
+            return snapshot.Count > 0;
+        }
+    }
+
+    public bool TryGetRemoteHpSnapshots(out List<RemoteHpSnapshot> snapshot)
+    {
+        lock (_sync)
+        {
+            if (_remotes.Count == 0)
+            {
+                snapshot = new List<RemoteHpSnapshot>();
+                return false;
+            }
+
+            snapshot = new List<RemoteHpSnapshot>(_remotes.Count);
+            foreach (var state in _remotes.Values)
+            {
+                if (!state.HasRemote)
+                    continue;
+
+                snapshot.Add(new RemoteHpSnapshot(state.Id, state.Life, state.MaxLife, state.Lif, state.BonusLife, state.Recover, state.Username));
             }
 
             return snapshot.Count > 0;

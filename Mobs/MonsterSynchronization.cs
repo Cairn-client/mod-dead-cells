@@ -75,11 +75,11 @@ namespace MobsSynchronization
                         displayText += $"|Nemesis: {nemesisType}";
                     }
 
-                    uI.DebugUI(displayText);
+                    // uI.DebugUI(displayText);
                 }
                 catch (Exception ex)
                 {
-                    uI.DebugUI($"Error getting mob info: {ex.Message}");
+                    // uI.DebugUI($"Error getting mob info: {ex.Message}");
                 }
             }
 

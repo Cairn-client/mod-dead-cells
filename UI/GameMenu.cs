@@ -1144,19 +1144,15 @@ namespace DeadCellsMultiplayerMod
             var net = NetRef;
             if (role == NetRole.Host)
             {
-                parts.Add("Host (you)");
+                parts.Add(_username);
                 if (net != null && net.HasRemote)
-                    parts.Add($"Client: {_remoteUsername}");
-                else
-                    parts.Add("No client connected");
+                    parts.Add(_remoteUsername);
             }
             else
             {
-                parts.Add("Client (you)");
+                parts.Add(_username);
                 if (net != null && net.HasRemote)
-                    parts.Add("Host online");
-                else
-                    parts.Add(_waitingForHost ? "Waiting for host" : "Not connected");
+                    parts.Add(_remoteUsername);
             }
 
             return parts;

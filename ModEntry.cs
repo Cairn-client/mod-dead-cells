@@ -42,11 +42,10 @@ namespace DeadCellsMultiplayerMod
         public dc.pr.Game? game;
 
 
-        public static KingSkin _companionKing = null;
 
-        public static KingSkin[] clients = new KingSkin[3];
-        public static string?[] clientLabels = new string?[3];
-        public static int[] clientIds = new int[3];
+        public static KingSkin[] clients = new KingSkin[NetNode.MaxClientSlots];
+        public static string?[] clientLabels = new string?[NetNode.MaxClientSlots];
+        public static int[] clientIds = new int[NetNode.MaxClientSlots];
         public static Hero me = null;
         public static GhostHero _ghost = null;
 
@@ -90,6 +89,30 @@ namespace DeadCellsMultiplayerMod
                 return GameMenu.RemoteUsername;
 
             return clientLabels[slotIndex] ?? GameMenu.RemoteUsername;
+        }
+
+        internal static KingSkin? GetPrimaryClient()
+        {
+            for (int i = 0; i < clients.Length; i++)
+            {
+                var client = clients[i];
+                if (client != null && clientIds[i] > 0)
+                    return client;
+            }
+
+            return clients.Length > 0 ? clients[0] : null;
+        }
+
+        internal static void ResetClientSlots()
+        {
+            for (int i = 0; i < clients.Length; i++)
+            {
+                clients[i] = null!;
+                clientLabels[i] = null;
+                clientIds[i] = 0;
+                rLastX[i] = 0;
+                rLastY[i] = 0;
+            }
         }
 
         private static string BuildRemoteLabel(int remoteId, string? username)
@@ -245,6 +268,7 @@ namespace DeadCellsMultiplayerMod
             if (_ghost == null)
                 _ghost = new GhostHero(localId, game!, me, Logger, this);
             _ghost.SetLabel(me, GameMenu.Username);
+            Logger.Debug($"clients.Length: {clients.Length}");
             for (int i = 0; i < clients.Length; i++)
             {
                 var client = clients[i];
@@ -260,7 +284,6 @@ namespace DeadCellsMultiplayerMod
                 clientLabels[i] = null;
                 clientIds[i] = 0;
             }
-            _companionKing = clients.Length > 0 ? clients[0] : null;
         }
 
 
@@ -340,10 +363,10 @@ namespace DeadCellsMultiplayerMod
             last_y = me.spr.y;
         }
 
-        public static double[] rLastX = new double[3];
-        public static double[] rLastY = new double[3];
+        public static double[] rLastX = new double[NetNode.MaxClientSlots];
+        public static double[] rLastY = new double[NetNode.MaxClientSlots];
 
-        private static bool TryGetClientIndex(int localId, int remoteId, out int index)
+        internal static bool TryGetClientIndex(int localId, int remoteId, out int index)
         {
             index = -1;
             if (localId <= 0 || remoteId <= 0 || remoteId == localId)
