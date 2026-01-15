@@ -770,7 +770,9 @@ namespace DeadCellsMultiplayerMod
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
 
-                AddInfoLine(screen, "Waiting for the host", infoColor: 0xA0C0FF);
+                AddInfoLine(screen, $"Status: {BuildStatus(NetRole.Client)}", infoColor: 0xA0C0FF);
+                AddInfoLine(screen, "Players:", infoColor: 0xA0C0FF);
+                AddPlayerLines(screen, NetRole.Client, infoColor: 0xA0C0FF);
                 AddMenuButton(screen, "Disconnect", () => DisconnectFromMenu(screen), "Disconnect and return to main menu");
 
                 RemoveMenuItems(screen, "About Core Modding", "Play multiplayer");

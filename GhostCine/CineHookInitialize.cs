@@ -32,7 +32,10 @@ namespace CineHookInitialize
 
         private bool Hook_Hero_tryToApplyYoloPerk(Hook_Hero.orig_tryToApplyYoloPerk orig, Hero self)
         {
-            DeadBase deadBase = new DeadBase(self, ModEntry._companionKing);
+            var king = ModEntry.GetPrimaryClient();
+            if (king == null)
+                return orig(self);
+            DeadBase deadBase = new DeadBase(self, king);
             item = new InventItem(new InventItemKind.Perk("P_Yolo".AsHaxeString()));
             ModEntry.me.applyItemPickEffect(ModEntry.me, item);
             bool or = orig(self);

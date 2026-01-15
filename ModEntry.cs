@@ -24,6 +24,7 @@ using dc.en.mob;
 using dc.haxe;
 using dc.cine;
 using CineHookInitialize;
+using Serilog.Core;
 
 
 namespace DeadCellsMultiplayerMod
@@ -151,11 +152,22 @@ namespace DeadCellsMultiplayerMod
             Hook_KingSkin.initGfx += Hook_KingSkin_initgfx;
             Hook__LevelStruct.get += Hook__LevelStruct_get;
             Hook_Boot.update += hook_boot_update;
+            Hook_Game.pause += Hook_Game_pause;
 
 
         }
 
-        
+        private void Hook_Game_pause(Hook_Game.orig_pause orig, dc.pr.Game self)
+        {
+            return;
+        }
+
+        private void Hook_Hero_revealBlueprints(Hook_Hero.orig_revealBlueprints orig, Hero self)
+        {
+            Logger.Debug($"self.blueprints: {self.blueprints}");
+            orig(self);
+        }
+
 
 
         private void Hook_MobsGen_addElites(Hook_MobsGen.orig_addElites orig, MobsGen self, ArrayObj mobsPerRooms)
@@ -270,7 +282,6 @@ namespace DeadCellsMultiplayerMod
             if (_ghost == null)
                 _ghost = new GhostHero(localId, game!, me, Logger, this);
             _ghost.SetLabel(me, GameMenu.Username);
-            Logger.Debug($"clients.Length: {clients.Length}");
             for (int i = 0; i < clients.Length; i++)
             {
                 var client = clients[i];

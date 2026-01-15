@@ -114,6 +114,7 @@ public sealed class NetNode : IDisposable
     private TcpListener? _listener;   // host
     private TcpClient? _client;     // client
     private NetworkStream? _stream;
+    private static int _connectedClientCount;
 
     private int ID;
 
@@ -121,20 +122,7 @@ public sealed class NetNode : IDisposable
 
     private static readonly int[] ClientIds = { 2, 3, 4 };
     public static int MaxClientSlots => ClientIds.Length;
-    public int ConnectedClientCount
-    {
-        get
-        {
-            if (_role == NetRole.Host)
-            {
-                lock (_clientsLock)
-                    return _clients.Count;
-            }
-            if (_role == NetRole.Client)
-                return HasRemote ? 1 : 0;
-            return 0;
-        }
-    }
+    public static int ConnectedClientCount => _connectedClientCount;
 
     private static readonly HashSet<int> UsedClientIds = new();
 
@@ -252,6 +240,7 @@ public sealed class NetNode : IDisposable
                 lock (_clientsLock)
                 {
                     _clients[assignedId] = connection;
+                    _connectedClientCount = _clients.Count;
                 }
                 lock (_sync)
                 {
@@ -320,6 +309,7 @@ public sealed class NetNode : IDisposable
                 lock (_sync)
                 {
                     _hasRemote = true;
+                    _connectedClientCount = 1;
                     if (_primaryRemoteId == 0)
                         _primaryRemoteId = 1;
                 }
@@ -671,7 +661,8 @@ public sealed class NetNode : IDisposable
         lock (_clientsLock)
         {
             _clients.Remove(sender.AssignedId);
-            hasClients = _clients.Count > 0;
+            _connectedClientCount = _clients.Count;
+            hasClients = _connectedClientCount > 0;
         }
 
         sender.Dispose();
@@ -707,6 +698,7 @@ public sealed class NetNode : IDisposable
         lock (_sync)
         {
             _hasRemote = false;
+            _connectedClientCount = 0;
             _remotes.Clear();
             _primaryRemoteId = 0;
         }
@@ -1255,6 +1247,7 @@ public sealed class NetNode : IDisposable
         {
             clients = _clients.Values.ToList();
             _clients.Clear();
+            _connectedClientCount = 0;
         }
         foreach (var client in clients)
         {
@@ -1276,6 +1269,7 @@ public sealed class NetNode : IDisposable
             _remotes.Clear();
             _primaryRemoteId = 0;
             _hasRemote = false;
+            _connectedClientCount = 0;
         }
         _stream = null; _client = null; _listener = null;
         try { _sendLock.Dispose(); } catch { }
