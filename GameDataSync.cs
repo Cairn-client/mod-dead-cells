@@ -5,6 +5,7 @@ using Hashlink.Virtuals;
 using dc.level;
 using HaxeProxy.Runtime;
 using dc.tool;
+using System.Data.SqlTypes;
 
 
 namespace DeadCellsMultiplayerMod
@@ -16,6 +17,11 @@ namespace DeadCellsMultiplayerMod
 
         static public int Seed;
 
+        static public virtual_baseLootLevel_biome_bonusTripleScrollAfterBC_cellBonus_dlc_doubleUps_eliteRoomChance_eliteWanderChance_flagsProps_group_icon_id_index_loreDescriptions_mapDepth_minGold_mobDensity_mobs_name_nextLevels_parallax_props_quarterUpsBC3_quarterUpsBC4_specificLoots_specificSubBiome_transitionTo_tripleUps_worldDepth_ _isTwitch;
+        static public bool _isCustom;
+        static public bool _mode;
+
+        static public LaunchMode _launch;
         public GameDataSync(Serilog.ILogger log)
         {
             _log = log;
@@ -33,6 +39,7 @@ namespace DeadCellsMultiplayerMod
         {
             isCustom = false;
             mode = false;
+
             Seed = lvl;
             ModEntry.me = null;
             ModEntry._companionKing = null;
@@ -64,6 +71,10 @@ namespace DeadCellsMultiplayerMod
                 }
             }
             lvl = Seed;
+            _isTwitch = isTwitch;
+            _isCustom = isCustom;
+            _mode = mode;
+            _launch = gdata;
             self.pickDeathItem();
             SendHeroSkin(self, net);
             orig(self, lvl, isTwitch, isCustom, mode, gdata);

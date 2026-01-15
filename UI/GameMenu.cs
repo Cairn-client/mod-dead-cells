@@ -160,16 +160,45 @@ namespace DeadCellsMultiplayerMod
 
         public static void ReceiveHostRunSeed(int seed)
         {
+            bool shouldRestart = false;
+            int? previousSeed = null;
             lock (Sync)
             {
+                previousSeed = _remoteSeed;
                 _remoteSeed = seed;
-                if (_role == NetRole.Client && !_inActualRun)
+                if (_role == NetRole.Client)
                 {
-                    _seedArrived = true;
-                    _pendingAutoStart = true;
+                    if (_inActualRun)
+                    {
+                        if (previousSeed.HasValue && previousSeed.Value != seed)
+                            shouldRestart = true;
+                    }
+                    else
+                    {
+                        _seedArrived = true;
+                        _pendingAutoStart = true;
+                    }
                 }
             }
+            if (shouldRestart)
+                QueueClientNewGame(seed);
             _log?.Information("[NetMod] Client received host seed {Seed}", seed);
+        }
+
+        private static void QueueClientNewGame(int seed)
+        {
+            EnqueueMainThread(() =>
+            {
+                var game = ModEntry.Instance?.game;
+                if (game?.user == null)
+                {
+                    _log?.Warning("[NetMod] Skipping new game for seed {Seed}: game not ready", seed);
+                    return;
+                }
+
+                _log?.Information("[NetMod] Client restarting run for new seed {Seed}", seed);
+                game.user.newGame(seed, GameDataSync._isTwitch, GameDataSync._isCustom, GameDataSync._mode, GameDataSync._launch);
+            });
         }
 
         public static bool TryGetRemoteSeed(out int seed)

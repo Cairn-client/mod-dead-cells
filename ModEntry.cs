@@ -41,6 +41,7 @@ namespace DeadCellsMultiplayerMod
 
         public dc.pr.Game? game;
 
+
         public static KingSkin _companionKing = null;
 
         public static KingSkin[] clients = new KingSkin[3];
@@ -111,6 +112,7 @@ namespace DeadCellsMultiplayerMod
             Instance = this;
             this.gds = new GameDataSync(Logger);
             this.UI = new MultiplayerUI(this, 0);
+            
             this.UI.init();
             MobsSynchronization.MobsSynchronization mobs = new MobsSynchronization.MobsSynchronization(this);
             GameMenu.Initialize(Logger);
@@ -127,6 +129,8 @@ namespace DeadCellsMultiplayerMod
 
 
         }
+
+        
 
 
         private void Hook_MobsGen_addElites(Hook_MobsGen.orig_addElites orig, MobsGen self, ArrayObj mobsPerRooms)
