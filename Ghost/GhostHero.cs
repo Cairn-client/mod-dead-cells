@@ -62,6 +62,10 @@ namespace DeadCellsMultiplayerMod
             king.hasRepelling = true;
             king.collisionMode = new CollisionMode.Normal();
             king.hasEntityTouchChecks = true;
+            king.onActivate(_me, true);
+            king.canBeActivated(_me);
+            king.needsLongPress = true;
+            king.hasEntityTouchChecks = true;
             bool sics = true;
             king.enableAllPhysics(Ref<bool>.From(ref sics));
             // king.setPosCase(Game.Class.ME.hero.cx, Game.Class.ME.hero.cy, Game.Class.ME.hero.xr, Game.Class.ME.hero.yr);
@@ -74,9 +78,9 @@ namespace DeadCellsMultiplayerMod
             if (!string.IsNullOrWhiteSpace(label))
                 SetLabel(king, label);
             this.UI = new MultiplayerUI(modEntry);
-            dynamic key = Data.Class.item.all.getDyn(278);
-            dynamic props = key.props;
-            props.prct = 0;
+            // dynamic key = Data.Class.item.all.getDyn(278);
+            // dynamic props = key.props;
+            // props.prct = 0;
             return king;
         }
 

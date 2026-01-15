@@ -38,6 +38,7 @@ namespace DeadCellsMultiplayerMod.Minimap
             kmap.drawCircle(0.0, 0.0, 17.0, Ref<int>.Null);
             kmap.endFill();
             kmap.set_visible(true);
+            kmap.posChanged = true;
 
         }
 
@@ -58,7 +59,6 @@ namespace DeadCellsMultiplayerMod.Minimap
                     mmtracker = arrayElement;
                     if (king != null && mmtracker != null && Std.Class.@is(mmtracker.e, KingSkin.Class))
                     {
-                        kmap.posChanged = true;
                         kmap.x = king.cx;
                         kmap.y = king.cy;
                     }

@@ -16,11 +16,11 @@ namespace DeadCellsMultiplayerMod
         {
             base.update();
             var item = CineHooks.item;
-            if (item != null && owen.cd.fastCheck.exists(Cd.Encode(Cd.Keys.DELET_YOLO)))
+            if (item != null && this.cd.fastCheck.exists(Cd.Encode(Cd.Keys.DELET_YOLO)))
             {
                 owen.dropAndUpdateItem(CineHooks.item);
-                owen.cd.fastCheck.remove(Cd.Encode(Cd.Keys.DELET_YOLO));
-                owen.cd.cdList.remove(Cd.Encode(Cd.Keys.DELET_YOLO));
+                this.cd.fastCheck.remove(Cd.Encode(Cd.Keys.DELET_YOLO));
+                this.cd.cdList.remove(Cd.Encode(Cd.Keys.DELET_YOLO));
             }
             if (!this.CanGohostCreate()) return;
         }
