@@ -197,6 +197,7 @@ namespace DeadCellsMultiplayerMod
                 }
 
                 _log?.Information("[NetMod] Client restarting run for new seed {Seed}", seed);
+                ForceExitToMainMenu();
                 game.user.newGame(seed, GameDataSync._isTwitch, GameDataSync._isCustom, GameDataSync._mode, GameDataSync._launch);
             });
         }
@@ -729,7 +730,8 @@ namespace DeadCellsMultiplayerMod
                 screen.clearMenu();
 
                 AddInfoLine(screen, $"Status: {BuildStatus(NetRole.Host)}", infoColor: 0xA0C0FF);
-                AddInfoLine(screen, $"Players: {BuildPlayerList(NetRole.Host)}", infoColor: 0xA0C0FF);
+                AddInfoLine(screen, "Players:", infoColor: 0xA0C0FF);
+                AddPlayerLines(screen, NetRole.Host, infoColor: 0xA0C0FF);
 
                 AddMenuButton(screen, "Play", () => StartHostRun(screen), "Launch game");
                 AddMenuButton(screen, "Back", () =>
@@ -847,7 +849,16 @@ namespace DeadCellsMultiplayerMod
         {
             if (role == NetRole.Host)
             {
-                ForceExitToMainMenu();
+                _remoteUsername = "guest";
+                _localReady = false;
+                _genArrived = false;
+                _seedArrived = false;
+                if (_menuSelection == NetRole.Host)
+                {
+                    var ts = GetTitleScreen();
+                    if (ts != null) ShowHostStatusMenu(ts);
+                }
+                return;
             }
 
             SetRole(NetRole.None);
@@ -1127,22 +1138,36 @@ namespace DeadCellsMultiplayerMod
             return "waiting for client";
         }
 
-        private static string BuildPlayerList(NetRole role)
+        private static List<string> BuildPlayerLines(NetRole role)
         {
             var parts = new System.Collections.Generic.List<string>();
-            parts.Add(role == NetRole.Host ? "Host (you)" : "Client (you)");
-
             var net = NetRef;
-            if (net != null && net.HasRemote)
+            if (role == NetRole.Host)
             {
-                parts.Add(role == NetRole.Host ? "Client joined" : "Host online");
+                parts.Add("Host (you)");
+                if (net != null && net.HasRemote)
+                    parts.Add($"Client: {_remoteUsername}");
+                else
+                    parts.Add("No client connected");
             }
             else
             {
-                parts.Add(role == NetRole.Host ? "No client connected" : "Waiting for host");
+                parts.Add("Client (you)");
+                if (net != null && net.HasRemote)
+                    parts.Add("Host online");
+                else
+                    parts.Add(_waitingForHost ? "Waiting for host" : "Not connected");
             }
 
-            return string.Join(", ", parts);
+            return parts;
+        }
+
+        private static void AddPlayerLines(TitleScreen screen, NetRole role, int? infoColor = null)
+        {
+            foreach (var line in BuildPlayerLines(role))
+            {
+                AddInfoLine(screen, $"- {line}", infoColor: infoColor);
+            }
         }
 
         private static void OpenTextInput(TitleScreen screen, string title, string initial, Action<string> onValidate)
