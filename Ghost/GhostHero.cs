@@ -8,6 +8,7 @@ using dc.shader;
 using dc.hl.types;
 using Hashlink.Virtuals;
 using dc.libs.heaps.slib;
+using System.Collections.Generic;
 
 
 namespace DeadCellsMultiplayerMod
@@ -17,6 +18,7 @@ namespace DeadCellsMultiplayerMod
         private readonly dc.pr.Game _game;
         private readonly Hero _me;
         private static ILogger? _log;
+        private readonly Dictionary<Entity, dc.h2d.Text> _labels = new();
 
         private string? _lastRemoteAnim;
         private int? _lastRemoteAnimQueue;
@@ -46,7 +48,7 @@ namespace DeadCellsMultiplayerMod
         }
 
 
-        public KingSkin CreateGhostKing(Level level)
+        public KingSkin CreateGhostKing(Level level, string? label = null)
         {
 
             king = new KingSkin(level, (int)1, (int)1);
@@ -69,7 +71,8 @@ namespace DeadCellsMultiplayerMod
             {
                 miniMap.track(king, 14888237, "minimapHero".AsHaxeString(), null, true, null, null, null);
             }
-            SetLabel(king, GameMenu.RemoteUsername);
+            if (!string.IsNullOrWhiteSpace(label))
+                SetLabel(king, label);
             this.UI = new MultiplayerUI(modEntry);
             dynamic key = Data.Class.item.all.getDyn(278);
             Log.Debug($"{key}");
@@ -182,6 +185,17 @@ namespace DeadCellsMultiplayerMod
         {
             if (entity == null) return;
             if (text == null) text = "Guest";
+            if (_labels.TryGetValue(entity, out var existing))
+            {
+                try
+                {
+                    if (existing.parent != null)
+                        existing.parent.removeChild(existing);
+                    existing.remove();
+                }
+                catch { }
+                _labels.Remove(entity);
+            }
             _Assets _Assets = Assets.Class;
             dc.h2d.Text text_h2d = _Assets.makeText(text.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), true, entity.spr);
             text_h2d.y -= 80;
@@ -191,6 +205,7 @@ namespace DeadCellsMultiplayerMod
             text_h2d.scaleX = 0.6d;
             text_h2d.scaleY = 0.6d;
             text_h2d.textColor = 0;
+            _labels[entity] = text_h2d;
         }
 
     }

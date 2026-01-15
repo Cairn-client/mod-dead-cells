@@ -74,8 +74,9 @@ public sealed class NetNode : IDisposable
         public readonly int? AnimQueue;
         public readonly bool? AnimG;
         public readonly bool HasAnim;
+        public readonly string? Username;
 
-        public RemoteSnapshot(int id, double x, double y, string? anim, int? animQueue, bool? animG, bool hasAnim)
+        public RemoteSnapshot(int id, double x, double y, string? anim, int? animQueue, bool? animG, bool hasAnim, string? username)
         {
             Id = id;
             X = x;
@@ -84,6 +85,7 @@ public sealed class NetNode : IDisposable
             AnimQueue = animQueue;
             AnimG = animG;
             HasAnim = hasAnim;
+            Username = username;
         }
     }
 
@@ -1074,7 +1076,7 @@ public sealed class NetNode : IDisposable
                 var animQueue = hasAnim ? state.AnimQueue : null;
                 var animG = hasAnim ? state.AnimG : null;
 
-                snapshot.Add(new RemoteSnapshot(state.Id, state.X, state.Y, anim, animQueue, animG, hasAnim));
+                snapshot.Add(new RemoteSnapshot(state.Id, state.X, state.Y, anim, animQueue, animG, hasAnim, state.Username));
 
                 if (hasAnim)
                     state.HasAnim = false;
