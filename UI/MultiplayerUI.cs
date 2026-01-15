@@ -1,10 +1,12 @@
 
 using System.Security.Cryptography;
+using System.Xml.Serialization;
 using dc;
 using dc.cine;
 using dc.en;
 using dc.en.mob;
 using dc.h2d;
+using dc.hl.types;
 using dc.hxd;
 using dc.level.@struct;
 using dc.libs._Cooldown;
@@ -27,6 +29,7 @@ public class MultiplayerUI
     public dc.ui.hud.LifeBar kingLife { get; set; } = null!;
     public dc.h2d.Flow toplib { get; set; } = null!;
     public static dc.h2d.Flow flowContainer = null!;
+    public FlowBox flowBox = null!;
     private static NetNode? _net;
     public int SlotIndex { get; set; }
     private dc.h2d.Text? kingNameText;
@@ -51,10 +54,22 @@ public class MultiplayerUI
         Hook_Hero.updateLifeBar += Hook_Hero_kinglifupdate;
     }
 
+    private dc.ui.hud.LifeBar? king_1;
+    private dc.ui.hud.LifeBar? king_2;
+    private dc.ui.hud.LifeBar? king_3;
     private void Hook_HUD_initking(Hook_HUD.orig_initHero orig, HUD self)
     {
         orig(self);
-        initkingLife(self);
+        dc.ui.hud.LifeBar[] kingLifeBars = new dc.ui.hud.LifeBar[3];
+
+        for (int i = 0; i < kingLifeBars.Length; i++)
+        {
+            kingLifeBars[i] = new dc.ui.hud.LifeBar(new LifeBarColorMode.Normal(), null);
+            initkingLife(self, kingLifeBars[i]);
+        }
+        king_1 = kingLifeBars[0];
+        king_2 = kingLifeBars[1];
+        king_3 = kingLifeBars[2];
     }
     public bool CanUseJumpHit()
     {
@@ -99,6 +114,17 @@ public class MultiplayerUI
     private void Hook_Hero_kinglifupdate(Hook_Hero.orig_updateLifeBar orig, Hero self)
     {
         orig(self);
+
+    }
+
+    private dc.libs.Process process()
+    {
+        bool? titleLib = null;
+        return new TitleScreen(titleLib);
+    }
+
+    public void KingLifeUpdate(Hero self)
+    {
         if (initlif) this.kingLife.init(100, 100);
         initlif = false;
         var king = ModEntry._companionKing;
@@ -125,7 +151,7 @@ public class MultiplayerUI
         if (!net.TryGetRemoteHP(out int life, out int maxLife, out int lif, out int bonusLife, out int recover))
             return;
 
-        kingLifeUpdate(king!, life, maxLife, lif, bonusLife, recover);
+        //kingLifeUpdate(king!, life, maxLife, lif, bonusLife, recover);
         this.kingmaxlife = maxLife;
         if (self.life <= 0)
         {
@@ -141,69 +167,64 @@ public class MultiplayerUI
         }
     }
 
-    private dc.libs.Process process()
-    {
-        bool? titleLib = null;
-        return new TitleScreen(titleLib);
-    }
 
-
-
-    public void initkingLife(HUD self)
+    public void initkingLife(HUD self, dc.ui.hud.LifeBar kinglifeui)
     {
         this.toplib = self.topRightFlowT;
+
         var displayName = ModEntry.GetClientLabel(SlotIndex);
         dc.String remoteUsername = displayName.AsHaxeString();
         double wh = remoteUsername.length + 2;
-        double hh = 6;
+        double hh = 1.5;
         bool logo = true;
+
+        this.flowBox = FlowBox.Class.createBoxValidation(null, Ref<double>.Null, Ref<double>.Null, Ref<bool>.Null, null);
+        this.flowBox.isVertical = false;
+        this.flowBox.box.alpha = 0;
+
+
+        this.flowBox.set_horizontalAlign(new FlowAlign.Middle());
+        this.flowBox.set_verticalAlign(new FlowAlign.Middle());
+
+        this.kingLife = kinglifeui;
+
         FlowBox uibox = FlowBox.Class.createBoxValidation(null, Ref<double>.From(ref wh), Ref<double>.From(ref hh), Ref<bool>.From(ref logo), null);
         this.box = uibox;
-
-        dc.h2d.Text text_h2d = Assets.Class.makeText(remoteUsername, dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), false, this.box);
+        dc.h2d.Text text_h2d = Assets.Class.makeText(remoteUsername, dc.ui.Text.Class.COLORS.get("WO".AsHaxeString()), false, this.box);
         text_h2d.textColor = 16766720;
         kingNameText = text_h2d;
         lastNameText = displayName;
-        this.toplib.addChild(this.box);
 
-        dc.ui.hud.LifeBar kingLifeBar = new dc.ui.hud.LifeBar(new LifeBarColorMode.Normal(), this.toplib);
-        kingLifeBar.init(100, 100);
-        this.kingLife = kingLifeBar;
+        this.flowBox.addChild(this.kingLife);
+        this.flowBox.addChild(this.box);
 
+        this.toplib.addChild(this.flowBox);
+        this.toplib.isVertical = true;
         this.toplib.set_verticalAlign(new FlowAlign.Top());
         this.toplib.set_horizontalAlign(new FlowAlign.Right());
 
         var geth = Viewport.Class.NATIVE_HEIGHT;
         var getw = Viewport.Class.NATIVE_WIDTH;
-
         double pixelScale = self.get_pixelScale.Invoke();
 
         int rightMargin = (int)(5 * pixelScale);
         int topMargin = (int)(5 * pixelScale);
-
-
         int w = (int)(100 * pixelScale);
         int h = (int)(10 * pixelScale);
-
         int labelHeight = (int)(hh * pixelScale);
         int labelBarGap = (int)(2 * pixelScale);
         int slotGap = (int)(6 * pixelScale);
-        int slotHeight = labelHeight + labelBarGap + h + slotGap;
-
-        int targetX = getw - w - rightMargin;
-        int targetY = topMargin + (System.Math.Max(0, SlotIndex) * slotHeight);
-
-        this.box.x = targetX;
-        this.box.y = targetY;
 
         this.kingLife.setSize(w, h);
         this.kingLife.get_pixelScale = self.get_pixelScale;
         this.kingLife.enableText();
-        this.kingLife.x = targetX;
-        this.kingLife.y = targetY + labelHeight + labelBarGap;
+
+        int horizontalSpacing = (int)(5 * pixelScale);
+
+        //horizontalContainer.horizontalSpacing = horizontalSpacing;
     }
 
-    public void kingLifeUpdate(KingSkin king, int max, int maxLife, int lif, int bonusLife, int recover)
+    public void kingLifeUpdate(KingSkin king, dc.ui.hud.LifeBar kingLife, int max, int maxLife, int lif, int bonusLife, int recover)
     {
         var k = this.kingLife;
         k.init(max, maxLife);
@@ -211,6 +232,8 @@ public class MultiplayerUI
         k.curState.bonusLife = (double)bonusLife!;
         k.curState.recover = (double)recover;
     }
+
+
     private static Queue<dc.h2d.Text> textQueue = new Queue<dc.h2d.Text>();
     private const int MAX_TEXTS = 10;
 
