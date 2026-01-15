@@ -39,10 +39,11 @@ namespace DeadCellsMultiplayerMod
         private NetRole _netRole = NetRole.None;
         public static NetNode? _net;
 
-        private static int? id = null;
         public dc.pr.Game? game;
 
         public static KingSkin _companionKing = null;
+
+        public static KingSkin[] clients = new KingSkin[3];
         public static Hero me = null;
         public static GhostHero _ghost = null;
 
@@ -65,6 +66,7 @@ namespace DeadCellsMultiplayerMod
         public string levelId;
 
         public static string remoteLevelId;
+        public static int remotePlayerId = -1;
 
         private string remoteSkin;
 
@@ -137,6 +139,7 @@ namespace DeadCellsMultiplayerMod
         {
 
             orig(self, dt);
+            GameMenu.ProcessMainThreadQueue();
         }
 
 
@@ -215,9 +218,9 @@ namespace DeadCellsMultiplayerMod
             me = self;
             SendLevel(levelId);
             orig(self, oldLevel);
-            if (_ghost == null) _ghost = new GhostHero(game!, me, Logger, this);
+            var localId = _net?.id ?? -1;
+            if (_ghost == null) _ghost = new GhostHero(localId, game!, me, Logger, this);
             _ghost.SetLabel(me, GameMenu.Username);
-
 
             if (_companionKing == null)
             {
@@ -285,11 +288,11 @@ namespace DeadCellsMultiplayerMod
         {
             if (_netRole == NetRole.None) return;
             var net = _net;
-            var hero = me;
-
             if (net == null) return;
-            net.LevelSend(lvl);
 
+            int senderId = net.id;
+            if (senderId <= 0) return;
+            net.LevelSend(senderId, lvl);
         }
 
 
@@ -320,8 +323,9 @@ namespace DeadCellsMultiplayerMod
             var ghost = _ghost;
             if (net == null || ghost == null || me == null || _ghost == null || _companionKing == null) return;
 
-            if (net.TryGetRemote(out var rx, out var ry))
+            if (net.TryGetRemote(out var remoteId, out var rx, out var ry))
             {
+                remotePlayerId = remoteId;
                 ghost.TeleportByPixels(rx, ry);
                 if (rx < rLastX)
                     _companionKing.dir = -1;
@@ -433,14 +437,12 @@ namespace DeadCellsMultiplayerMod
         {
             var ep = BuildEndpoint(ipText, port);
             StartHostWithEndpoint(ep);
-            id = _net.id;
         }
 
         public void StartClientFromMenu(string ipText, int port)
         {
             var ep = BuildEndpoint(ipText, port);
             StartClientWithEndpoint(ep);
-            id = _net.id;
         }
 
         private void StartHostWithEndpoint(IPEndPoint ep)

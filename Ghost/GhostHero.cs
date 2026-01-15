@@ -24,13 +24,21 @@ namespace DeadCellsMultiplayerMod
 
         private const double RestartFrameIndex = 0;
 
+        public int PlayerId { get; }
+
         public KingSkin king = null!;
         private ModEntry modEntry = null!;
         private MultiplayerUI UI { get; set; } = null!;
 
 
-        public GhostHero(dc.pr.Game game, Hero me, ILogger logger, ModEntry entry)
+        public GhostHero(
+        int playerId,
+        dc.pr.Game game,
+        Hero me,
+        ILogger logger,
+        ModEntry entry)
         {
+            PlayerId = playerId;
             _game = game;
             _me = me;
             _log = logger;

@@ -2,6 +2,7 @@ using System;
 using System.Net;
 using System.Reflection;
 using System.IO;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using dc.pr;
@@ -24,6 +25,7 @@ namespace DeadCellsMultiplayerMod
         private static int? _remoteSeed;
         private const int MaxSeed = 999_999;
         public static NetNode? NetRef { get; set; }
+        private static readonly ConcurrentQueue<Action> _mainThreadQueue = new();
 
         private static bool _menuHooksAttached;
         private static WeakReference<TitleScreen?>? _titleScreenRef;
@@ -88,6 +90,27 @@ namespace DeadCellsMultiplayerMod
             }
 
             InitializeMenuUiHooks();
+        }
+
+        internal static void EnqueueMainThread(Action action)
+        {
+            if (action == null) return;
+            _mainThreadQueue.Enqueue(action);
+        }
+
+        internal static void ProcessMainThreadQueue()
+        {
+            while (_mainThreadQueue.TryDequeue(out var action))
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception ex)
+                {
+                    _log?.Warning("[NetMod] Main thread task failed: {Message}", ex.Message);
+                }
+            }
         }
 
         public static void MarkInRun()
