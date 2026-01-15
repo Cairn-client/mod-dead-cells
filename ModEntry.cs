@@ -39,10 +39,13 @@ namespace DeadCellsMultiplayerMod
         private NetRole _netRole = NetRole.None;
         public static NetNode? _net;
 
-
         public dc.pr.Game? game;
 
-        public static KingSkin _companionKing = null;
+
+
+        public static KingSkin[] clients = new KingSkin[NetNode.MaxClientSlots];
+        public static string?[] clientLabels = new string?[NetNode.MaxClientSlots];
+        public static int[] clientIds = new int[NetNode.MaxClientSlots];
         public static Hero me = null;
         public static GhostHero _ghost = null;
 
@@ -65,6 +68,7 @@ namespace DeadCellsMultiplayerMod
         public string levelId;
 
         public static string remoteLevelId;
+        public static int remotePlayerId = -1;
 
         private string remoteSkin;
 
@@ -79,6 +83,46 @@ namespace DeadCellsMultiplayerMod
                 : skin.Replace("|", "/").Trim();
         }
 
+        public static string GetClientLabel(int slotIndex)
+        {
+            if (slotIndex < 0 || slotIndex >= clientLabels.Length)
+                return GameMenu.RemoteUsername;
+
+            return clientLabels[slotIndex] ?? GameMenu.RemoteUsername;
+        }
+
+        internal static KingSkin? GetPrimaryClient()
+        {
+            for (int i = 0; i < clients.Length; i++)
+            {
+                var client = clients[i];
+                if (client != null && clientIds[i] > 0)
+                    return client;
+            }
+
+            return clients.Length > 0 ? clients[0] : null;
+        }
+
+        internal static void ResetClientSlots()
+        {
+            for (int i = 0; i < clients.Length; i++)
+            {
+                clients[i] = null!;
+                clientLabels[i] = null;
+                clientIds[i] = 0;
+                rLastX[i] = 0;
+                rLastY[i] = 0;
+            }
+        }
+
+        private static string BuildRemoteLabel(int remoteId, string? username)
+        {
+            var clean = string.IsNullOrWhiteSpace(username) ? "Guest" : username.Trim();
+            if (remoteId > 0)
+                return $"{clean}";
+            return clean;
+        }
+
 
         public void OnGameEndInit()
         {
@@ -89,11 +133,11 @@ namespace DeadCellsMultiplayerMod
         public override void Initialize()
         {
             Instance = this;
-            gds = new GameDataSync(Logger);
-            this.UI = new MultiplayerUI(this);
+            this.gds = new GameDataSync(Logger);
+            this.UI = new MultiplayerUI(this, 0);
+            
             this.UI.init();
             MobsSynchronization.MobsSynchronization mobs = new MobsSynchronization.MobsSynchronization(this);
-            mobs.HookInitialize();
             GameMenu.Initialize(Logger);
             Hook_Game.init += Hook_gameinit;
             Hook_Hero.wakeup += hook_hero_wakeup;
@@ -108,6 +152,8 @@ namespace DeadCellsMultiplayerMod
 
 
         }
+
+        
 
 
         private void Hook_MobsGen_addElites(Hook_MobsGen.orig_addElites orig, MobsGen self, ArrayObj mobsPerRooms)
@@ -138,6 +184,7 @@ namespace DeadCellsMultiplayerMod
         {
 
             orig(self, dt);
+            GameMenu.ProcessMainThreadQueue();
         }
 
 
@@ -216,22 +263,27 @@ namespace DeadCellsMultiplayerMod
             me = self;
             SendLevel(levelId);
             orig(self, oldLevel);
-            if (_ghost == null) _ghost = new GhostHero(game!, me, Logger, this);
+            var net = _net;
+            var localId = net?.id ?? 0;
+            if (_ghost == null)
+                _ghost = new GhostHero(localId, game!, me, Logger, this);
             _ghost.SetLabel(me, GameMenu.Username);
-
-
-            if (_companionKing == null)
+            Logger.Debug($"clients.Length: {clients.Length}");
+            for (int i = 0; i < clients.Length; i++)
             {
-                _companionKing = _ghost.CreateGhostKing(me._level);
+                var client = clients[i];
+                if (client != null)
+                {
+                    client.destroy();
+                    client.dispose();
+                    client.disposeGfx();
+                }
+                clients[i] = _ghost.CreateGhostKing(me._level);
+                rLastX[i] = 0;
+                rLastY[i] = 0;
+                clientLabels[i] = null;
+                clientIds[i] = 0;
             }
-            else
-            {
-                _companionKing.destroy();
-                _companionKing.dispose();
-                _companionKing.disposeGfx();
-                _companionKing = _ghost.CreateGhostKing(me._level);
-            }
-
         }
 
 
@@ -269,11 +321,9 @@ namespace DeadCellsMultiplayerMod
         };
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
-            UI.Debugkeys();
-            if (_companionKing == null || me == null || _ghost == null) return;
+            if (me == null) return;
             SendHeroCoords();
             ReceiveGhostCoords();
-            _ghost?.HandleRemoteAnim(_net);
             if (_lastAnimSent != null && _loopAnimations.Contains(_lastAnimSent))
             {
                 ResendCurrentAnim(dt);
@@ -287,11 +337,11 @@ namespace DeadCellsMultiplayerMod
         {
             if (_netRole == NetRole.None) return;
             var net = _net;
-            var hero = me;
-
             if (net == null) return;
-            net.LevelSend(lvl);
 
+            int senderId = net.id;
+            if (senderId <= 0) return;
+            net.LevelSend(senderId, lvl);
         }
 
 
@@ -305,7 +355,7 @@ namespace DeadCellsMultiplayerMod
             float distSq = dx * dx + dy * dy;
 
             if (distSq < 4.0f) return;
-            if (_net == null || me == null || _companionKing == null) return;
+            if (_net == null || me == null) return;
             if (me.spr.x == last_x && me.spr.y == last_y) return;
 
             _net.TickSend(me.spr.x, me.spr.y);
@@ -313,25 +363,84 @@ namespace DeadCellsMultiplayerMod
             last_y = me.spr.y;
         }
 
+        public static double[] rLastX = new double[NetNode.MaxClientSlots];
+        public static double[] rLastY = new double[NetNode.MaxClientSlots];
 
-        public static double rLastX = 0, rLastY = 0;
+        internal static bool TryGetClientIndex(int localId, int remoteId, out int index)
+        {
+            index = -1;
+            if (localId <= 0 || remoteId <= 0 || remoteId == localId)
+                return false;
+
+            var mapped = remoteId < localId ? remoteId - 1 : remoteId - 2;
+            if (mapped < 0 || mapped >= clients.Length)
+                return false;
+
+            index = mapped;
+            return true;
+        }
 
         private void ReceiveGhostCoords()
         {
             var net = _net;
             var ghost = _ghost;
-            if (net == null || ghost == null || me == null || _ghost == null || _companionKing == null) return;
+            if (net == null || me == null || ghost == null) return;
 
-            if (net.TryGetRemote(out var rx, out var ry))
+            if (!net.TryConsumeRemoteSnapshot(out var remotes))
+                return;
+
+            var localId = net.id;
+            foreach (var remote in remotes)
             {
-                ghost.TeleportByPixels(rx, ry);
-                if (rx < rLastX)
-                    _companionKing.dir = -1;
-                if (rx > rLastX)
-                    _companionKing.dir = 1;
-                rLastX = rx;
-                rLastY = ry;
+                if (!TryGetClientIndex(localId, remote.Id, out var index))
+                    continue;
+
+                var client = clients[index];
+                if (client == null)
+                {
+                    var label = BuildRemoteLabel(remote.Id, remote.Username);
+                    clients[index] = ghost.CreateGhostKing(me._level, label);
+                    client = clients[index];
+                    clientLabels[index] = label;
+                    clientIds[index] = remote.Id;
+                }
+                if (client == null)
+                    continue;
+
+                remotePlayerId = remote.Id;
+                clientIds[index] = remote.Id;
+                client.setPosPixel(remote.X, remote.Y - 0.2d);
+                if (remote.X < rLastX[index])
+                    client.dir = -1;
+                if (remote.X > rLastX[index])
+                    client.dir = 1;
+                rLastX[index] = remote.X;
+                rLastY[index] = remote.Y;
+
+                var newLabel = BuildRemoteLabel(remote.Id, remote.Username);
+                if (!string.Equals(clientLabels[index], newLabel, StringComparison.Ordinal))
+                {
+                    ghost.SetLabel(client, newLabel);
+                    clientLabels[index] = newLabel;
+                }
+
+                if (remote.HasAnim && !string.IsNullOrWhiteSpace(remote.Anim))
+                    PlayGhostAnim(client, remote.Anim!, remote.AnimQueue, remote.AnimG);
             }
+        }
+
+        private void PlayGhostAnim(KingSkin client, string anim, int? queueAnim, bool? g)
+        {
+            if (client?.spr?._animManager == null) return;
+            if (string.IsNullOrWhiteSpace(anim)) return;
+            var animManager = client.spr._animManager;
+            try
+            {
+                animManager.stopWithoutStateAnims(anim.AsHaxeString(), queueAnim);
+                animManager.setFrame(0);
+            }
+            catch { }
+            animManager.play(anim.AsHaxeString(), queueAnim, g);
         }
 
         private void SendHeroAnim(string anim, int? queueAnim, bool? g, bool force = false)
@@ -445,8 +554,8 @@ namespace DeadCellsMultiplayerMod
 
         private void StartHostWithEndpoint(IPEndPoint ep)
         {
-            try
-            {
+            // try
+            // {
                 _net?.Dispose();
 
                 _net = NetNode.CreateHost(Logger, ep);
@@ -457,14 +566,14 @@ namespace DeadCellsMultiplayerMod
                 var lep = _net.ListenerEndpoint;
                 if (lep != null)
                     Logger.Information($"[NetMod] Host listening at {lep.Address}:{lep.Port}");
-            }
-            catch (Exception ex)
-            {
-                Logger.Error($"[NetMod] Host start failed: {ex.Message}");
-                _netRole = NetRole.None;
-                _net = null;
-                GameMenu.SetRole(_netRole);
-            }
+            // }
+            // catch (Exception ex)
+            // {
+            //     Logger.Error($"[NetMod] Host start failed: {ex.Message}");
+            //     _netRole = NetRole.None;
+            //     _net = null;
+            //     GameMenu.SetRole(_netRole);
+            // }
         }
 
         private void StartClientWithEndpoint(IPEndPoint ep)
