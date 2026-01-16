@@ -626,6 +626,18 @@ public sealed class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("DIED", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_role == NetRole.Host)
+            {
+                var _remoteId = senderId ?? 0;
+                _log.Information("[NetNode] Remote hero died (id {Id})", _remoteId);
+                var reason = _remoteId > 0 ? $"client {_remoteId} died" : "client died";
+                GameMenu.QueueHostRestartFromDeath(reason);
+            }
+            return true;
+        }
+
         if (line.StartsWith("KICK"))
         {
             return false;
@@ -1090,6 +1102,18 @@ public sealed class NetNode : IDisposable
         var idPart = ID > 0 ? $"{ID}|" : string.Empty;
         SendRaw("SKIN|" + idPart + safe);
         _log.Information("[NetNode] Sent hero skin {Skin}", safe);
+    }
+
+    public void SendHeroDeath()
+    {
+        if (!HasAnyConnection())
+        {
+            _log.Information("[NetNode] Skip sending death: no connected client");
+            return;
+        }
+
+        SendRaw("DIED");
+        _log.Information("[NetNode] Sent hero death");
     }
 
     private void SendRaw(string payload)

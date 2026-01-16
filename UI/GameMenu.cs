@@ -44,6 +44,8 @@ namespace DeadCellsMultiplayerMod
         private static bool _levelDescArrived;
         private static bool _autoStartTriggered;
         private static DateTime _autoStartRetryAt = DateTime.MinValue;
+        private const int DeathRestartCooldownMs = 1000;
+        private static DateTime _deathRestartCooldownUntil = DateTime.MinValue;
         private const string AutoStartMutexName = "DeadCellsMultiplayerMod.AutoStart";
         private static bool _mainMenuButtonAdded;
         private static bool _suppressAutoButton;
@@ -96,6 +98,7 @@ namespace DeadCellsMultiplayerMod
                 _seedArrived = false;
                 _clientConnectAttempt = 0;
                 _clientConnecting = false;
+                _deathRestartCooldownUntil = DateTime.MinValue;
                 _cachedLevelDescSync = null;
                 _latestResolvedRunParams = null;
             }
@@ -208,6 +211,34 @@ namespace DeadCellsMultiplayerMod
                 game.destroy();
                 game.disposeImmediately();
                 game.user.newGame(seed, GameDataSync._isTwitch, GameDataSync._isCustom, GameDataSync._mode, GameDataSync._launch);
+            });
+        }
+
+        internal static void QueueHostRestartFromDeath(string reason)
+        {
+            var now = DateTime.UtcNow;
+            lock (Sync)
+            {
+                if (_role != NetRole.Host)
+                    return;
+                if (now < _deathRestartCooldownUntil)
+                    return;
+                _deathRestartCooldownUntil = now.AddMilliseconds(DeathRestartCooldownMs);
+            }
+
+            EnqueueMainThread(() =>
+            {
+                var game = ModEntry.Instance?.game;
+                if (game?.user == null)
+                {
+                    _log?.Warning("[NetMod] Skipping host restart ({Reason}): game not ready", reason);
+                    return;
+                }
+
+                _log?.Information("[NetMod] Host restarting run ({Reason})", reason);
+                game.destroy();
+                game.disposeImmediately();
+                game.user.newGame(GameDataSync.Seed, GameDataSync._isTwitch, GameDataSync._isCustom, GameDataSync._mode, GameDataSync._launch);
             });
         }
 

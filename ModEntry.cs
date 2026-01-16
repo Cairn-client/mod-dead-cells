@@ -165,11 +165,11 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook_Hero_onHeroDie(Hook_Hero.orig_onHeroDie orig, Hero self)
         {
-            Logger.Error("Hero died!");
-            if(_netRole == NetRole.Client)
-            {
-                // sending that client died
-            }
+            var net = _net;
+            if (_netRole == NetRole.Client)
+                net?.SendHeroDeath();
+            else if (_netRole == NetRole.Host)
+                GameMenu.QueueHostRestartFromDeath("host died");
             orig(self);
         }
 
