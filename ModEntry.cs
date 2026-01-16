@@ -304,6 +304,7 @@ namespace DeadCellsMultiplayerMod
         {
             me = self;
             orig(self, lvl, cx, cy);
+            Logger.Debug($"game.data.blueprints: {game.data.blueprints}");
         }
 
 
