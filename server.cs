@@ -286,8 +286,13 @@ public sealed class NetNode : IDisposable
 
     private async Task ConnectWithRetryAsync(CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
+        var maxAttempts = GameMenu.ClientConnectMaxAttempts;
+        var attempt = 0;
+
+        while (!ct.IsCancellationRequested && attempt < maxAttempts)
         {
+            attempt++;
+            GameMenu.EnqueueMainThread(() => GameMenu.NotifyClientConnectAttempt(attempt));
             try
             {
                 _log.Information("[NetNode] Client connecting to {dest}", _destEp);
@@ -326,7 +331,13 @@ public sealed class NetNode : IDisposable
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
+                CloseClientConnection();
                 _log.Warning("[NetNode] Client connect error: {msg}", ex.Message);
+                if (attempt >= maxAttempts)
+                {
+                    GameMenu.EnqueueMainThread(GameMenu.NotifyClientConnectFailed);
+                    break;
+                }
                 await Task.Delay(3000, ct).ConfigureAwait(false);
             }
         }

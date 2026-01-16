@@ -51,7 +51,7 @@ namespace DeadCellsMultiplayerMod
         public KingSkin CreateGhostKing(Level level, string? label = null)
         {
 
-            king = new KingSkin(level, (int)-100, (int)-100);
+            king = new KingSkin(level, (int)-1000, (int)-1000);
             king.init();
             king.set_level(level);
             king.set_team(level.teamHero);
@@ -71,7 +71,7 @@ namespace DeadCellsMultiplayerMod
             // king.setPosCase(Game.Class.ME.hero.cx, Game.Class.ME.hero.cy, Game.Class.ME.hero.xr, Game.Class.ME.hero.yr);
             king.visible = true;
             var miniMap = ModEntry.miniMap;
-            if (miniMap != null && _me._level.map == king._level.map)
+            if (miniMap != null && _me._level == king._level)
             {
                 miniMap.track(king, 14888237, "minimapHero".AsHaxeString(), null, true, null, null, null);
             }
