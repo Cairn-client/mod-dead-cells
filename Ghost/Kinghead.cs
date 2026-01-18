@@ -8,15 +8,16 @@ using dc.libs.heaps.slib;
 using dc.pr;
 using dc.tool;
 using dc.tool._AnimationTrack;
+using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using HaxeProxy.Runtime;
 using ModCore.Utitities;
 
 namespace DeadCellsMultiplayerMod.KingHead
 {
-    public class Kinghead(Hero _me, KingSkin _kingSkin, Level level) : HeroHead
+    public class Kinghead(Hero _me, GhostKing _kingSkin, Level level) : HeroHead
     {
         private Hero me = _me;
-        private KingSkin king = _kingSkin;
+        private GhostKing king = _kingSkin;
         private Level lvl = level;
 
 

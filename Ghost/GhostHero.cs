@@ -11,6 +11,8 @@ using dc.libs.heaps.slib;
 using System.Collections.Generic;
 using dc.h2d;
 using dc.ui;
+using DeadCellsMultiplayerMod.Ghost.GhostBase;
+using DeadCellsMultiplayerMod.MultiplayerModUI;
 
 
 namespace DeadCellsMultiplayerMod
@@ -30,7 +32,7 @@ namespace DeadCellsMultiplayerMod
 
         public int PlayerId { get; }
 
-        public KingSkin king = null!;
+        public GhostKing king = null!;
         private ModEntry modEntry = null!;
         private MultiplayerUI UI { get; set; } = null!;
         public KingHead.Kinghead kinghead = null!;
@@ -51,10 +53,10 @@ namespace DeadCellsMultiplayerMod
         }
 
 
-        public KingSkin CreateGhostKing(Level level, string? label = null)
+        public GhostKing CreateGhostKing(Level level, string? label = null)
         {
 
-            king = new KingSkin(level, (int)-1000, (int)-1000);
+            king = new GhostKing(level, (int)-1000, (int)-1000);
             king.init();
             king.set_level(level);
             king.set_team(level.teamHero);
@@ -109,7 +111,7 @@ namespace DeadCellsMultiplayerMod
         }
 
         private bool stopanim = false;
-        public void disposeKing(KingSkin k)
+        public void disposeKing(GhostKing k)
         {
             stopanim = true;
             if (k.spr != null)

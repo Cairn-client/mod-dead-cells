@@ -6,23 +6,28 @@ using dc.libs._Cooldown;
 using dc.steam.ugc;
 using dc.tool;
 using DeadCellsMultiplayerMod;
+using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using Hashlink.Proxy.Objects;
 using Hashlink.Reflection.Members;
+using ModCore.Events;
+using ModCore.Events.Interfaces;
 using ModCore.Utitities;
 using Serilog;
 using Cd = CooldownHelper.Cooldown;
 
 namespace CineHookInitialize
 {
-    public class CineHooks
+    public class CineHooks :
+    IEventReceiver,
+    IOnAdvancedModuleInitializing
+
     {
-        public CineHooks()
-        {
-            DeadBasehooks();
-        }
+        public CineHooks() => EventSystem.AddReceiver(this);
         public static InventItem? item;
-        public void DeadBasehooks()
+
+        void IOnAdvancedModuleInitializing.OnAdvancedModuleInitializing(ModEntry entry)
         {
+            entry.Logger.Information("\x1b[32m[[ModEntry.CineHooks] Initializing CineHooks...]\x1b[0m ");
             // Hook__HeroDeath.__constructor__ += Hook__HeroDeath_init;
             // Hook__HeroDeathBase.__constructor__ += Hook_HeroDeathBase_base;
             // Hook__HeroDeathRespawn.__constructor__ += Hook__HeroDeathRespawn__constructor__;
@@ -37,7 +42,7 @@ namespace CineHookInitialize
                 return orig(self);
             DeadBase deadBase = new DeadBase(self, king);
             item = new InventItem(new InventItemKind.Perk("P_Yolo".AsHaxeString()));
-            
+
             ModEntry.me.applyItemPickEffect(ModEntry.me, item);
             bool or = orig(self);
             return or;
@@ -74,5 +79,7 @@ namespace CineHookInitialize
             orig(e, lostBody, e1);
 
         }
+
+
     }
 }

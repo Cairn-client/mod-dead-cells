@@ -25,6 +25,12 @@ using dc.haxe;
 using dc.cine;
 using CineHookInitialize;
 using Serilog.Core;
+using DeadCellsMultiplayerMod.Ghost.GhostBase;
+using ModCore.Events;
+using DeadCellsMultiplayerMod.Mobs.MobsSynchronization;
+using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
+using DeadCellsMultiplayerMod.MultiplayerModUI;
+using DeadCellsMultiplayerMod.MultiplayerModUI.Minimap;
 
 
 namespace DeadCellsMultiplayerMod
@@ -33,7 +39,8 @@ namespace DeadCellsMultiplayerMod
         IOnGameEndInit,
         IOnHeroInit,
         IOnHeroUpdate,
-        IOnFrameUpdate
+        IOnFrameUpdate,
+        IOnAdvancedModuleInitializing
     {
         public static ModEntry? Instance { get; private set; }
         private bool _ready;
@@ -45,14 +52,13 @@ namespace DeadCellsMultiplayerMod
 
 
 
-        public static KingSkin[] clients = new KingSkin[NetNode.MaxClientSlots];
+        public static GhostKing[] clients = new GhostKing[NetNode.MaxClientSlots];
         public static string?[] clientLabels = new string?[NetNode.MaxClientSlots];
         public static int[] clientIds = new int[NetNode.MaxClientSlots];
         public static Hero me = null;
         public static GhostHero _ghost = null;
 
         private GameDataSync gds;
-        private MultiplayerUI UI { get; set; } = null!;
 
         private string? _lastAnimSent;
         private int? _lastAnimQueueSent;
@@ -72,7 +78,7 @@ namespace DeadCellsMultiplayerMod
         public static string remoteLevelId;
         public static int remotePlayerId = -1;
 
-        private string remoteSkin;
+        public string remoteSkin;
 
         int _layer;
 
@@ -97,7 +103,7 @@ namespace DeadCellsMultiplayerMod
             return clientLabels[slotIndex] ?? GameMenu.RemoteUsername;
         }
 
-        internal static KingSkin? GetPrimaryClient()
+        internal static GhostKing? GetPrimaryClient()
         {
             for (int i = 0; i < clients.Length; i++)
             {
@@ -139,13 +145,19 @@ namespace DeadCellsMultiplayerMod
         public override void Initialize()
         {
             Instance = this;
+
             this.gds = new GameDataSync(Logger);
-            this.UI = new MultiplayerUI(this, 0);
-            
-            this.UI.init();
-            CineHooks cine = new CineHooks();
-            MobsSynchronization.MobsSynchronization mobs = new MobsSynchronization.MobsSynchronization(this);
+            CineHooks CineHooks = new CineHooks();
+            MultiplayerUI MultiplayerUI = new MultiplayerUI(this, 0);
+            MobsSynchronization mobs = new MobsSynchronization(this);
+            Minimapreveal minimapreveal = new Minimapreveal();
             GameMenu.Initialize(Logger);
+            EventSystem.BroadcastEvent<IOnAdvancedModuleInitializing, ModEntry>(this);
+        }
+
+        void IOnAdvancedModuleInitializing.OnAdvancedModuleInitializing(ModEntry entry)
+        {
+            entry.Logger.Information("\x1b[32m[[ModEntry] Mod Initializing Hooks...]\x1b[0m ");
             Hook_Game.init += Hook_gameinit;
             Hook_Hero.wakeup += hook_hero_wakeup;
             Hook_Hero.onLevelChanged += hook_level_changed;
@@ -153,13 +165,10 @@ namespace DeadCellsMultiplayerMod
             Hook_LevelGen.generate += GameDataSync.hook_generate;
             Hook_AnimManager.play += Hook_AnimManager_play;
             Hook_MiniMap.track += Hook_MiniMap_track;
-            Hook_KingSkin.initGfx += Hook_KingSkin_initgfx;
             Hook__LevelStruct.get += Hook__LevelStruct_get;
             Hook_Boot.update += hook_boot_update;
             Hook_Game.pause += Hook_Game_pause;
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
-
-
         }
 
 
@@ -222,43 +231,6 @@ namespace DeadCellsMultiplayerMod
             SendLevel(levelId);
             return orig(user, l, rng);
         }
-
-
-
-        private void Hook_KingSkin_initgfx(Hook_KingSkin.orig_initGfx orig, KingSkin self)
-        {
-            if (remoteSkin == null) remoteSkin = "PrisonerDefault";
-            orig(self);
-            dc.String group = "idle".AsHaxeString();
-            SpriteLib heroLib = Assets.Class.getHeroLib(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
-            Texture normalMapFromGroup = heroLib.getNormalMapFromGroup(group);
-            int? dp_ROOM_MAIN_HERO = Const.Class.DP_ROOM_MAIN_HERO;
-            self.initSprite(heroLib, group, 0.5, 0.5, dp_ROOM_MAIN_HERO, true, null, normalMapFromGroup);
-            self.initColorMap(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
-
-            // glow
-            ArrayObj glowData = CdbTypeConverter.Class.getGlowData(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
-            if (glowData != null)
-            {
-                GlowKey s2 = new GlowKey(glowData);
-                if (s2 != null)
-                {
-                    self.spr.addShader(s2);
-                }
-            }
-
-
-            // Ambient light
-            var General = 1.0;
-            var radiusCase = 1.2 * General;
-            var Math = dc.Math.Class.random() * 0.20000000000000007;
-            General = 0.9 + Math;
-            var decayStart = 5.0 * General;
-            self.createLight(1161471, radiusCase, decayStart, 0.35);
-        }
-
-
-
 
 
         private void Hook_MiniMap_track(Hook_MiniMap.orig_track orig, MiniMap self, Entity col, int? iconId, dc.String forcedIconColor, int? blink, bool? customTile, Tile text, dc.String itemKind, dc.String isInfectedFood)
@@ -447,7 +419,7 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private void PlayGhostAnim(KingSkin client, string anim, int? queueAnim, bool? g)
+        private void PlayGhostAnim(GhostKing client, string anim, int? queueAnim, bool? g)
         {
             if (client?.spr?._animManager == null) return;
             if (string.IsNullOrWhiteSpace(anim)) return;
@@ -573,16 +545,16 @@ namespace DeadCellsMultiplayerMod
         {
             // try
             // {
-                _net?.Dispose();
+            _net?.Dispose();
 
-                _net = NetNode.CreateHost(Logger, ep);
-                _netRole = NetRole.Host;
-                GameMenu.SetRole(_netRole);
-                GameMenu.NetRef = _net;
+            _net = NetNode.CreateHost(Logger, ep);
+            _netRole = NetRole.Host;
+            GameMenu.SetRole(_netRole);
+            GameMenu.NetRef = _net;
 
-                var lep = _net.ListenerEndpoint;
-                if (lep != null)
-                    Logger.Information($"[NetMod] Host listening at {lep.Address}:{lep.Port}");
+            var lep = _net.ListenerEndpoint;
+            if (lep != null)
+                Logger.Information($"[NetMod] Host listening at {lep.Address}:{lep.Port}");
             // }
             // catch (Exception ex)
             // {
