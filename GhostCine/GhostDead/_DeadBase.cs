@@ -11,6 +11,7 @@ using dc.libs.data;
 using dc.pr;
 using dc.tool;
 using dc.ui;
+using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using Hashlink.Virtuals;
 using HaxeProxy.Runtime;
 using ModCore.Utitities;
@@ -23,8 +24,8 @@ namespace DeadCellsMultiplayerMod
     {
         public static DeadBase deadBase = null!;
         public static Hero owen = null!;
-        public static KingSkin k = null!;
-        public static void EnterGhostDead(DeadBase @base, Hero heros, KingSkin king)
+        public static GhostKing k = null!;
+        public static void EnterGhostDead(DeadBase @base, Hero heros, GhostKing king)
         {
             deadBase = @base;
             owen = heros;

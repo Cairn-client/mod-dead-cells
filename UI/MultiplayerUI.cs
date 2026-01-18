@@ -18,16 +18,19 @@ using dc.tool;
 using dc.tool.log;
 using dc.ui;
 using dc.ui.hud;
-using DeadCellsMultiplayerMod.Minimap;
+using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using Hashlink.Virtuals;
 using HaxeProxy.Runtime;
+using ModCore.Events;
 using ModCore.Utitities;
 using Serilog;
 using Cooldown = CooldownHelper.Cooldown;
 
-namespace DeadCellsMultiplayerMod;
+namespace DeadCellsMultiplayerMod.MultiplayerModUI;
 
-public class MultiplayerUI
+public class MultiplayerUI :
+    IEventReceiver,
+    IOnAdvancedModuleInitializing
 {
     private sealed class LifeSlot
     {
@@ -64,13 +67,15 @@ public class MultiplayerUI
     {
         mod = Entry;
         SlotIndex = slotIndex;
+        EventSystem.AddReceiver(this);
     }
 
-    public void init()
+    void IOnAdvancedModuleInitializing.OnAdvancedModuleInitializing(ModEntry entry)
     {
+
+        entry.Logger.Information("\x1b[32m[[ModEntry.MultiplayerUI] Initializing MultiplayerUI...]\x1b[0m ");
         Hook_HUD.initHero += Hook_HUD_initking;
         Hook_Hero.updateLifeBar += Hook_Hero_kinglifupdate;
-        Minimapreveal minimapreveal = new Minimapreveal();
     }
 
 
@@ -285,10 +290,6 @@ public class MultiplayerUI
         lifeBar.curState.recover = (double)recover;
     }
 
-    public void kingLifeUpdate(KingSkin king, dc.ui.hud.LifeBar kingLife, int max, int maxLife, int lif, int bonusLife, int recover)
-    {
-        UpdateLifeBar(kingLife, max, maxLife, lif, bonusLife, recover);
-    }
 
     private void ClearSlots()
     {

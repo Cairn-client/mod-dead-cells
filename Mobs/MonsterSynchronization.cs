@@ -5,27 +5,31 @@ using dc.hl.types;
 using dc.tool;
 using dc.ui.hud;
 using DeadCellsMultiplayerMod;
+using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
+using DeadCellsMultiplayerMod.MultiplayerModUI;
+using ModCore.Events;
 using ModCore.Modules;
 using ModCore.Utitities;
 
 
-namespace MobsSynchronization
+namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 {
-    public class MobsSynchronization
+    public class MobsSynchronization :
+    IOnAdvancedModuleInitializing,
+    IEventReceiver
     {
         private ModEntry modEntry;
-        private MultiplayerUI uI;
         private static List<Mob> trackedMobs = new List<Mob>();
 
         public MobsSynchronization(ModEntry entry)
         {
+            EventSystem.AddReceiver(this);
             modEntry = entry;
-            uI = new MultiplayerUI(entry);
-            HookInitialize();
         }
 
-        public void HookInitialize()
+        public void OnAdvancedModuleInitializing(ModEntry entry)
         {
+            entry.Logger.Information("\x1b[32m[[ModEntry.MobsSynchronization] Initializing MobsSynchronizationhooks...]\x1b[0m ");
             //Hook__MMTracker.__constructor__ += Hook__MMTracker_TRACKER;
             dc.en.Hook_Mob.setNemesisTarget += Hook_Mob_setNemesisTarget;
             Hook_Mob.fixedUpdate += Hook_Mob_fixedupdate;
@@ -128,11 +132,11 @@ namespace MobsSynchronization
                             displayText += $"|Nemesis: {nemesisType}";
                         }
 
-                        uI.DebugUI(displayText);
+                        //uI.DebugUI(displayText);
                     }
-                    catch (Exception ex)
+                    catch (Exception)
                     {
-                        uI.DebugUI($"Error getting mob info: {ex.Message}");
+                        //uI.DebugUI($"Error getting mob info: {ex.Message}");
                     }
                 }
             }
@@ -153,6 +157,7 @@ namespace MobsSynchronization
             }
             orig(self, e);
         }
+
 
     }
 }

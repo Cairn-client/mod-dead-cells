@@ -7,24 +7,29 @@ using dc.pr;
 using dc.ui;
 using dc.ui.hud;
 using dc.ui.hud.map;
+using DeadCellsMultiplayerMod.Ghost.GhostBase;
+using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using HaxeProxy.Runtime;
+using ModCore.Events;
 using ModCore.Utitities;
 using Debug = Serilog.Log;
 
-namespace DeadCellsMultiplayerMod.Minimap
+namespace DeadCellsMultiplayerMod.MultiplayerModUI.Minimap
 {
-    public class Minimapreveal
+    public class Minimapreveal :
+    IEventReceiver,
+    IOnAdvancedModuleInitializing
     {
         public Graphics? kingcircle;
-        public Minimapreveal()
+        public Minimapreveal() => EventSystem.AddReceiver(this);
+
+        void IOnAdvancedModuleInitializing.OnAdvancedModuleInitializing(ModEntry entry)
         {
-            init();
-        }
-        public void init()
-        {
+            entry.Logger.Information("\x1b[32m[[ModEntry.Minimapreveal] Initializing Minimapreveal hooks...]\x1b[0m ");
             Hook_MiniMap.postUpdate += Hook_MiniMap_postUpdate;
             Hook_MiniMap.initContainers += Hook_MiniMap_initContainers;
         }
+
         private Dictionary<int, Graphics> _kingMarkers = new Dictionary<int, Graphics>();
         private void Hook_MiniMap_initContainers(Hook_MiniMap.orig_initContainers orig, MiniMap self, Bytes max)
         {
@@ -68,7 +73,7 @@ namespace DeadCellsMultiplayerMod.Minimap
                     dynamic arrayElement = obj.array[i]!;
                     if (arrayElement == null) continue;
                     mmtracker = arrayElement;
-                    if (king != null && mmtracker != null && Std.Class.@is(mmtracker.e, KingSkin.Class))
+                    if (king != null && mmtracker != null && Std.Class.@is(mmtracker.e, GhostKing.Class))
                     {
                         var clients = ModEntry.clients;
                         for (int k = 0; k < clients.Length; k++)
@@ -90,6 +95,7 @@ namespace DeadCellsMultiplayerMod.Minimap
             }
 
         }
+
 
     }
 }

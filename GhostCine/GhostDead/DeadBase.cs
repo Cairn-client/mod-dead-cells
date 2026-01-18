@@ -1,5 +1,6 @@
 using CineHookInitialize;
 using dc.en;
+using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using Cd = CooldownHelper.Cooldown;
 
 namespace DeadCellsMultiplayerMod
@@ -7,7 +8,7 @@ namespace DeadCellsMultiplayerMod
     public class DeadBase : dc.GameCinematic
     {
         private Hero owen = null!;
-        public DeadBase(Hero hero, KingSkin king)
+        public DeadBase(Hero hero, GhostKing king)
         {
             _DeadBase.EnterGhostDead(this, hero, king);
             owen = hero;
