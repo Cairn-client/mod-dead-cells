@@ -32,6 +32,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         private UIBox? bg;
         private Interactive? inter;
         private Flow? spritesflow;
+        private Flow? MainTitleflow;
         private readonly List<HSprite> sprites = new();
 
         private static ConnectionUI? Instance;
@@ -78,8 +79,9 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         private List<double> sprx = new List<double> { 0, -0.9, -0.3, -0.6 };
         private List<string> animlist = new List<string>
         {
-            // "idle", "run", "jumpUp", "jumpDown",
-            // "rollStart", "rolling",  "blockHoldShield", "blockEndHoldShield", "runB"
+            "idle", "run", "jumpUp", "jumpDown",
+            "rolling",  "blockHoldShield", "runB",
+            "yes","wineSpit","winePose","wineDrink",
         };
         private void loadspr(double x, string? loColorHex, string? hiColorHex)
         {
@@ -94,7 +96,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             SpriteLib g = Assets.Class.getHeroLib(Cdb.Class.getSkinInfo("PrisonerDefault".AsHaxeString()));
 
             this.spriteui = new HSprite(g, "idle".AsHaxeString(), new Ref<int>(ref ptr), null);
-            playallanims(this.spriteui);
+            //playallanims(this.spriteui);
 
             int loColor =0;
             int hiColor =0;
@@ -145,7 +147,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         private string GetRandomAnimation(List<string> values)
         {
             Random fallbackRandom = new Random();
-            int fallbackIndex = fallbackRandom.Next(0, values.Count);
+            int fallbackIndex = fallbackRandom.Next(values.Count);
             return values[fallbackIndex];
         }
         private Texture loadColorMapTexture(string skinId)
@@ -176,11 +178,15 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             if (groups != null)
             {
                 dynamic keysIterator = groups.keys();
+                animlist.Clear();
 
                 while (keysIterator.hasNext())
                 {
                     string key = keysIterator.next().ToString();
-                    animlist.Add(key);
+                    if (!key.StartsWith("Atk", StringComparison.OrdinalIgnoreCase))
+                    {
+                        animlist.Add(key);
+                    }
                 }
             }
         }
@@ -229,9 +235,9 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 null,
                 true
             );
-            base.root.addChildAt(this.bg, 0);
+            base.root.addChild(this.bg);
 
-            BGtext();
+            
 
             double posX = screenWidth - flowW - base.get_pixelScale.Invoke() * 20.0; // 离右边 20 像素
             double posY = (screenHeight - flowH) / 2.0;
@@ -246,22 +252,31 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             this.inter?.remove();
             this.inter = new Interactive(screenWidth, screenHeight, this.bg, null);
             this.inter.onClick = new HlAction<Event>(this.OnClick);
+
+            BGtext();
         }
 
 
         private void BGtext()
         {
-
+            this.MainTitleflow =new Flow(null);
+            
             dc.ui.Text label = Assets.Class.makeText(
                "DeadCellsMultiplayerMod".AsHaxeString(),
                0xFFFFFFF,
-               false,
+               true,
                null
            );
+            label.scaleX =1;
+            label.scaleY =1;
             dc.h2d.Text text = label;
 
-            this.bg!.addChild(label);
+            this.MainTitleflow.addChild(text);
+            this.MainTitleflow.set_verticalAlign(new FlowAlign.Top());
+            this.MainTitleflow.set_horizontalAlign(new FlowAlign.Right());
 
+            this.bg!.addChild(this.MainTitleflow);
+            this.MainTitleflow.x+=15;
         }
 
 
