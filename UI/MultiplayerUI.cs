@@ -25,13 +25,16 @@ using ModCore.Events;
 using ModCore.Utitities;
 using Serilog;
 using Cooldown = CooldownHelper.Cooldown;
+using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
+using ModCore.Events.Interfaces.Game.Hero;
 
 namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
 {
 
     public class MultiplayerUI :
         IEventReceiver,
-        IOnAdvancedModuleInitializing
+        IOnAdvancedModuleInitializing,
+        IOnHeroUpdate
     {
         private sealed class LifeSlot
         {
@@ -99,7 +102,9 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
 
             if (Key.Class.isPressed(97))//num1
             {
-                LevelTransition.Class.@goto("Custom".AsHaxeString());
+                //LevelTransition.Class.@goto("Custom".AsHaxeString());
+                Log.Debug("KeyPress");
+                ConnectionUI connectionUI = new ConnectionUI(HUD.Class.ME);
 
             }
             if (Key.Class.isPressed(98))//num2
@@ -368,6 +373,9 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
 
         }
 
-
+        void IOnHeroUpdate.OnHeroUpdate(double dt)
+        {
+            Debugkeys();
+        }
     }
 }
