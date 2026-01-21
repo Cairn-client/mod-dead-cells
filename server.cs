@@ -255,6 +255,10 @@ public sealed class NetNode : IDisposable
                 _log.Information("[NetNode] Host accepted {ep}", connection.RemoteEndPoint);
 
                 await SendLineToClientSafe(connection, "WELCOME\n").ConfigureAwait(false);
+                if (_role == NetRole.Host && GameDataSync.TryGetHostGameData(out var gameDataJson))
+                {
+                    await SendLineToClientSafe(connection, $"GAMEDATA|{gameDataJson}\n").ConfigureAwait(false);
+                }
                 if (_role == NetRole.Host && GameMenu.TryGetHostRunSeed(out var hostSeed))
                 {
                     await SendLineToClientSafe(connection, $"SEED|{hostSeed}\n").ConfigureAwait(false);
@@ -446,11 +450,11 @@ public sealed class NetNode : IDisposable
             return true;
         }
 
-        if (line.StartsWith("RUNPARAMS|"))
+        if (line.StartsWith("GAMEDATA|"))
         {
-            var payload = line["RUNPARAMS|".Length..];
+            var payload = line["GAMEDATA|".Length..];
             lock (_sync) _hasRemote = true;
-            GameMenu.ReceiveRunParams(payload);
+            GameDataSync.ReceiveGameData(payload);
             return true;
         }
 
@@ -1039,16 +1043,16 @@ public sealed class NetNode : IDisposable
         _log.Information("[NetNode] Sent username {Username}", safe);
     }
 
-    public void SendRunParams(string json)
+    public void SendGameData(string json)
     {
         if (!HasAnyConnection())
         {
-            _log.Information("[NetNode] Skip sending run params: no connected client");
+            _log.Information("[NetNode] Skip sending game data: no connected client");
             return;
         }
 
-        SendRaw("RUNPARAMS|" + json);
-        _log.Information("[NetNode] Sent run params payload");
+        SendRaw("GAMEDATA|" + json);
+        _log.Information("[NetNode] Sent game data payload");
     }
 
     public void SendLevelDesc(string json)

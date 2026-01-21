@@ -175,6 +175,7 @@ namespace DeadCellsMultiplayerMod
 
         }
 
+
         private void Hook_Hero_onHeroDie(Hook_Hero.orig_onHeroDie orig, Hero self)
         {
             var net = _net;
