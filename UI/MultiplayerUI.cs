@@ -94,8 +94,12 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
         }
         public bool CanUseJumpHit()
         {
+            try
+            {
             int key = Cooldown.Encode(Cooldown.Keys.JUMP_HIT);
             return !ModEntry.me.cd.fastCheck.exists(key);
+            }
+            catch {return false;}
         }
         public void Debugkeys()
         {
@@ -142,7 +146,6 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
             }
             if (!CanUseJumpHit())
             {
-                Log.Debug("跳跃命中冷却中");
                 return;
             }
 

@@ -6,6 +6,7 @@ using dc.level;
 using HaxeProxy.Runtime;
 using dc.tool;
 using System.Data.SqlTypes;
+using Serilog.Core;
 
 
 namespace DeadCellsMultiplayerMod
@@ -47,22 +48,19 @@ namespace DeadCellsMultiplayerMod
             ModEntry.kingInitialized = false;
             ModEntry._ghost = null;
             var net = GameMenu.NetRef;
+            
             if (net != null && net.IsHost)
             {
                 Seed = GameMenu.ForceGenerateServerSeed("NewGame_hook");
-                try
-                {
-                    var bossRune = self.mainGame.serverStats.bossRune;
-                    var endKind = self.mainGame.serverStats.endKind;
-                    var forge = self.mainGame.serverStats.forge;
-                    var hasMods = self.mainGame.serverStats.hasMods;
-                    var history = self.mainGame.serverStats.history;
-                    var Custom = self.mainGame.serverStats.isCustom;
-                    var meta = self.mainGame.serverStats.meta;
-                }
-                catch { }
+                var endKind = self.mainGame.serverStats.endKind;
+                var forge = self.mainGame.serverStats.forge;
+                var hasMods = self.mainGame.serverStats.hasMods;
+                var history = self.mainGame.serverStats.history;
+                var Custom = self.mainGame.serverStats.isCustom;
+                var meta = self.mainGame.serverStats.meta;
 
                 net.SendSeed(Seed);
+                // net.sendGameData();
             }
             else if (net != null)
             {
