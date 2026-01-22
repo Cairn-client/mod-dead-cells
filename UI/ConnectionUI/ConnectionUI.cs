@@ -1,29 +1,16 @@
-using System.Collections.Generic;
 using dc;
-using dc.en.inter;
 using dc.h2d;
-using dc.h3d.mat;
-using dc.hl.types;
 using dc.hxd;
-using dc.hxd.res;
-using dc.libs.heaps;
 using dc.libs.heaps.slib;
 using dc.pr;
 using dc.shader;
-using dc.tool;
 using dc.ui;
-using dc.ui.sel;
-using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using Hashlink.Virtuals;
 using HaxeProxy.Runtime;
 using ModCore.Events;
-using ModCore.Events.Interfaces.Game.Hero;
 using ModCore.Utitities;
 using Serilog;
-using DeadCellsMultiplayerMod.Tools;
-using dc.h3d.pass;
-using dc.h3d.shader;
-using dc.en;
+using DeadCellsMultiplayerMod.MultiplayerModUI.Connection.LightingInitializer;
 
 namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 {
@@ -44,6 +31,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         public ConnectionUI(Process parent) : base(parent)
         {
             this.createRoot(parent.root);
+            MainPageLightingInitializer mainPage = new MainPageLightingInitializer(this);
             this.BuildUI();
             EventSystem.AddReceiver(this);
         }
@@ -74,66 +62,37 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
             for (int i = 0; i < sprx.Count; i++)
             {
-                loadspr(sprx[i], null, null);
+
+                loadspr(sprx[i], sprmodu[i], i);
+
             }
+
         }
 
-
-        private List<double> sprx = new List<double> { 0, -0.9, -0.3, -0.6 };
+        private List<double> sprx = new List<double> { 0.4, -1.0, -0.2, -0.6 };
         private List<string> animlist = new List<string>
         {
-            "idle", "run", "jumpUp", "jumpDown",
-            "rolling",  "blockHoldShield", "runB",
-            "yes","wineSpit","winePose","wineDrink",
+           "atkScytheB1", "runDance","wineSpit","wineRetreat"
         };
-        private void loadspr(double x, string? loColorHex, string? hiColorHex)
+        private List<string> sprmodu = new List<string>
+        {
+            "Tick4","PrisonerGold","KingWhite","PrisonerDefault"
+        };
+
+        private void loadspr(double x, string sprmuld, int count)
         {
             this.spritesflow = new Flow(null);
             this.spritesflow.set_verticalAlign(new FlowAlign.Top());
             this.spritesflow.set_horizontalAlign(new FlowAlign.Middle());
             this.spritesflow.isVertical = false;
 
-            int ptr = 0;
-
-            dc.String idle ="idle".AsHaxeString();
-            SpriteLib g = Assets.Class.getHeroLib(Cdb.Class.getSkinInfo("PrisonerDefault".AsHaxeString()));
-
-            this.spriteui = new HSprite(g, "idle".AsHaxeString(), new Ref<int>(ref ptr), null);
-            //playallanims(this.spriteui);
-
-            int loColor =0;
-            int hiColor =0;
-
-            if (loColorHex!=null &&hiColorHex!=null)
-            {
-                loColor = MultiColor.ColorFromHex(loColorHex);
-                hiColor = MultiColor.ColorFromHex(hiColorHex);
-            }
-
-            // dc.shader.Base2d base2D1 = (dc.shader.Base2d)this.spriteui.getShader(dc.shader.Base2d.Class);
-            // if (base2D1 !=null)
-            // {
-            //     base2D1.killAlpha__ = true;
-            //     base2D1.pixelAlign__ = false;
-            //     base2D1.hasUVPos__ = true;
-            //     base2D1.isRelative__ = true;
-            //     this.spriteui.addShader(base2D1);
-            // }
-            // dc.h3d.mat.Texture innerTex5 = this.spriteui.rawTile.innerTex;
-            // int color = MultiColor.ColorFromHex("#4169E1");
-            // dc.shader.Outline outline =new dc.shader.Outline(innerTex5,new Ref<int>(ref color));
-            // this.spriteui.addShader(outline);
 
 
-            // dc.h3d.mat.Texture normalMapFromGroup = this.spriteui.lib.getNormalMapFromGroup(idle);
-            // dc.h3d.shader.NormalMap normal = new dc.h3d.shader.NormalMap(normalMapFromGroup);
-            // this.spriteui.addShader(normal);
+            dc.String idle = "idle".AsHaxeString();
+            string skinanim = animlist[count];
+            SpriteLib g = Assets.Class.getHeroLib(Cdb.Class.getSkinInfo(sprmuld.AsHaxeString()));
+            this.spriteui = new HSprite(g, skinanim.AsHaxeString(), Ref<int>.Null, null);
 
-            // dc.shader.DirLighted dirLighted =new dc.shader.DirLighted();
-            // this.spriteui.addShader(dirLighted);
-
-            // initColorMap();
-            GradientHiLo gradientHiLo = (GradientHiLo)this.spriteui.addShader(new GradientHiLo(loColor, hiColor, null));
 
 
             SpritePivot pivot = this.spriteui.pivot;
@@ -142,18 +101,16 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             pivot.usingFactor = true;
             pivot.isUndefined = false;
 
-            string skinanim = GetRandomAnimation(animlist);
+            initColorMap(sprmuld);
 
-
+            
             AnimManager animManager = this.spriteui.get_anim().play(skinanim.AsHaxeString(), null, null).loop(null);
-            animManager.genSpeed = 0.5;
+            animManager.genSpeed = 0.4;
 
             this.spriteui.set_visible(true);
-            sprites.Add(this.spriteui);
-
             this.spritesflow.addChild(this.spriteui);
-            this.bg?.addChild(spritesflow);
-
+            this.bg?.addChild(this.spritesflow);
+            this.sprites.Add(this.spriteui);
         }
 
         private string GetRandomAnimation(List<string> values)
@@ -161,26 +118,6 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             Random fallbackRandom = new Random();
             int fallbackIndex = fallbackRandom.Next(values.Count);
             return values[fallbackIndex];
-        }
-        private dc.h3d.mat.Texture loadColorMapTexture(string skinId)
-        {
-            try
-            {
-                Loader loader = Res.Class.get_loader();
-                _Image @class = Image.Class;
-                string path = $"atlas/{skinId}.png";
-                dc.h3d.mat.Texture normalMapTexture = ImageExtender.Class.toNormalMap(
-                    (Image)loader.loadCache(path.AsHaxeString(), @class)
-                );
-                return normalMapTexture;
-
-
-            }
-            catch (Exception e)
-            {
-                Log.Debug($"找不到颜色贴图: {skinId},{e}");
-                return null!;
-            }
         }
 
 
@@ -205,7 +142,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
 
 
-        public void initColorMap()
+        public void initColorMap(string colorMap)
         {
             dc.shader.ColorMap shader = (dc.shader.ColorMap)this.spriteui!.getShader(dc.shader.ColorMap.Class);
             if (shader != null)
@@ -217,10 +154,18 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             dc.h3d.mat.Filter filter = new dc.h3d.mat.Filter.Nearest();
             filter = texture.set_filter(filter);
 
-            virtual_colorMap_consoleCmdId_glowData_group_head_incompatibleHeads_item_model_onlyDefaultHead_scarfBlendMode_scarfs_ skinInfo = Cdb.Class.getSkinInfo("PrisonerDefault".AsHaxeString());
+            virtual_colorMap_consoleCmdId_glowData_group_head_incompatibleHeads_item_model_onlyDefaultHead_scarfBlendMode_scarfs_ skinInfo = Cdb.Class.getSkinInfo(colorMap.AsHaxeString());
             dc.h3d.mat.Texture heroColorMap = Assets.Class.getHeroColorMap(skinInfo);
-            dc.shader.ColorMap colorMap = (ColorMap)this.spriteui.addShader(new dc.shader.ColorMap(texture));
+            dc.shader.ColorMap colorMapp = (ColorMap)this.spriteui.addShader(new dc.shader.ColorMap(heroColorMap));
 
+
+            DirLighted s2 = new DirLighted();
+            s2 = (DirLighted)this.spriteui.addShader(s2);
+
+
+            dc.h3d.mat.Texture normalMapFromGroup = this.spriteui.lib.getNormalMapFromSprite(this.spriteui);
+            dc.shader.NormalMap normal = new dc.shader.NormalMap(normalMapFromGroup);
+            this.spriteui.addShader(normal);
         }
 
 
@@ -268,7 +213,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             );
             base.root.addChild(this.bg);
 
-            
+
 
             double posX = screenWidth - flowW - base.get_pixelScale.Invoke() * 20.0; // 离右边 20 像素
             double posY = (screenHeight - flowH) / 2.0;
@@ -290,16 +235,16 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         private void BGtext()
         {
-            this.MainTitleflow =new Flow(null);
-            
+            this.MainTitleflow = new Flow(null);
+
             dc.ui.Text label = Assets.Class.makeText(
                "DeadCellsMultiplayerMod".AsHaxeString(),
                0xFFFFFFF,
                true,
                null
            );
-            label.scaleX =1;
-            label.scaleY =1;
+            label.scaleX = 1;
+            label.scaleY = 1;
             dc.h2d.Text text = label;
 
             this.MainTitleflow.addChild(text);
@@ -307,8 +252,23 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             this.MainTitleflow.set_horizontalAlign(new FlowAlign.Right());
 
             this.bg!.addChild(this.MainTitleflow);
-            this.MainTitleflow.x+=15;
+            this.MainTitleflow.x += 15;
         }
+
+        public override void update()
+        {
+            base.update();
+            if (dc.hxd.Key.Class.isPressed(80))
+            {
+                clean();
+                Log.Debug("destory ui");
+
+
+            }
+        }
+
+
+
 
 
         private void OnClick(Event e)
@@ -345,7 +305,6 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         {
             orig(self, titleLib);
         }
-
 
     }
 }
