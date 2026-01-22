@@ -153,7 +153,7 @@ namespace DeadCellsMultiplayerMod
             MultiplayerUI MultiplayerUI = new MultiplayerUI(this, 0);
             MobsSynchronization mobs = new MobsSynchronization(this);
             Minimapreveal minimapreveal = new Minimapreveal();
-            ConnectionUI.Initialize(this);
+            // ConnectionUI.Initialize(this);
             GameMenu.Initialize(Logger);
             EventSystem.BroadcastEvent<IOnAdvancedModuleInitializing, ModEntry>(this);
         }
@@ -222,6 +222,7 @@ namespace DeadCellsMultiplayerMod
 
             orig(self, dt);
             GameMenu.ProcessMainThreadQueue();
+            GameMenu.HandleTextInputClipboardShortcuts();
         }
 
 
@@ -262,6 +263,7 @@ namespace DeadCellsMultiplayerMod
             me = self;
             SendLevel(levelId);
             orig(self, oldLevel);
+            if (_netRole == NetRole.None) return;
             var net = _net;
             var localId = net?.id ?? 0;
             if (_ghost == null)
