@@ -173,6 +173,7 @@ namespace DeadCellsMultiplayerMod
             ConnectionUI connectionUI = new ConnectionUI(playMusic);
             playMusic.addChild(connectionUI);
             connectionUI.root.set_visible(false);
+            
         }
 
         private void Hook_Hero_onHeroDie(Hook_Hero.orig_onHeroDie orig, Hero self)
@@ -469,6 +470,7 @@ namespace DeadCellsMultiplayerMod
             _netRole = NetRole.Host;
             GameMenu.SetRole(_netRole);
             GameMenu.NetRef = _net;
+            ConnectionUI.NotifyConnectionsChanged();
 
             var lep = _net.ListenerEndpoint;
             if (lep != null)
@@ -493,6 +495,7 @@ namespace DeadCellsMultiplayerMod
                 _netRole = NetRole.Client;
                 GameMenu.SetRole(_netRole);
                 GameMenu.NetRef = _net;
+                ConnectionUI.NotifyConnectionsChanged();
 
                 Logger.Information($"[NetMod] Client connecting to {ep.Address}:{ep.Port}");
             }

@@ -817,7 +817,7 @@ namespace DeadCellsMultiplayerMod
                 AddInfoLine(screen, $"Status: {BuildStatus(NetRole.Client)}", infoColor: 0xA0C0FF);
                 AddInfoLine(screen, "Players:", infoColor: 0xA0C0FF);
                 AddPlayerLines(screen, NetRole.Client, infoColor: 0xA0C0FF);
-                AddMenuButton(screen, "Disconnect", () => DisconnectFromMenu(screen), "Disconnect and return to main menu");
+                AddMenuButton(screen, "Disconnect", () => {DisconnectFromMenu(screen); screen.ShouldAutoHideConnectionUI(false);}, "Disconnect and return to main menu");
 
                 RemoveMenuItems(screen, "About Core Modding", "Play multiplayer");
                 RemoveDuplicatesKeepFirst(screen, "Disconnect");
@@ -905,6 +905,7 @@ namespace DeadCellsMultiplayerMod
                 _waitingForHost = false;
                 SendCachedDataToRemote();
                 SendCachedGeneratePayload();
+                ConnectionUI.NotifyConnectionsChanged();
 
                 if (_menuSelection == NetRole.Host)
                 {
@@ -917,6 +918,7 @@ namespace DeadCellsMultiplayerMod
                 _waitingForHost = false;
                 _clientConnecting = false;
                 _clientConnectAttempt = 0;
+                ConnectionUI.NotifyConnectionsChanged();
                 if (_menuSelection == NetRole.Client)
                 {
                     var ts = GetTitleScreen();

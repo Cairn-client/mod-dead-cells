@@ -114,6 +114,18 @@ public sealed class NetNode : IDisposable
         }
     }
 
+    public readonly struct RemoteUserSnapshot
+    {
+        public readonly int Id;
+        public readonly string? Username;
+
+        public RemoteUserSnapshot(int id, string? username)
+        {
+            Id = id;
+            Username = username;
+        }
+    }
+
     private TcpListener? _listener;   // host
     private TcpClient? _client;     // client
     private NetworkStream? _stream;
@@ -1224,6 +1236,29 @@ public sealed class NetNode : IDisposable
                     continue;
 
                 snapshot.Add(new RemoteHpSnapshot(state.Id, state.Life, state.MaxLife, state.Lif, state.BonusLife, state.Recover, state.Username));
+            }
+
+            return snapshot.Count > 0;
+        }
+    }
+
+    public bool TryGetRemoteUserSnapshots(out List<RemoteUserSnapshot> snapshot)
+    {
+        lock (_sync)
+        {
+            if (_remotes.Count == 0)
+            {
+                snapshot = new List<RemoteUserSnapshot>();
+                return false;
+            }
+
+            snapshot = new List<RemoteUserSnapshot>(_remotes.Count);
+            foreach (var state in _remotes.Values)
+            {
+                if (!state.HasRemote)
+                    continue;
+
+                snapshot.Add(new RemoteUserSnapshot(state.Id, state.Username));
             }
 
             return snapshot.Count > 0;

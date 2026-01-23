@@ -9,25 +9,28 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 {
     public static class _ConnectionUI
     {
-        public static NetNode net = ModEntry._net!;
-
         public static List<string> GetAllPlayerNames()
         {
             var playerNames = new List<string>();
 
+            var net = ModEntry._net;
             if (net == null) return playerNames;
 
-            if (!net.TryGetRemoteHpSnapshots(out var snapshots))
+            var localName = GameMenu.Username;
+            if (string.IsNullOrWhiteSpace(localName))
+                localName = "Guest";
+            playerNames.Add(localName);
+
+            if (!net.TryGetRemoteUserSnapshots(out var snapshots))
                 return playerNames;
 
             var localId = net.id;
 
             foreach (var remote in snapshots)
             {
-                string displayName = GetPlayerName(localId, remote.Id, remote.Username!);
+                string displayName = GetPlayerName(localId, remote.Id, remote.Username ?? string.Empty);
                 playerNames.Add(displayName);
             }
-
             return playerNames;
         }
 

@@ -28,6 +28,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         private Flow? spritesflow;
         private Flow? MainTitleflow;
         private readonly List<HSprite> sprites = new();
+        private readonly List<dc.ui.Text> connectionLabels = new();
+        private readonly List<string> lastConnections = new();
 
         private static ConnectionUI? Instance;
         private HSprite? spriteui;
@@ -271,28 +273,74 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             title.scaleY = 0.5;
             this.MainTitleflow.addChild(title);
 
-            List<string> allname = _ConnectionUI.GetAllPlayerNames();
+            updateConnections();
+
+        }
+
+        public void updateConnections()
+        {
+            RefreshConnections(null);
+        }
+
+        public static void NotifyConnectionsChanged()
+        {
+            Instance?.updateConnections();
+        }
+
+        private void RefreshConnections(List<string>? names)
+        {
+            if (this.MainTitleflow == null)
+                return;
+
+            for (int i = 0; i < this.connectionLabels.Count; i++)
+            {
+                var label = this.connectionLabels[i];
+                this.MainTitleflow.removeChild(label);
+                label.remove();
+            }
+            this.connectionLabels.Clear();
+
+            List<string> allname = names ?? _ConnectionUI.GetAllPlayerNames();
             foreach (var item in allname)
             {
                 dc.ui.Text player2 = Assets.Class.makeText(
                 item.AsHaxeString(),
-                Tools.MultiColor.ColorFromHex("#7effdf"),
+                Tools.MultiColor.ColorFromHex("#3DD02F"),
                 false,
                 null
             );
-                player2.scaleX = 0.4;
-                player2.scaleY = 0.4;
+                player2.scaleX = 0.6;
+                player2.scaleY = 0.6;
                 this.MainTitleflow.addChild(player2);
+                this.connectionLabels.Add(player2);
             }
 
-
+            this.lastConnections.Clear();
+            this.lastConnections.AddRange(allname);
         }
 
+        private bool NeedsConnectionsRefresh(List<string> names)
+        {
+            if (names.Count != this.lastConnections.Count)
+                return true;
+
+            for (int i = 0; i < names.Count; i++)
+            {
+                if (!string.Equals(names[i], this.lastConnections[i], StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
+        }
 
 
         public override void update()
         {
             base.update();
+            var names = _ConnectionUI.GetAllPlayerNames();
+            if (NeedsConnectionsRefresh(names))
+                RefreshConnections(names);
+
             if (dc.hxd.Key.Class.isPressed(80))
             {
                 clean();
