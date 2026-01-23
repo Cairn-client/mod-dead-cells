@@ -17,6 +17,7 @@ using ModCore.Utitities;
 using Microsoft.Win32;
 using Serilog.Core;
 using dc.cine;
+using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
 
 
 namespace DeadCellsMultiplayerMod
@@ -269,7 +270,7 @@ namespace DeadCellsMultiplayerMod
                 _log?.Information("[NetMod] Host restarting run ({Reason})", reason);
                 game.destroy();
                 game.disposeImmediately();
-                
+
                 game.user.newGame(GameDataSync.Seed, GameDataSync._isTwitch, GameDataSync._isCustom, GameDataSync._mode, GameDataSync._launch);
             });
         }
@@ -509,6 +510,11 @@ namespace DeadCellsMultiplayerMod
 
         private static void ShowMultiplayerMenu(TitleScreen screen)
         {
+            ConnectionUI Instance = new ConnectionUI(screen);
+            screen.addChild(Instance);
+
+
+
             var prevSuppress = _suppressAutoButton;
             _suppressAutoButton = true;
             var prevIsMain = GetIsMainMenu(screen);
@@ -664,20 +670,20 @@ namespace DeadCellsMultiplayerMod
         {
             // try
             // {
-                if (ModEntry.Instance == null)
-                {
-                    _log?.Warning("[NetMod] ModEntry instance unavailable for host start");
-                    return;
-                }
+            if (ModEntry.Instance == null)
+            {
+                _log?.Warning("[NetMod] ModEntry instance unavailable for host start");
+                return;
+            }
 
-                if (NetRef != null && NetRef.IsAlive && NetRef.IsHost)
-                {
-                    _waitingForHost = false;
-                    return;
-                }
-
-                ModEntry.Instance.StartHostFromMenu(_mpIp, _mpPort);
+            if (NetRef != null && NetRef.IsAlive && NetRef.IsHost)
+            {
                 _waitingForHost = false;
+                return;
+            }
+
+            ModEntry.Instance.StartHostFromMenu(_mpIp, _mpPort);
+            _waitingForHost = false;
             // }
             // catch (Exception ex)
             // {
