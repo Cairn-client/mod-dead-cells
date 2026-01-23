@@ -17,4 +17,12 @@
     <PackageReference Include="MonoMod.RuntimeDetour" Version="25.3.3" />
   </ItemGroup>
 
+   <PropertyGroup>
+    <GenerateSinglePakFile>true</GenerateSinglePakFile>
+  </PropertyGroup>
+
+ <ItemGroup>
+    <PackAssets Include="Resourcefile\**\*" RootInPak="DeadCellsMultiplayerModLang" />
+  </ItemGroup>
+
 </Project>

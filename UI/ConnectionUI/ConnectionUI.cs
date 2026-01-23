@@ -15,6 +15,7 @@ using dc.hl.types;
 using dc.hxd.res;
 using dc.haxe.ds;
 using dc.achievements;
+using ModCore.Modules;
 
 namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 {
@@ -58,7 +59,6 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
             this.rootFlow = new Flow(null);
             this.rootFlow.set_isVertical(true);
-            this.rootFlow.multiline = true;
             this.rootFlow.set_verticalAlign(new FlowAlign.Middle());
             this.rootFlow.set_horizontalAlign(new FlowAlign.Right());
 
@@ -87,7 +87,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         private List<double> sprx = new List<double> { 0.4, -1.0, -0.2, -0.6 };
         private List<string> animlist = new List<string>
         {
-           "idle", "idle","idle","idle"
+           "atkScytheB1", "runDance","wineSpit","wineRetreat"
         };
         private List<string> sprmodu = new List<string>
         {
@@ -210,16 +210,13 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             double screenHeight = win.get_height();
 
 
-            base.root.x = 0;
-            base.root.y = 0;
-
-            this.rootFlow.set_minWidth((int)(screenWidth * 0.4)); //宽度 30%
-            this.rootFlow.set_minHeight((int)(screenHeight * 0.3)); // 高度 80%
+            this.rootFlow.set_minWidth((int)(screenWidth * 0.4)); //宽度 40%
+            this.rootFlow.set_minHeight((int)(screenHeight * 0.3)); // 高度 30%
             this.rootFlow.reflow();
 
 
-            double flowW = this.rootFlow.get_outerWidth();
-            double flowH = this.rootFlow.get_outerHeight();
+            double flowW = this.rootFlow.get_innerWidth();
+            double flowH = this.rootFlow.get_innerHeight();
 
 
             this.bg?.remove();
@@ -229,10 +226,13 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 Ref<int>.Null,
                 Ref<int>.Null,
                 null,
-                true
+                false
             );
-            base.root.addChild(this.bg);
+            this.root.addChild(this.bg);
 
+            this.bg.set_visible(true);
+            this.bg.wid = (int)255;
+            this.bg.hei = (int)flowH;
 
 
             double posX = screenWidth - flowW - base.get_pixelScale.Invoke() * 200.0; // 离右边 20 像素
@@ -254,24 +254,37 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         private void BGtext()
         {
-
             this.MainTitleflow = new Flow(null);
             this.MainTitleflow.isVertical = true;
-            this.MainTitleflow.set_verticalAlign(new FlowAlign.Middle());
-            this.MainTitleflow.set_horizontalAlign(new FlowAlign.Middle());
-            this.MainTitleflow.x = 12;
+
+            FlowAlign flowAlign = this.MainTitleflow.set_horizontalAlign(new FlowAlign.Middle());
+            flowAlign = this.MainTitleflow.set_verticalAlign(new FlowAlign.Top());
+
+            double bgWidth = this.bg!.wid;
+            double bgHeight = this.bg.hei;
+            this.MainTitleflow.set_minWidth((int)bgWidth);
+            this.MainTitleflow.set_minHeight((int)bgHeight);
+
+
             this.bg!.addChild(this.MainTitleflow);
-
-
             dc.ui.Text title = Assets.Class.makeText(
-                "Lobby menu".AsHaxeString(),
-                Tools.MultiColor.ColorFromHex("#919191"),
+                GetText.Instance.GetString("Lobby menu").AsHaxeString(),
+                Tools.MultiColor.ColorFromHex("#f7fc65"),
                 true,
                 null
             );
-            title.scaleX = 0.4;
-            title.scaleY = 0.4;
+            title.scaleX = 0.8;
+            title.scaleY = 0.8;
+
             this.MainTitleflow.addChild(title);
+
+
+            Flow titleWrapper = new Flow(null);
+            titleWrapper.isVertical = false;
+            titleWrapper.set_horizontalAlign(new FlowAlign.Middle());
+
+            titleWrapper.addChild(title);
+            this.MainTitleflow.addChild(titleWrapper);
 
             dc.ui.Text subtitle = Assets.Class.makeText(
                 "Players' list".AsHaxeString(),
@@ -279,11 +292,25 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 false,
                 null
             );
-            subtitle.scaleX = 0.35;
-            subtitle.scaleY = 0.35;
-            this.MainTitleflow.addChild(subtitle);
+            subtitle.scaleX = 0.5;
+            subtitle.scaleY = 0.5;
 
+
+            Flow subtitleWrapper = new Flow(null);
+            subtitleWrapper.isVertical = false;
+            subtitleWrapper.set_horizontalAlign(new FlowAlign.Middle());
+
+            subtitleWrapper.addChild(subtitle);
+            this.MainTitleflow.addChild(subtitleWrapper);
+
+            Flow playersListWrapper = new Flow(null);
+            playersListWrapper.isVertical = true;
+            playersListWrapper.set_horizontalAlign(new FlowAlign.Middle());
+            playersListWrapper.set_verticalSpacing(4);
+
+            this.MainTitleflow.addChild(playersListWrapper);
             updateConnections();
+            this.MainTitleflow.reflow();
 
         }
 
@@ -316,11 +343,11 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 bool isConnecting = string.Equals(name, "connecting", StringComparison.OrdinalIgnoreCase);
                 dc.ui.Text player2 = Assets.Class.makeText(
                 (isConnecting ? name : "- " + name).AsHaxeString(),
-                Tools.MultiColor.ColorFromHex("#919191"),
+                Tools.MultiColor.ColorFromHex("#c9c9c9"),
                 false,
                 null
             );
-                double scale = isConnecting ? 0.5 : 0.35;
+                double scale = isConnecting ? 0.5 : 0.5;
                 player2.scaleX = scale;
                 player2.scaleY = scale;
                 this.MainTitleflow.addChild(player2);

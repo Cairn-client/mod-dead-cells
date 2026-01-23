@@ -33,6 +33,7 @@ using DeadCellsMultiplayerMod.MultiplayerModUI;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Minimap;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
+using DeadCellsMultiplayerMod.Tools.ModLang;
 
 
 namespace DeadCellsMultiplayerMod
@@ -141,6 +142,7 @@ namespace DeadCellsMultiplayerMod
             Instance = this;
 
             this.gds = new GameDataSync(Logger);
+            MultiplayerModLang modLang = new MultiplayerModLang(this);
             CineHooks CineHooks = new CineHooks();
             MultiplayerUI MultiplayerUI = new MultiplayerUI(this, 0);
             MobsSynchronization mobs = new MobsSynchronization(this);
@@ -173,7 +175,7 @@ namespace DeadCellsMultiplayerMod
             ConnectionUI connectionUI = new ConnectionUI(playMusic);
             playMusic.addChild(connectionUI);
             connectionUI.root.set_visible(false);
-            
+
         }
 
         private void Hook_Hero_onHeroDie(Hook_Hero.orig_onHeroDie orig, Hero self)
