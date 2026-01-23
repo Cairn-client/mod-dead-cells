@@ -103,7 +103,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
             initColorMap(sprmuld);
 
-            
+
             AnimManager animManager = this.spriteui.get_anim().play(skinanim.AsHaxeString(), null, null).loop(null);
             animManager.genSpeed = 0.4;
 
@@ -138,6 +138,12 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                     }
                 }
             }
+        }
+
+
+        public void loadText()
+        {
+
         }
 
 
@@ -181,7 +187,6 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         public override void onResize()
         {
             base.onResize();
-
             if (this.rootFlow == null || base.root == null)
                 return;
 
@@ -193,8 +198,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             base.root.x = 0;
             base.root.y = 0;
 
-            this.rootFlow.set_minWidth((int)(screenWidth * 0.5)); //宽度 30%
-            this.rootFlow.set_minHeight((int)(screenHeight * 0.5)); // 高度 80%
+            this.rootFlow.set_minWidth((int)(screenWidth * 0.4)); //宽度 30%
+            this.rootFlow.set_minHeight((int)(screenHeight * 0.4)); // 高度 80%
             this.rootFlow.reflow();
 
 
@@ -215,7 +220,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
 
 
-            double posX = screenWidth - flowW - base.get_pixelScale.Invoke() * 20.0; // 离右边 20 像素
+            double posX = screenWidth - flowW - base.get_pixelScale.Invoke() * 40.0; // 离右边 20 像素
             double posY = (screenHeight - flowH) / 2.0;
             this.rootFlow.x = posX;
             this.rootFlow.y = posY;
@@ -235,25 +240,70 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         private void BGtext()
         {
+
             this.MainTitleflow = new Flow(null);
-
-            dc.ui.Text label = Assets.Class.makeText(
-               "DeadCellsMultiplayerMod".AsHaxeString(),
-               0xFFFFFFF,
-               true,
-               null
-           );
-            label.scaleX = 1;
-            label.scaleY = 1;
-            dc.h2d.Text text = label;
-
-            this.MainTitleflow.addChild(text);
-            this.MainTitleflow.set_verticalAlign(new FlowAlign.Top());
-            this.MainTitleflow.set_horizontalAlign(new FlowAlign.Right());
-
+            this.MainTitleflow.isVertical = true;
+            this.MainTitleflow.set_verticalAlign(new FlowAlign.Middle());
+            this.MainTitleflow.set_horizontalAlign(new FlowAlign.Middle());
+            this.MainTitleflow.x = 45;
             this.bg!.addChild(this.MainTitleflow);
-            this.MainTitleflow.x += 15;
+
+
+            dc.ui.Text title = Assets.Class.makeText(
+                "DeadCells Multiplayer".AsHaxeString(),
+                Tools.MultiColor.ColorFromHex("#7effdf"),
+                true,
+                null
+            );
+            title.scaleX = 0.7;
+            title.scaleY = 0.7;
+            this.MainTitleflow.addChild(title);
+
+            dc.ui.Text subtitle = Assets.Class.makeText(
+                "连接页面 / Connection Lobby".AsHaxeString(),
+                Tools.MultiColor.ColorFromHex("#ffffff"),
+                false,
+                null
+            );
+            subtitle.scaleX = 0.45;
+            subtitle.scaleY = 0.45;
+            this.MainTitleflow.addChild(subtitle);
+
+
+            dc.ui.Text player1 = Assets.Class.makeText(
+                "玩家一：未连接".AsHaxeString(),
+                Tools.MultiColor.ColorFromHex("#ff6b6b"),
+                false,
+                null
+            );
+            player1.scaleX = 0.4;
+            player1.scaleY = 0.4;
+            this.MainTitleflow.addChild(player1);
+
+
+            dc.ui.Text tip = Assets.Class.makeText(
+                "等待主机开启房间...".AsHaxeString(),
+                Tools.MultiColor.ColorFromHex("#bfbfbf"),
+                false,
+                null
+            );
+            tip.scaleX = 0.4;
+            tip.scaleY = 0.4;
+            this.MainTitleflow.addChild(tip);
+
+
+            dc.ui.Text player2 = Assets.Class.makeText(
+                "玩家二：等待加入".AsHaxeString(),
+                Tools.MultiColor.ColorFromHex("#7effdf"),
+                false,
+                null
+            );
+            player2.scaleX = 0.4;
+            player2.scaleY = 0.4;
+            this.MainTitleflow.addChild(player2);
         }
+
+
 
         public override void update()
         {
@@ -298,7 +348,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         private static void Hook_TitleScreen_OnResize(Hook_TitleScreen.orig_onResize orig, TitleScreen self)
         {
             orig(self);
-            Instance?.onResize();
+            //Instance?.onResize();
         }
 
         private static void Hook_TitleScreen_Constructor(Hook__TitleScreen.orig___constructor__ orig, TitleScreen self, bool? titleLib)

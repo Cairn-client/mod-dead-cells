@@ -64,7 +64,6 @@ namespace DeadCellsMultiplayerMod
         private static bool _inClientWaitingMenu;
         private static bool _genArrived;
         private static LevelDescSync? _cachedLevelDescSync;
-        private static RunParamsResolved? _latestResolvedRunParams;
         private static readonly object TextInputSync = new();
         private static WeakReference<TextInput?>? _activeTextInputRef;
         private static bool _activeTextInputNoSpaces;
