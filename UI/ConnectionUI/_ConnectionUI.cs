@@ -26,6 +26,12 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             var localId = net.id;
             const int hostId = 1;
 
+            if (!net.HasRemote && !net.IsHost)
+            {
+                playerNames.Add("connecting");
+                return playerNames;
+            }
+
             string? hostName = null;
             if (localId == hostId)
             {

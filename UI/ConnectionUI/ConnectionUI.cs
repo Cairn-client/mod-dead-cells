@@ -313,14 +313,16 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             List<string> allname = names ?? _ConnectionUI.GetAllPlayerNames();
             foreach (var name in allname)
             {
+                bool isConnecting = string.Equals(name, "connecting", StringComparison.OrdinalIgnoreCase);
                 dc.ui.Text player2 = Assets.Class.makeText(
-                ("- " + name).AsHaxeString(),
+                (isConnecting ? name : "- " + name).AsHaxeString(),
                 Tools.MultiColor.ColorFromHex("#919191"),
                 false,
                 null
             );
-                player2.scaleX = 0.35;
-                player2.scaleY = 0.35;
+                double scale = isConnecting ? 0.5 : 0.35;
+                player2.scaleX = scale;
+                player2.scaleY = scale;
                 this.MainTitleflow.addChild(player2);
                 this.connectionLabels.Add(player2);
             }
