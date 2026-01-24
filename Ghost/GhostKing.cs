@@ -1,3 +1,5 @@
+using System;
+using System.Reflection;
 using dc;
 using dc.en;
 using dc.h3d.mat;
@@ -12,32 +14,24 @@ using ModCore.Utitities;
 
 namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 {
-    public class GhostKing : KingSkin,
-    IHxbitSerializable<GhostKing.KingData>
+    public class GhostKing : KingSkin, IHxbitSerializable<object>
     {
+        // Fallback for deserialization when older saves don't carry custom data.
+        public GhostKing() : base(GetFallbackLevel(), -1000, -1000)
+        {
+        }
+
         public GhostKing(Level lvl, int x, int y) : base(lvl, x, y)
         {
         }
-        private KingData kingData = new();
-        private class KingData
+
+        object IHxbitSerializable<object>.GetData()
         {
-            public GhostKing king = null!;
+            return new();
         }
 
-
-        KingData IHxbitSerializable<KingData>.GetData()
+        void IHxbitSerializable<object>.SetData(object data)
         {
-            if (this!=null)
-            {
-                this.kingData.king = this;
-            }
-            
-            return kingData;
-        }
-
-        void IHxbitSerializable<KingData>.SetData(KingData data)
-        {
-
         }
 
 
@@ -94,6 +88,27 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         public override void onActivate(Hero by, bool longPress)
         {
             base.onActivate(by, longPress);
+        }
+
+        private static Level GetFallbackLevel()
+        {
+            var hero = ModEntry.me ?? dc.pr.Game.Class.ME?.hero;
+            if (hero?._level != null)
+                return hero._level;
+
+            var game = ModEntry.Instance?.game ?? dc.pr.Game.Class.ME;
+            if (game != null)
+            {
+                var type = game.GetType();
+                var levelValue = type.GetField("level", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase)?.GetValue(game)
+                    ?? type.GetField("_level", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase)?.GetValue(game)
+                    ?? type.GetProperty("level", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase)?.GetValue(game)
+                    ?? type.GetProperty("_level", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase)?.GetValue(game);
+                if (levelValue is Level lvl)
+                    return lvl;
+            }
+
+            throw new InvalidOperationException("GhostKing deserialization requires a Level.");
         }
 
     }

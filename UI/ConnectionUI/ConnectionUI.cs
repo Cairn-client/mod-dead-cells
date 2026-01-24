@@ -87,7 +87,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         private List<double> sprx = new List<double> { 0.4, -1.0, -0.2, -0.6 };
         private List<string> animlist = new List<string>
         {
-           "atkScytheB1", "runDance","wineSpit","wineRetreat"
+           "idle", "idle","idle","idle"
         };
         private List<string> sprmodu = new List<string>
         {

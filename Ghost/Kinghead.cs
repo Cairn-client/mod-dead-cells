@@ -10,18 +10,40 @@ using dc.tool;
 using dc.tool._AnimationTrack;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using HaxeProxy.Runtime;
+using ModCore.Storage;
 using ModCore.Utitities;
 
 namespace DeadCellsMultiplayerMod.KingHead
 {
-    public class Kinghead(Hero _me, GhostKing _kingSkin, Level level) : HeroHead
+    public class Kinghead : HeroHead, IHxbitSerializable<object>
     {
-        private Hero me = _me;
-        private GhostKing king = _kingSkin;
-        private Level lvl = level;
+        private Hero? me;
+        private GhostKing? king;
+        private Level? lvl;
         private dc.h2d.Object? headContainer;
         private dc.h2d.Object? headParticleContainer;
         private dc.h2d.Tile? headMaterial;
+
+        // Parameterless ctor for serializer fallback when older saves don't carry data.
+        public Kinghead()
+        {
+        }
+
+        public Kinghead(Hero _me, GhostKing _kingSkin, Level level)
+        {
+            me = _me;
+            king = _kingSkin;
+            lvl = level;
+        }
+
+        object IHxbitSerializable<object>.GetData()
+        {
+            return new();
+        }
+
+        void IHxbitSerializable<object>.SetData(object data)
+        {
+        }
 
 
         public override void init(Level parent, dc.h2d.Object fromUI, Ref<bool> fromUI1)
@@ -91,6 +113,11 @@ namespace DeadCellsMultiplayerMod.KingHead
 
         public override void updateHeadFx(double c1)
         {
+            if (king == null)
+            {
+                return;
+            }
+
             double headX;
             double headY;
             double localHeadX;
