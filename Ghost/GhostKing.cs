@@ -24,7 +24,6 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         public GhostKing(Level lvl, int x, int y) : base(lvl, x, y)
         {
         }
-
         object IHxbitSerializable<object>.GetData()
         {
             return new();
