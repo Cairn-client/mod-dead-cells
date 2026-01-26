@@ -26,6 +26,7 @@ namespace DeadCellsMultiplayerMod.KingHead
         private dc.h2d.Tile? headMaterial;
         private ArrayBytes_Int? headSkeleton;
         private bool? useLocalSpace;
+        private FPoint? kingLastHeadPos;
 
         public Kinghead()
         {
@@ -126,8 +127,7 @@ namespace DeadCellsMultiplayerMod.KingHead
                     return;
                 }
 
-                base.updateHeadFx(c1);
-                this.postUpdate();
+                UpdateHeadFxWithKingContext(c1);
                 return;
             }
 
@@ -139,8 +139,38 @@ namespace DeadCellsMultiplayerMod.KingHead
             {
                 this.setForcedPos(headX, headY);
             }
-            base.updateHeadFx(c1);
-            this.postUpdate();
+            UpdateHeadFxWithKingContext(c1);
+        }
+
+        private void UpdateHeadFxWithKingContext(double c1)
+        {
+            var hero = me;
+            var ghost = king;
+            if (hero == null || ghost == null || ghost.spr == null)
+            {
+                return;
+            }
+
+            var savedLastHeadPos = hero.lastHeadPos;
+            if (kingLastHeadPos == null)
+            {
+                kingLastHeadPos = new FPoint(0, 0);
+            }
+            hero.lastHeadPos = kingLastHeadPos;
+
+            // Mirror king state onto hero so HeroHead logic uses the ghost context.
+            var swap = new HeroStateSwap(hero, ghost);
+            try
+            {
+                base.updateHeadFx(c1);
+                this.postUpdate();
+            }
+            finally
+            {
+                kingLastHeadPos = hero.lastHeadPos;
+                hero.lastHeadPos = savedLastHeadPos;
+                swap.Dispose();
+            }
         }
 
         private bool TryGetHeadSkeletonPosition(HSprite? sprite, out double headX, out double headY)
@@ -224,6 +254,83 @@ namespace DeadCellsMultiplayerMod.KingHead
             var distWorld = global::System.Math.Abs(forced.x - heroHeadX) + global::System.Math.Abs(forced.y - heroHeadY);
             useLocalSpace = distLocal <= distWorld;
             return useLocalSpace.Value;
+        }
+
+        private sealed class HeroStateSwap : IDisposable
+        {
+            private readonly Hero hero;
+            private readonly HSprite? spr;
+            private readonly double dx;
+            private readonly double dy;
+            private readonly double bdx;
+            private readonly double bdy;
+            private readonly double xr;
+            private readonly double yr;
+            private readonly int dir;
+            private readonly double sprAlpha;
+            private readonly bool visible;
+            private readonly ArrayObj? affects;
+            private readonly Level? level;
+            private readonly int cx;
+            private readonly int cy;
+
+            public HeroStateSwap(Hero hero, GhostKing king)
+            {
+                this.hero = hero;
+                spr = hero.spr;
+                dx = hero.dx;
+                dy = hero.dy;
+                bdx = hero.bdx;
+                bdy = hero.bdy;
+                xr = hero.xr;
+                yr = hero.yr;
+                dir = hero.dir;
+                sprAlpha = hero.sprAlpha;
+                visible = hero.visible;
+                affects = hero.affects;
+                level = hero._level;
+                cx = hero.cx;
+                cy = hero.cy;
+
+                hero.spr = king.spr;
+                hero.dx = king.dx;
+                hero.dy = king.dy;
+                hero.bdx = king.bdx;
+                hero.bdy = king.bdy;
+                hero.xr = king.xr;
+                hero.yr = king.yr;
+                hero.dir = king.dir;
+                hero.sprAlpha = king.sprAlpha;
+                hero.visible = king.visible;
+                if (king.affects != null)
+                {
+                    hero.affects = king.affects;
+                }
+                if (king._level != null)
+                {
+                    hero._level = king._level;
+                    hero.cx = king.cx;
+                    hero.cy = king.cy;
+                }
+            }
+
+            public void Dispose()
+            {
+                hero.spr = spr;
+                hero.dx = dx;
+                hero.dy = dy;
+                hero.bdx = bdx;
+                hero.bdy = bdy;
+                hero.xr = xr;
+                hero.yr = yr;
+                hero.dir = dir;
+                hero.sprAlpha = sprAlpha;
+                hero.visible = visible;
+                hero.affects = affects;
+                hero._level = level;
+                hero.cx = cx;
+                hero.cy = cy;
+            }
         }
 
     }
