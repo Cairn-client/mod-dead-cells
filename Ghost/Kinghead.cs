@@ -121,8 +121,14 @@ namespace DeadCellsMultiplayerMod.KingHead
             double headY;
             if (!TryGetHeadSkeletonPosition(sprite, out headX, out headY))
             {
-                headX = king.get_headX();
-                headY = king.get_headY();
+                if (this.forcedPos == null)
+                {
+                    return;
+                }
+
+                base.updateHeadFx(c1);
+                this.postUpdate();
+                return;
             }
 
             if (sprite != null && UseLocalSpace())
@@ -164,7 +170,7 @@ namespace DeadCellsMultiplayerMod.KingHead
             int frame = sprite.frame;
             headX = sprite.x - frameData.realWid * pivot.centerFactorX;
             headX += AnimationTrack_Impl_.Class.x(headSkeleton, frame);
-            headY = sprite.y - frameData.realHei * pivot.centerFactorY;
+            headY = sprite.y - frameData.realHei * pivot.centerFactorY - 3;
             headY += AnimationTrack_Impl_.Class.y(headSkeleton, frame);
             return true;
         }
