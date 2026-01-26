@@ -18,8 +18,6 @@ namespace DeadCellsMultiplayerMod.KingHead
 {
     public class Kinghead : HeroHead, IHxbitSerializable<object>
     {
-        private static readonly dc.String HeadBoneKey = "headBone".AsHaxeString();
-
         private Hero? me;
         private GhostKing? king;
         private Level? lvl;
@@ -29,7 +27,6 @@ namespace DeadCellsMultiplayerMod.KingHead
         private ArrayBytes_Int? headSkeleton;
         private bool? useLocalSpace;
 
-        // Parameterless ctor for serializer fallback when older saves don't carry data.
         public Kinghead()
         {
         }
@@ -166,7 +163,6 @@ namespace DeadCellsMultiplayerMod.KingHead
             int dir = king?.dir ?? 1;
             int frame = sprite.frame;
             headX = sprite.x - frameData.realWid * pivot.centerFactorX * dir;
-            
             headX += AnimationTrack_Impl_.Class.x(headSkeleton, frame) * dir;
             headY = sprite.y - frameData.realHei * pivot.centerFactorY;
             headY += AnimationTrack_Impl_.Class.y(headSkeleton, frame);
@@ -175,8 +171,7 @@ namespace DeadCellsMultiplayerMod.KingHead
 
         private ArrayBytes_Int? ResolveHeadSkeleton(HSprite sprite)
         {
-            var hero = me;
-            var tracks = hero?.animationTracks;
+            var tracks = king?.animationTracks;
             var groupName = sprite.groupName;
             if (tracks == null || groupName == null)
             {
@@ -189,7 +184,7 @@ namespace DeadCellsMultiplayerMod.KingHead
                 return null;
             }
 
-            return groupTracks.get(HeadBoneKey) as ArrayBytes_Int;
+            return groupTracks.get("headBone".AsHaxeString()) as ArrayBytes_Int;
         }
 
         private bool UseLocalSpace()
