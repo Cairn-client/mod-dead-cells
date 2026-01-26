@@ -75,7 +75,7 @@ namespace DeadCellsMultiplayerMod
             king.hasEntityTouchChecks = true;
             king.activeSkillsManager = new KingActiveSkillsManager(_me, king, level);
             king.activeSkillsManager.init();
-            king.activeWeapon = king.activeSkillsManager.GiveRandomWeaponFromHero();
+            // king.activeWeapon = king.activeSkillsManager.GiveRandomWeaponFromHero();
             if (king.activeWeapon != null)
             {
                 king.activeWeaponImpl = new Weapon(_me, king.activeWeapon);
