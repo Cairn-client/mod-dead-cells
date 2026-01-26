@@ -66,7 +66,6 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         public override void initGfx()
         {
             base.initGfx();
-            initScarf();
             var remoteSkin = ModEntry.Instance!.remoteSkin;
             if (remoteSkin == null) remoteSkin = "PrisonerDefault";
             virtual_colorMap_consoleCmdId_glowData_group_head_incompatibleHeads_item_model_onlyDefaultHead_scarfBlendMode_scarfs_ skinInfo =
@@ -77,6 +76,7 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             Texture normalMapFromGroup = heroLib.getNormalMapFromGroup(group);
             int? dp_ROOM_MAIN_HERO = Const.Class.DP_ROOM_MAIN_HERO;
             this.initSprite(heroLib, group, 0.5, 0.5, dp_ROOM_MAIN_HERO, true, null, normalMapFromGroup);
+            initScarf();
             this.initColorMap(skinInfo);
 
             // glow

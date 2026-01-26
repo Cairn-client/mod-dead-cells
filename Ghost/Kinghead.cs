@@ -162,8 +162,8 @@ namespace DeadCellsMultiplayerMod.KingHead
 
             int dir = king?.dir ?? 1;
             int frame = sprite.frame;
-            headX = sprite.x - frameData.realWid * pivot.centerFactorX * dir;
-            headX += AnimationTrack_Impl_.Class.x(headSkeleton, frame) * dir;
+            headX = sprite.x - frameData.realWid * pivot.centerFactorX;
+            headX += AnimationTrack_Impl_.Class.x(headSkeleton, frame);
             headY = sprite.y - frameData.realHei * pivot.centerFactorY;
             headY += AnimationTrack_Impl_.Class.y(headSkeleton, frame);
             return true;
