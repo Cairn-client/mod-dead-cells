@@ -19,8 +19,8 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 {
     public class GhostKing : KingSkin, IHxbitSerializable<object>
     {
-        public KingActiveSkillsManager? activeSkillsManager;
-        public InventItem? activeWeapon;
+        // public KingActiveSkillsManager? activeSkillsManager;
+        // public InventItem? activeWeapon;
         public Weapon? activeWeaponImpl;
         public StringMap? animationTracks;
 

@@ -73,13 +73,13 @@ namespace DeadCellsMultiplayerMod
             king.canBeActivated(_me);
             king.needsLongPress = true;
             king.hasEntityTouchChecks = true;
-            king.activeSkillsManager = new KingActiveSkillsManager(_me, king, level);
-            king.activeSkillsManager.init();
+            // king.activeSkillsManager = new KingActiveSkillsManager(_me, king, level);
+            // king.activeSkillsManager.init();
             // king.activeWeapon = king.activeSkillsManager.GiveRandomWeaponFromHero();
-            if (king.activeWeapon != null)
-            {
-                king.activeWeaponImpl = new Weapon(_me, king.activeWeapon);
-            }
+            // if (king.activeWeapon != null)
+            // {
+                // king.activeWeaponImpl = new Weapon(_me, king.activeWeapon);
+            // }
 
 
             bool sics = false;
@@ -204,13 +204,16 @@ namespace DeadCellsMultiplayerMod
                 _labels.Remove(entity);
             }
             _Assets _Assets = Assets.Class;
-            dc.h2d.Text text_h2d = _Assets.makeText(text.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), true, entity.spr);
+            dc.h2d.Text text_h2d = _Assets.makeText(text.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), null, entity.spr);
             text_h2d.y -= 80;
             text_h2d.x -= 2.5 * text.Length;
-            text_h2d.font.size = 18;
+            text_h2d.font.size = 9;
             text_h2d.alpha = 0.8;
-            text_h2d.scaleX = 0.6d;
-            text_h2d.scaleY = 0.6d;
+            var win = dc.hxd.Window.Class.getInstance();
+            double screenWidth = win.get_width();
+            var scale = screenWidth <= 1920? 0.6d : 0.4d;
+            text_h2d.scaleX = scale;
+            text_h2d.scaleY = scale;
             text_h2d.textColor = 0;
             _labels[entity] = text_h2d;
         }

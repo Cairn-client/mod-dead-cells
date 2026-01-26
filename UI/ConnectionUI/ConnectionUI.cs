@@ -273,8 +273,9 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 true,
                 null
             );
-            title.scaleX = 0.8;
-            title.scaleY = 0.8;
+
+            title.scaleX = 0.6;
+            title.scaleY = 0.6;
 
             this.MainTitleflow.addChild(title);
 
@@ -352,9 +353,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 false,
                 null
             );
-                double scale = isConnecting ? 0.5 : 0.5;
-                player2.scaleX = scale;
-                player2.scaleY = scale;
+                player2.scaleX = 0.5;
+                player2.scaleY = 0.5;
                 this.MainTitleflow.addChild(player2);
                 this.connectionLabels.Add(player2);
             }
