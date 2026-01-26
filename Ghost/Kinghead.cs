@@ -18,12 +18,15 @@ namespace DeadCellsMultiplayerMod.KingHead
 {
     public class Kinghead : HeroHead, IHxbitSerializable<object>
     {
+        private static readonly dc.String HeadBoneKey = "headBone".AsHaxeString();
+
         private Hero? me;
         private GhostKing? king;
         private Level? lvl;
         private dc.h2d.Object? headContainer;
         private dc.h2d.Object? headParticleContainer;
         private dc.h2d.Tile? headMaterial;
+        private ArrayBytes_Int? headSkeleton;
         private bool? useLocalSpace;
 
         // Parameterless ctor for serializer fallback when older saves don't carry data.
@@ -54,6 +57,7 @@ namespace DeadCellsMultiplayerMod.KingHead
             if (headSprite != null)
             {
                 headMaterial = headSprite.frameData?.tile;
+                headSkeleton = ResolveHeadSkeleton(headSprite);
                 var useLocal = UseLocalSpace();
                 if (useLocal)
                 {
@@ -115,20 +119,18 @@ namespace DeadCellsMultiplayerMod.KingHead
                 return;
             }
 
-            double headX = king.get_headX();
-            double headY = king.get_headY();
-            double localHeadX = headX;
-            double localHeadY = headY;
             var sprite = king.spr;
-            if (sprite != null && UseLocalSpace())
+            double headX;
+            double headY;
+            if (!TryGetHeadSkeletonPosition(sprite, out headX, out headY))
             {
-                localHeadX = headX - sprite.x;
-                localHeadY = headY - sprite.y;
+                headX = king.get_headX();
+                headY = king.get_headY();
             }
 
             if (sprite != null && UseLocalSpace())
             {
-                this.setForcedPos(localHeadX, localHeadY);
+                this.setForcedPos(headX - sprite.x, headY - sprite.y);
             }
             else
             {
@@ -136,6 +138,58 @@ namespace DeadCellsMultiplayerMod.KingHead
             }
             base.updateHeadFx(c1);
             this.postUpdate();
+        }
+
+        private bool TryGetHeadSkeletonPosition(HSprite? sprite, out double headX, out double headY)
+        {
+            headX = 0;
+            headY = 0;
+
+            if (sprite == null)
+            {
+                return false;
+            }
+
+            headSkeleton = ResolveHeadSkeleton(sprite);
+            if (headSkeleton == null)
+            {
+                return false;
+            }
+
+            var frameData = sprite.frameData;
+            var pivot = sprite.pivot;
+            if (frameData == null || pivot == null)
+            {
+                return false;
+            }
+
+            int dir = king?.dir ?? 1;
+            int frame = sprite.frame;
+            headX = sprite.x - frameData.realWid * pivot.centerFactorX * dir;
+            
+            headX += AnimationTrack_Impl_.Class.x(headSkeleton, frame) * dir;
+            headY = sprite.y - frameData.realHei * pivot.centerFactorY;
+            headY += AnimationTrack_Impl_.Class.y(headSkeleton, frame);
+            return true;
+        }
+
+        private ArrayBytes_Int? ResolveHeadSkeleton(HSprite sprite)
+        {
+            var hero = me;
+            var tracks = hero?.animationTracks;
+            var groupName = sprite.groupName;
+            if (tracks == null || groupName == null)
+            {
+                return null;
+            }
+
+            var groupTracks = tracks.get(groupName) as StringMap;
+            if (groupTracks == null)
+            {
+                return null;
+            }
+
+            return groupTracks.get(HeadBoneKey) as ArrayBytes_Int;
         }
 
         private bool UseLocalSpace()
