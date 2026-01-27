@@ -17,6 +17,8 @@ using ModCore.Utitities;
 using Microsoft.Win32;
 using Serilog.Core;
 using dc.cine;
+using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
+using ModCore.Modules;
 
 
 namespace DeadCellsMultiplayerMod
@@ -64,7 +66,6 @@ namespace DeadCellsMultiplayerMod
         private static bool _inClientWaitingMenu;
         private static bool _genArrived;
         private static LevelDescSync? _cachedLevelDescSync;
-        private static RunParamsResolved? _latestResolvedRunParams;
         private static readonly object TextInputSync = new();
         private static WeakReference<TextInput?>? _activeTextInputRef;
         private static bool _activeTextInputNoSpaces;
@@ -270,7 +271,7 @@ namespace DeadCellsMultiplayerMod
                 _log?.Information("[NetMod] Host restarting run ({Reason})", reason);
                 game.destroy();
                 game.disposeImmediately();
-                
+
                 game.user.newGame(GameDataSync.Seed, GameDataSync._isTwitch, GameDataSync._isCustom, GameDataSync._mode, GameDataSync._launch);
             });
         }
@@ -492,8 +493,8 @@ namespace DeadCellsMultiplayerMod
                 if (count == 1)
                 {
                     int white = 0xFFFFFF;
-                    var label = MakeHLString("Play multiplayer");
-                    var helpStr = MakeHLString("Host or join a multiplayer session");
+                    var label = GetText.Instance.GetString("Play multiplayer").AsHaxeString();
+                    var helpStr = GetText.Instance.GetString("Host or join a multiplayer session").AsHaxeString();
                     var colorHl = Ref<int>.From(ref white);
                     var cbHl = new HlAction(() => ShowMultiplayerMenu(self));
                     orig(self, label, cbHl, helpStr, null, colorHl);
@@ -510,6 +511,9 @@ namespace DeadCellsMultiplayerMod
 
         private static void ShowMultiplayerMenu(TitleScreen screen)
         {
+            
+
+
             var prevSuppress = _suppressAutoButton;
             _suppressAutoButton = true;
             var prevIsMain = GetIsMainMenu(screen);
@@ -517,15 +521,23 @@ namespace DeadCellsMultiplayerMod
             {
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
-                AddMenuButton(screen, "Host game", () => ShowConnectionMenu(screen, NetRole.Host), "Create a multiplayer session");
-                AddMenuButton(screen, "Join game", () => ShowConnectionMenu(screen, NetRole.Client), "Connect to an existing host");
-                AddMenuButton(screen, "Back", () =>
+                AddMenuButton(
+                    screen,
+                    GetText.Instance.GetString("Host game"),
+                    () => ShowConnectionMenu(screen, NetRole.Host),
+                    GetText.Instance.GetString("Create a multiplayer session"));
+                AddMenuButton(
+                    screen,
+                    GetText.Instance.GetString("Join game"),
+                    () => ShowConnectionMenu(screen, NetRole.Client),
+                    GetText.Instance.GetString("Connect to an existing host"));
+                AddMenuButton(screen, GetText.Instance.GetString("Back"), () =>
                 {
                     StopNetworkFromMenu();
                     screen.mainMenu();
-                }, "Return to main menu");
-                RemoveMenuItems(screen, "About Core Modding", "Play multiplayer");
-                RemoveDuplicatesKeepFirst(screen, "Host game", "Join game");
+                }, GetText.Instance.GetString("Return to main menu"));
+                RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
+                RemoveDuplicatesKeepFirst(screen, GetText.Instance.GetString("Host game"), GetText.Instance.GetString("Join game"));
                 _inHostStatusMenu = false;
                 _inClientWaitingMenu = false;
             }
@@ -554,21 +566,25 @@ namespace DeadCellsMultiplayerMod
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
 
-                AddMenuButton(screen, $"Username: {_username}", () => EditUsername(screen), "Edit display name");
+                AddMenuButton(
+                    screen,
+                    $"{GetText.Instance.GetString("Username: ")}{_username}",
+                    () => EditUsername(screen),
+                    GetText.Instance.GetString("Edit display name"));
 
-                AddMenuButton(screen, $"IP: {_mpIp}", () =>
+                AddMenuButton(screen, $"{GetText.Instance.GetString("IP: ")}{_mpIp}", () =>
                 {
-                    OpenTextInput(screen, "IP address", _mpIp, value =>
+                    OpenTextInput(screen, GetText.Instance.GetString("IP address"), _mpIp, value =>
                     {
                         _mpIp = string.IsNullOrWhiteSpace(value) ? "127.0.0.1" : value;
                         SaveConfig();
                         ShowConnectionMenu(screen, role);
                     }, noSpaces: true);
-                }, "Edit IP");
+                }, GetText.Instance.GetString("Edit IP"));
 
-                AddMenuButton(screen, $"Port: {_mpPort}", () =>
+                AddMenuButton(screen, $"{GetText.Instance.GetString("Port: ")}{_mpPort}", () =>
                 {
-                    OpenTextInput(screen, "Port", _mpPort.ToString(), value =>
+                    OpenTextInput(screen, GetText.Instance.GetString("Port"), _mpPort.ToString(), value =>
                     {
                         if (!int.TryParse(value, out var parsed) || parsed <= 0 || parsed > 65535)
                             parsed = 1234;
@@ -576,16 +592,19 @@ namespace DeadCellsMultiplayerMod
                         SaveConfig();
                         ShowConnectionMenu(screen, role);
                     }, noSpaces: true);
-                }, "Edit port");
+                }, GetText.Instance.GetString("Edit port"));
 
-                var actionLabel = role == NetRole.Host ? "Host" : "Join";
+                var actionLabel = role == NetRole.Host
+                    ? GetText.Instance.GetString("Host")
+                    : GetText.Instance.GetString("Join");
                 if (role == NetRole.Host)
                 {
                     AddMenuButton(screen, actionLabel, () =>
                     {
                         StartHostServerOnly();
                         ShowHostStatusMenu(screen);
-                    }, "Start hosting");
+                        screen.ShouldAutoHideConnectionUI(true);
+                    }, GetText.Instance.GetString("Start hosting"));
                 }
                 else
                 {
@@ -593,12 +612,21 @@ namespace DeadCellsMultiplayerMod
                     {
                         StartNetwork(role, screen);
                         ShowClientWaitingMenu(screen);
-                    }, "Connect to host");
+                        screen.ShouldAutoHideConnectionUI(true);
+                    }, GetText.Instance.GetString("Connect to host"));
                 }
 
-                AddMenuButton(screen, "Back", () => ShowMultiplayerMenu(screen), "Back to multiplayer menu");
-                RemoveMenuItems(screen, "About Core Modding", "Play multiplayer");
-                RemoveDuplicatesKeepFirst(screen, "Host game", "Join game", "About Core Modding");
+                AddMenuButton(
+                    screen,
+                    GetText.Instance.GetString("Back"),
+                    () => {ShowMultiplayerMenu(screen); screen.ShouldAutoHideConnectionUI(false);},
+                    GetText.Instance.GetString("Back to multiplayer menu"));
+                RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
+                RemoveDuplicatesKeepFirst(
+                    screen,
+                    GetText.Instance.GetString("Host game"),
+                    GetText.Instance.GetString("Join game"),
+                    "About Core Modding");
                 _inHostStatusMenu = false;
                 _inClientWaitingMenu = false;
                 if (role == NetRole.Host)
@@ -665,20 +693,20 @@ namespace DeadCellsMultiplayerMod
         {
             // try
             // {
-                if (ModEntry.Instance == null)
-                {
-                    _log?.Warning("[NetMod] ModEntry instance unavailable for host start");
-                    return;
-                }
+            if (ModEntry.Instance == null)
+            {
+                _log?.Warning("[NetMod] ModEntry instance unavailable for host start");
+                return;
+            }
 
-                if (NetRef != null && NetRef.IsAlive && NetRef.IsHost)
-                {
-                    _waitingForHost = false;
-                    return;
-                }
-
-                ModEntry.Instance.StartHostFromMenu(_mpIp, _mpPort);
+            if (NetRef != null && NetRef.IsAlive && NetRef.IsHost)
+            {
                 _waitingForHost = false;
+                return;
+            }
+
+            ModEntry.Instance.StartHostFromMenu(_mpIp, _mpPort);
+            _waitingForHost = false;
             // }
             // catch (Exception ex)
             // {
@@ -769,21 +797,18 @@ namespace DeadCellsMultiplayerMod
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
 
-                AddInfoLine(screen, $"Status: {BuildStatus(NetRole.Host)}", infoColor: 0xA0C0FF);
-                AddInfoLine(screen, "Players:", infoColor: 0xA0C0FF);
-                AddPlayerLines(screen, NetRole.Host, infoColor: 0xA0C0FF);
-
-                AddMenuButton(screen, "Play", () => StartHostRun(screen), "Launch game");
-                AddMenuButton(screen, "Back", () =>
+                AddMenuButton(screen, GetText.Instance.GetString("Play"), () => StartHostRun(screen), GetText.Instance.GetString("Launch game"));
+                AddMenuButton(screen, GetText.Instance.GetString("Back"), () =>
                 {
                     StopNetworkFromMenu();
                     SetRole(NetRole.None);
                     _menuSelection = NetRole.None;
                     ShowMultiplayerMenu(screen);
-                }, "Back to host setup");
+                    screen.ShouldAutoHideConnectionUI(false);
+                }, GetText.Instance.GetString("Back to host setup"));
 
-                RemoveMenuItems(screen, "About Core Modding", "Play multiplayer");
-                RemoveDuplicatesKeepFirst(screen, "Play", "Back");
+                RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
+                RemoveDuplicatesKeepFirst(screen, GetText.Instance.GetString("Play"), GetText.Instance.GetString("Back"));
                 _inHostStatusMenu = true;
                 _inClientWaitingMenu = false;
             }
@@ -808,13 +833,14 @@ namespace DeadCellsMultiplayerMod
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
 
-                AddInfoLine(screen, $"Status: {BuildStatus(NetRole.Client)}", infoColor: 0xA0C0FF);
-                AddInfoLine(screen, "Players:", infoColor: 0xA0C0FF);
-                AddPlayerLines(screen, NetRole.Client, infoColor: 0xA0C0FF);
-                AddMenuButton(screen, "Disconnect", () => DisconnectFromMenu(screen), "Disconnect and return to main menu");
+                AddMenuButton(
+                    screen,
+                    GetText.Instance.GetString("Disconnect"),
+                    () => {DisconnectFromMenu(screen); screen.ShouldAutoHideConnectionUI(false);},
+                    GetText.Instance.GetString("Disconnect and return to main menu"));
 
-                RemoveMenuItems(screen, "About Core Modding", "Play multiplayer");
-                RemoveDuplicatesKeepFirst(screen, "Disconnect");
+                RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
+                RemoveDuplicatesKeepFirst(screen, GetText.Instance.GetString("Disconnect"));
                 _inClientWaitingMenu = true;
                 _inHostStatusMenu = false;
             }
@@ -839,11 +865,15 @@ namespace DeadCellsMultiplayerMod
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
 
-                AddInfoLine(screen, "Lobby didn't find", infoColor: 0xFF9090);
-                AddMenuButton(screen, "OK", () => ShowConnectionMenu(screen, NetRole.Client), "Return to join menu");
+                AddInfoLine(screen, GetText.Instance.GetString("Can't find lobby"), infoColor: 0xFF9090);
+                AddMenuButton(
+                    screen,
+                    GetText.Instance.GetString("OK"),
+                    () => ShowConnectionMenu(screen, NetRole.Client),
+                    GetText.Instance.GetString("Return to join menu"));
 
-                RemoveMenuItems(screen, "About Core Modding", "Play multiplayer");
-                RemoveDuplicatesKeepFirst(screen, "OK");
+                RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
+                RemoveDuplicatesKeepFirst(screen, GetText.Instance.GetString("OK"));
                 _inClientWaitingMenu = false;
                 _inHostStatusMenu = false;
             }
@@ -880,7 +910,7 @@ namespace DeadCellsMultiplayerMod
 
         private static void EditUsername(TitleScreen screen)
         {
-            OpenTextInput(screen, "Username", _username, value =>
+            OpenTextInput(screen, GetText.Instance.GetString("Username"), _username, value =>
             {
                 var cleaned = CleanUsername(value);
                 _username = cleaned;
@@ -899,6 +929,7 @@ namespace DeadCellsMultiplayerMod
                 _waitingForHost = false;
                 SendCachedDataToRemote();
                 SendCachedGeneratePayload();
+                ConnectionUI.NotifyConnectionsChanged();
 
                 if (_menuSelection == NetRole.Host)
                 {
@@ -911,6 +942,7 @@ namespace DeadCellsMultiplayerMod
                 _waitingForHost = false;
                 _clientConnecting = false;
                 _clientConnectAttempt = 0;
+                ConnectionUI.NotifyConnectionsChanged();
                 if (_menuSelection == NetRole.Client)
                 {
                     var ts = GetTitleScreen();
@@ -1323,17 +1355,21 @@ namespace DeadCellsMultiplayerMod
             if (role == NetRole.Client && _clientConnecting)
             {
                 if (_clientConnectAttempt > 0)
-                    return $"connecting ({_clientConnectAttempt}/{ClientConnectMaxAttempts})";
-                return "connecting";
+                    return $"{GetText.Instance.GetString("connecting...")} ({_clientConnectAttempt}/{ClientConnectMaxAttempts})";
+                return GetText.Instance.GetString("connecting...");
             }
 
             if (net != null && net.HasRemote)
-                return role == NetRole.Host ? "client connected" : "connected to host";
+                return role == NetRole.Host
+                    ? GetText.Instance.GetString("client connected")
+                    : GetText.Instance.GetString("connected to host");
 
             if (role == NetRole.Client)
-                return _waitingForHost ? "waiting for the host" : "not connected";
+                return _waitingForHost
+                    ? GetText.Instance.GetString("waiting for the host")
+                    : GetText.Instance.GetString("not connected");
 
-            return "waiting for client";
+            return GetText.Instance.GetString("waiting for client");
         }
 
         private static List<string> BuildPlayerLines(NetRole role)
@@ -1358,9 +1394,10 @@ namespace DeadCellsMultiplayerMod
 
         private static void AddPlayerLines(TitleScreen screen, NetRole role, int? infoColor = null)
         {
+            var prefix = GetText.Instance.GetString("- ");
             foreach (var line in BuildPlayerLines(role))
             {
-                AddInfoLine(screen, $"- {line}", infoColor: infoColor);
+                AddInfoLine(screen, $"{prefix}{line}", infoColor: infoColor);
             }
         }
 
@@ -1654,7 +1691,7 @@ namespace DeadCellsMultiplayerMod
                     screen,
                     MakeHLString(title),
                     MakeHLString(initial ?? string.Empty),
-                    MakeHLString("OK"),
+                    MakeHLString(GetText.Instance.GetString("OK")),
                     new HlAction<dc.String>(s =>
                     {
                         var text = s?.ToString() ?? string.Empty;
@@ -1669,7 +1706,7 @@ namespace DeadCellsMultiplayerMod
                             ClearActiveTextInput();
                         }
                     }),
-                    MakeHLString("Cancel"),
+                    MakeHLString(GetText.Instance.GetString("Cancel")),
                     MakeHLString(string.Empty),
                     (dc.hxd.res.Sound?)null);
                 RegisterActiveTextInput(input, noSpaces);
@@ -1790,15 +1827,18 @@ namespace DeadCellsMultiplayerMod
             try
             {
                 var arr = GetMemberValue(screen, "menuItems", true);
-                var existingIdx = FindMenuIndexByLabel(arr, "Play multiplayer");
+                var playMultiplayer = GetText.Instance.GetString("Play multiplayer");
+                var playHelp = GetText.Instance.GetString("Host or join a multiplayer session");
+                var playLabel = GetText.Instance.GetString("Play");
+                var existingIdx = FindMenuIndexByLabel(arr, playMultiplayer);
                 if (existingIdx < 0)
                 {
-                    TryAddMenuButton(screen, "Play multiplayer", () => ShowMultiplayerMenu(screen), "Host or join a multiplayer session");
+                    TryAddMenuButton(screen, playMultiplayer, () => ShowMultiplayerMenu(screen), playHelp);
                     arr = GetMemberValue(screen, "menuItems", true);
                 }
 
                 _mainMenuButtonAdded = true;
-                MoveButtonAfterPlay(arr, "Play multiplayer", "Play");
+                MoveButtonAfterPlay(arr, playMultiplayer, playLabel);
             }
             catch (Exception ex)
             {

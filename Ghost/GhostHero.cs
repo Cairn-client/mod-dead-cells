@@ -73,11 +73,17 @@ namespace DeadCellsMultiplayerMod
             king.canBeActivated(_me);
             king.needsLongPress = true;
             king.hasEntityTouchChecks = true;
+            // king.activeSkillsManager = new KingActiveSkillsManager(_me, king, level);
+            // king.activeSkillsManager.init();
+            // king.activeWeapon = king.activeSkillsManager.GiveRandomWeaponFromHero();
+            // if (king.activeWeapon != null)
+            // {
+                // king.activeWeaponImpl = new Weapon(_me, king.activeWeapon);
+            // }
 
 
             bool sics = false;
             king.enableAllPhysics(Ref<bool>.From(ref sics));
-            // king.setPosCase(Game.Class.ME.hero.cx, Game.Class.ME.hero.cy, Game.Class.ME.hero.xr, Game.Class.ME.hero.yr);
             king.visible = true;
             var miniMap = ModEntry.miniMap;
             if (miniMap != null && _me._level == king._level)
@@ -162,36 +168,6 @@ namespace DeadCellsMultiplayerMod
             king?.setPosPixel(x, y - 0.2d);
         }
 
-        public void PlayAnimation(string anim, int? queueAnim = null, bool? g = null)
-        {
-            if (king == null || king.spr == null || king.spr._animManager == null) return;
-            if (string.IsNullOrWhiteSpace(anim)) return;
-            if (stopanim == true) return;
-            var animManager = king.spr._animManager;
-            
-
-            try
-            {
-                animManager.stopWithoutStateAnims(anim.AsHaxeString(), queueAnim);
-                animManager.setFrame((int)RestartFrameIndex);
-            }
-            catch { }
-
-            animManager.play(anim.AsHaxeString(), queueAnim, g);
-        }
-
-        public void HandleRemoteAnim(NetNode? net)
-        {
-            if (net == null || king == null || king.spr == null) return;
-
-            if (net.TryGetRemoteAnim(out var anim, out var queueAnim, out var g) && !string.IsNullOrWhiteSpace(anim))
-            {
-                _lastRemoteAnim = anim;
-                _lastRemoteAnimQueue = queueAnim;
-                _lastRemoteAnimG = g;
-                PlayAnimation(anim, queueAnim, g);
-            }
-        }
 
         public void SetLabel(Entity entity, string? text)
         {
@@ -209,13 +185,16 @@ namespace DeadCellsMultiplayerMod
                 _labels.Remove(entity);
             }
             _Assets _Assets = Assets.Class;
-            dc.h2d.Text text_h2d = _Assets.makeText(text.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), true, entity.spr);
+            dc.h2d.Text text_h2d = _Assets.makeText(text.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), null, entity.spr);
             text_h2d.y -= 80;
             text_h2d.x -= 2.5 * text.Length;
-            text_h2d.font.size = 18;
+            text_h2d.font.size = 9;
             text_h2d.alpha = 0.8;
-            text_h2d.scaleX = 0.6d;
-            text_h2d.scaleY = 0.6d;
+            var win = dc.hxd.Window.Class.getInstance();
+            double screenWidth = win.get_width();
+            var scale = screenWidth <= 1920? 0.6d : 0.4d;
+            text_h2d.scaleX = scale;
+            text_h2d.scaleY = scale;
             text_h2d.textColor = 0;
             _labels[entity] = text_h2d;
         }

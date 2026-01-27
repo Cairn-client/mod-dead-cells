@@ -1,43 +1,48 @@
+using System;
+using System.Reflection;
 using dc;
 using dc.en;
+using dc.haxe.ds;
 using dc.h3d.mat;
 using dc.hl.types;
+using dc.hxd;
 using dc.libs.heaps.slib;
 using dc.pow;
 using dc.pr;
 using dc.shader;
 using dc.tool;
+using Hashlink.Virtuals;
 using ModCore.Storage;
 using ModCore.Utitities;
+using dc.spine.support.utils;
 
 namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 {
-    public class GhostKing : KingSkin,
-    IHxbitSerializable<GhostKing.KingData>
+    public class GhostKing : KingSkin, IHxbitSerializable<object>
     {
+        // public KingActiveSkillsManager? activeSkillsManager;
+        // public InventItem? activeWeapon;
+        public Weapon? activeWeaponImpl;
+        public StringMap? animationTracks;
+
+        public HeroHead head;
+
+        ScarfManager scarf;
+
+        public GhostKing() : base(null, 0, 0)
+        {
+        }
+
         public GhostKing(Level lvl, int x, int y) : base(lvl, x, y)
         {
         }
-        private KingData kingData = new();
-        private class KingData
+        object IHxbitSerializable<object>.GetData()
         {
-            public GhostKing king = null!;
+            return new();
         }
 
-
-        KingData IHxbitSerializable<KingData>.GetData()
+        void IHxbitSerializable<object>.SetData(object data)
         {
-            if (this!=null)
-            {
-                this.kingData.king = this;
-            }
-            
-            return kingData;
-        }
-
-        void IHxbitSerializable<KingData>.SetData(KingData data)
-        {
-
         }
 
 
@@ -46,17 +51,39 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             base.init();
         }
 
+
+        public void initScarf()
+        {
+            ScarfManager scarf;
+            if (this.scarf == null)
+            {
+                scarf = new ScarfManager(this);
+                this.scarf = scarf;
+                return;
+            }
+            this.scarf.dispose();
+            scarf = new ScarfManager(this);
+            scarf.owner = this;
+
+            this.scarf = scarf;
+        }
+
+
         public override void initGfx()
         {
             base.initGfx();
             var remoteSkin = ModEntry.Instance!.remoteSkin;
             if (remoteSkin == null) remoteSkin = "PrisonerDefault";
+            virtual_colorMap_consoleCmdId_glowData_group_head_incompatibleHeads_item_model_onlyDefaultHead_scarfBlendMode_scarfs_ skinInfo =
+                Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString());
+            animationTracks = ResolveAnimationTracks(skinInfo);
             dc.String group = "idle".AsHaxeString();
-            SpriteLib heroLib = Assets.Class.getHeroLib(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
+            SpriteLib heroLib = Assets.Class.getHeroLib(skinInfo);
             Texture normalMapFromGroup = heroLib.getNormalMapFromGroup(group);
             int? dp_ROOM_MAIN_HERO = Const.Class.DP_ROOM_MAIN_HERO;
             this.initSprite(heroLib, group, 0.5, 0.5, dp_ROOM_MAIN_HERO, true, null, normalMapFromGroup);
-            this.initColorMap(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
+            initScarf();
+            this.initColorMap(skinInfo);
 
             // glow
             // ArrayObj glowData = CdbTypeConverter.Class.getGlowData(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
@@ -89,6 +116,26 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             General = 0.9 + Math;
             var decayStart = 5.0 * General;
             this.createLight(1161471, radiusCase, decayStart, 0.35);
+
+        }
+
+        private static StringMap? ResolveAnimationTracks(
+            virtual_colorMap_consoleCmdId_glowData_group_head_incompatibleHeads_item_model_onlyDefaultHead_scarfBlendMode_scarfs_ skinInfo)
+        {
+            if (skinInfo == null)
+            {
+                return null;
+            }
+
+            dc._String _String = dc.String.Class;
+            dc.String path = "atlas/".AsHaxeString();
+            path = _String.__add__(_String.__add__(path, skinInfo.model), "_tracks.json".AsHaxeString());
+            if (!Res.Class.get_loader().exists(path))
+            {
+                return null;
+            }
+
+            return Assets.Class.getAnimationTracks(Res.Class.load(path));
         }
 
         public override void onActivate(Hero by, bool longPress)

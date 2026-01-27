@@ -96,10 +96,10 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
         {
             try
             {
-            int key = Cooldown.Encode(Cooldown.Keys.JUMP_HIT);
-            return !ModEntry.me.cd.fastCheck.exists(key);
+                int key = Cooldown.Encode(Cooldown.Keys.JUMP_HIT);
+                return !ModEntry.me.cd.fastCheck.exists(key);
             }
-            catch {return false;}
+            catch { return false; }
         }
         public void Debugkeys()
         {
@@ -375,7 +375,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
 
 
         }
-
+        private bool f = true;
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
             Debugkeys();
