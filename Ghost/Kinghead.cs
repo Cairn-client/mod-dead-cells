@@ -53,6 +53,25 @@ namespace DeadCellsMultiplayerMod.KingHead
         {
         }
 
+        // public new void customHeadFx()
+        // {
+        //     var data = this.forcedCustomHead ?? this._customHeadInfoCache;
+        //     if (data?.particleEffects == null)
+        //         return;
+
+        //     var arr = data.particleEffects;
+        //     for (int i = arr.length - 1; i >= 0; i--)
+        //     {
+        //         if (arr.getDyn(i) == null)
+        //             arr.splice(i, 1);
+        //     }
+
+        //     if (arr.length == 0)
+        //         return;
+
+        //     base.customHeadFx();
+        // }
+
         public override void init(Level parent, dc.h2d.Object fromUI, Ref<bool> fromUI1)
         {
             var headSprite = king?.spr;
@@ -61,19 +80,30 @@ namespace DeadCellsMultiplayerMod.KingHead
             for(int i=0; i < ModEntry.customHeads.array.length; i++)
             {
                 var cHead = ModEntry.customHeads.getDyn(i);
-                if(cHead.item.ToString() == "HandOfTheKingFlame")
+                if(cHead.item.ToString() == "BobbyFlame")
                 {
-                    var atlas = new Hashlink.Virtuals.virtual_atlas_glowData_item_particleEffects_properties_();
-                    _log.Debug($"Main: {Main.Class.ME.user.getHeroHeadSkinInfos().glowData} \n cHead: {cHead.glowData}");
+                    var data = new Hashlink.Virtuals.virtual_atlas_glowData_item_particleEffects_properties_();
+                    // var data2 = Main.Class.ME.user.getHeroHeadSkinInfos();
                     this.customHead = true;
-                    atlas.atlas = cHead.atlas;
-                    atlas.glowData = cHead.glowData;
-                    atlas.item = cHead.item;
-                    atlas.particleEffects = cHead.particleEffects;
-                    atlas.properties = cHead.properties; 
-                    this.forcedCustomHead = atlas;
-                    this._customHeadInfoCache = atlas;
-                    this._customHeadInfoCache = atlas;
+                    data.atlas = "customHead".AsHaxeString();
+
+                    var glowData = ArrayUtils.CreateDyn();
+                    var glowData_none = ArrayUtils.CreateDyn();
+                    glowData.array.pushDyn(cHead.glowData.getDyn(0));
+                    if(((ArrayObj)glowData.array).getDyn(0) == null) data.glowData = (ArrayObj)glowData_none.array;
+                    else data.glowData = (ArrayObj)glowData.array;
+
+                    data.item = "BobbyFlame".AsHaxeString();
+                    var particleEffects = ArrayUtils.CreateDyn();
+                    particleEffects.array.pushDyn(cHead.particleEffects.getDyn(0));
+                    var particleEffects_none = ArrayUtils.CreateDyn();
+                    if(((ArrayObj)particleEffects.array).getDyn(0) == null) data.particleEffects = (ArrayObj)particleEffects_none.array;
+                    else data.particleEffects = (ArrayObj)particleEffects.array;
+                    var properties = ArrayUtils.CreateDyn();
+                    properties.array.pushDyn(cHead.properties.getDyn(0));
+                    data.properties = (ArrayObj)properties.array; 
+                    this.forcedCustomHead = data;
+                    this._customHeadInfoCache = data;
                 }
             }
             if (headSprite != null)
@@ -92,7 +122,7 @@ namespace DeadCellsMultiplayerMod.KingHead
                     headParticleContainer = new dc.h2d.Object(fromUI);
                 }
                 base.init(parent, headParticleContainer, fromUI1);
-                RebuildHeadParticles(headParticleContainer, headMaterial);
+                // RebuildHeadParticles(headParticleContainer, headMaterial);
                 this.heroHasHead = true;
                 this.alwaysShowHead = true;
                 this.alwaysShowEye = true;
@@ -163,6 +193,7 @@ namespace DeadCellsMultiplayerMod.KingHead
                 this.setForcedPos(headX, headY);
             }
             UpdateHeadFxWithKingContext(c1);
+            this.customHeadFx();
         }
 
         private void UpdateHeadFxWithKingContext(double c1)

@@ -89,16 +89,6 @@ namespace DeadCellsMultiplayerMod
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
         {
             customHeads = cdb.customHead.all;   
-            for(int g=0; g < customHeads.array.length; g++)
-            {
-                var cHead = ModEntry.customHeads.getDyn(g);
-
-                if(cHead.item.ToString() == "HandOfTheKingFlame")
-                {
-                    Logger.Debug($"{cHead.glowData.getDyn(0)}");
-
-                }
-            }
         }
 
 
@@ -296,7 +286,7 @@ namespace DeadCellsMultiplayerMod
             }
             if(me != null && me.heroHead.customHeadSpr != null && ReferenceEquals(self, me.heroHead.customHeadSpr._animManager))
             {
-                SendHeadAnim(play);
+                // SendHeadAnim(play);
             }
 
             return orig(self, plays, queueAnim, g);
