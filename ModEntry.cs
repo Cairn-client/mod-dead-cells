@@ -88,7 +88,7 @@ namespace DeadCellsMultiplayerMod
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
         {
-            customHeads = cdb.customHead.all;   
+            customHeads = cdb.customHead.all;
         }
 
 
@@ -286,7 +286,7 @@ namespace DeadCellsMultiplayerMod
             }
             if(me != null && me.heroHead.customHeadSpr != null && ReferenceEquals(self, me.heroHead.customHeadSpr._animManager))
             {
-                // SendHeadAnim(play);
+                SendHeadAnim(play);
             }
 
             return orig(self, plays, queueAnim, g);

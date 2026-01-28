@@ -80,10 +80,9 @@ namespace DeadCellsMultiplayerMod.KingHead
             for(int i=0; i < ModEntry.customHeads.array.length; i++)
             {
                 var cHead = ModEntry.customHeads.getDyn(i);
-                if(cHead.item.ToString() == "BobbyFlame")
+                if(cHead.item.ToString() == remoteHeadSkin)
                 {
                     var data = new Hashlink.Virtuals.virtual_atlas_glowData_item_particleEffects_properties_();
-                    // var data2 = Main.Class.ME.user.getHeroHeadSkinInfos();
                     this.customHead = true;
                     data.atlas = "customHead".AsHaxeString();
 
@@ -92,18 +91,22 @@ namespace DeadCellsMultiplayerMod.KingHead
                     glowData.array.pushDyn(cHead.glowData.getDyn(0));
                     if(((ArrayObj)glowData.array).getDyn(0) == null) data.glowData = (ArrayObj)glowData_none.array;
                     else data.glowData = (ArrayObj)glowData.array;
-
-                    data.item = "BobbyFlame".AsHaxeString();
+                    
+                    data.item = remoteHeadSkin.AsHaxeString();
                     var particleEffects = ArrayUtils.CreateDyn();
                     particleEffects.array.pushDyn(cHead.particleEffects.getDyn(0));
                     var particleEffects_none = ArrayUtils.CreateDyn();
                     if(((ArrayObj)particleEffects.array).getDyn(0) == null) data.particleEffects = (ArrayObj)particleEffects_none.array;
                     else data.particleEffects = (ArrayObj)particleEffects.array;
                     var properties = ArrayUtils.CreateDyn();
-                    properties.array.pushDyn(cHead.properties.getDyn(0));
+                    for (int b=0; b < cHead.properties.length; b++)
+                    {
+                        properties.array.pushDyn(cHead.properties.getDyn(b));
+                    }
                     data.properties = (ArrayObj)properties.array; 
                     this.forcedCustomHead = data;
                     this._customHeadInfoCache = data;
+
                 }
             }
             if (headSprite != null)
