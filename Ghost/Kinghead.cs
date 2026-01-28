@@ -30,15 +30,18 @@ namespace DeadCellsMultiplayerMod.KingHead
         private bool? useLocalSpace;
         private FPoint? kingLastHeadPos;
 
+        Serilog.ILogger _log;
+
         public Kinghead()
         {
         }
 
-        public Kinghead(Hero _me, GhostKing _kingSkin, Level level)
+        public Kinghead(Hero _me, GhostKing _kingSkin, Level level, Serilog.ILogger log)
         {
             me = _me;
             king = _kingSkin;
             lvl = level;
+            _log = log;
         }
 
         object IHxbitSerializable<object>.GetData()
@@ -50,6 +53,24 @@ namespace DeadCellsMultiplayerMod.KingHead
         {
         }
 
+        // public new void customHeadFx()
+        // {
+        //     var data = this.forcedCustomHead ?? this._customHeadInfoCache;
+        //     if (data?.particleEffects == null)
+        //         return;
+
+        //     var arr = data.particleEffects;
+        //     for (int i = arr.length - 1; i >= 0; i--)
+        //     {
+        //         if (arr.getDyn(i) == null)
+        //             arr.splice(i, 1);
+        //     }
+
+        //     if (arr.length == 0)
+        //         return;
+
+        //     base.customHeadFx();
+        // }
 
         public override void init(Level parent, dc.h2d.Object fromUI, Ref<bool> fromUI1)
         {
@@ -61,24 +82,31 @@ namespace DeadCellsMultiplayerMod.KingHead
                 var cHead = ModEntry.customHeads.getDyn(i);
                 if(cHead.item.ToString() == remoteHeadSkin)
                 {
-                    var atlas = new Hashlink.Virtuals.virtual_atlas_glowData_item_particleEffects_properties_();
-                    try
+                    var data = new Hashlink.Virtuals.virtual_atlas_glowData_item_particleEffects_properties_();
+                    this.customHead = true;
+                    data.atlas = "customHead".AsHaxeString();
+
+                    var glowData = ArrayUtils.CreateDyn();
+                    var glowData_none = ArrayUtils.CreateDyn();
+                    glowData.array.pushDyn(cHead.glowData.getDyn(0));
+                    if(((ArrayObj)glowData.array).getDyn(0) == null) data.glowData = (ArrayObj)glowData_none.array;
+                    else data.glowData = (ArrayObj)glowData.array;
+                    
+                    data.item = remoteHeadSkin.AsHaxeString();
+                    var particleEffects = ArrayUtils.CreateDyn();
+                    particleEffects.array.pushDyn(cHead.particleEffects.getDyn(0));
+                    var particleEffects_none = ArrayUtils.CreateDyn();
+                    if(((ArrayObj)particleEffects.array).getDyn(0) == null) data.particleEffects = (ArrayObj)particleEffects_none.array;
+                    else data.particleEffects = (ArrayObj)particleEffects.array;
+                    var properties = ArrayUtils.CreateDyn();
+                    for (int b=0; b < cHead.properties.length; b++)
                     {
-                        this.customHead = true;
-                        atlas.atlas = cHead.atlas;
-                        atlas.glowData = cHead.glowData;
-                        atlas.item = cHead.item;
-                        atlas.particleEffects = cHead.particleEffects;
-                        atlas.properties = cHead.properties; 
-                        this.forcedCustomHead = atlas;
+                        properties.array.pushDyn(cHead.properties.getDyn(b));
                     }
-                    catch
-                    {
-                        atlas.glowData = cHead.glowData.arrayObj;
-                        atlas.particleEffects = cHead.particleEffects.arrayObj;
-                        atlas.properties = cHead.properties.arrayObj;
-                        this.forcedCustomHead = atlas;
-                    }
+                    data.properties = (ArrayObj)properties.array; 
+                    this.forcedCustomHead = data;
+                    this._customHeadInfoCache = data;
+
                 }
             }
             if (headSprite != null)
@@ -97,7 +125,7 @@ namespace DeadCellsMultiplayerMod.KingHead
                     headParticleContainer = new dc.h2d.Object(fromUI);
                 }
                 base.init(parent, headParticleContainer, fromUI1);
-                RebuildHeadParticles(headParticleContainer, headMaterial);
+                // RebuildHeadParticles(headParticleContainer, headMaterial);
                 this.heroHasHead = true;
                 this.alwaysShowHead = true;
                 this.alwaysShowEye = true;
@@ -168,6 +196,7 @@ namespace DeadCellsMultiplayerMod.KingHead
                 this.setForcedPos(headX, headY);
             }
             UpdateHeadFxWithKingContext(c1);
+            this.customHeadFx();
         }
 
         private void UpdateHeadFxWithKingContext(double c1)
