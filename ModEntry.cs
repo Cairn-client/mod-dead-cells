@@ -35,6 +35,7 @@ using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
 using DeadCellsMultiplayerMod.Tools.ModLang;
 using DeadCellsMultiplayerMod.KingHead;
+using dc.steam.ugc;
 
 
 namespace DeadCellsMultiplayerMod
@@ -88,6 +89,16 @@ namespace DeadCellsMultiplayerMod
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
         {
             customHeads = cdb.customHead.all;   
+            for(int g=0; g < customHeads.array.length; g++)
+            {
+                var cHead = ModEntry.customHeads.getDyn(g);
+
+                if(cHead.item.ToString() == "HandOfTheKingFlame")
+                {
+                    Logger.Debug($"{cHead.glowData.getDyn(0)}");
+
+                }
+            }
         }
 
 
@@ -322,7 +333,7 @@ namespace DeadCellsMultiplayerMod
                 clients[i] = _ghost.CreateGhostKing(me._level);
 
                 bool fromUI = false;
-                var newHead = new Kinghead(me, clients[i], me._level);
+                var newHead = new Kinghead(me, clients[i], me._level, Logger);
                 newHead.init(me._level, null, Ref<bool>.From(ref fromUI));
 
                 clientHeads[i] = newHead;

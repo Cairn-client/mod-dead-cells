@@ -30,15 +30,18 @@ namespace DeadCellsMultiplayerMod.KingHead
         private bool? useLocalSpace;
         private FPoint? kingLastHeadPos;
 
+        Serilog.ILogger _log;
+
         public Kinghead()
         {
         }
 
-        public Kinghead(Hero _me, GhostKing _kingSkin, Level level)
+        public Kinghead(Hero _me, GhostKing _kingSkin, Level level, Serilog.ILogger log)
         {
             me = _me;
             king = _kingSkin;
             lvl = level;
+            _log = log;
         }
 
         object IHxbitSerializable<object>.GetData()
@@ -50,7 +53,6 @@ namespace DeadCellsMultiplayerMod.KingHead
         {
         }
 
-
         public override void init(Level parent, dc.h2d.Object fromUI, Ref<bool> fromUI1)
         {
             var headSprite = king?.spr;
@@ -59,26 +61,19 @@ namespace DeadCellsMultiplayerMod.KingHead
             for(int i=0; i < ModEntry.customHeads.array.length; i++)
             {
                 var cHead = ModEntry.customHeads.getDyn(i);
-                if(cHead.item.ToString() == remoteHeadSkin)
+                if(cHead.item.ToString() == "HandOfTheKingFlame")
                 {
                     var atlas = new Hashlink.Virtuals.virtual_atlas_glowData_item_particleEffects_properties_();
-                    try
-                    {
-                        this.customHead = true;
-                        atlas.atlas = cHead.atlas;
-                        atlas.glowData = cHead.glowData;
-                        atlas.item = cHead.item;
-                        atlas.particleEffects = cHead.particleEffects;
-                        atlas.properties = cHead.properties; 
-                        this.forcedCustomHead = atlas;
-                    }
-                    catch
-                    {
-                        atlas.glowData = cHead.glowData.arrayObj;
-                        atlas.particleEffects = cHead.particleEffects.arrayObj;
-                        atlas.properties = cHead.properties.arrayObj;
-                        this.forcedCustomHead = atlas;
-                    }
+                    _log.Debug($"Main: {Main.Class.ME.user.getHeroHeadSkinInfos().glowData} \n cHead: {cHead.glowData}");
+                    this.customHead = true;
+                    atlas.atlas = cHead.atlas;
+                    atlas.glowData = cHead.glowData;
+                    atlas.item = cHead.item;
+                    atlas.particleEffects = cHead.particleEffects;
+                    atlas.properties = cHead.properties; 
+                    this.forcedCustomHead = atlas;
+                    this._customHeadInfoCache = atlas;
+                    this._customHeadInfoCache = atlas;
                 }
             }
             if (headSprite != null)
