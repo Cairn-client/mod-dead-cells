@@ -471,6 +471,22 @@ public sealed class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("GENCFG|"))
+        {
+            var payload = line["GENCFG|".Length..];
+            lock (_sync) _hasRemote = true;
+            GameDataSync.ReceiveRoomGenConfig(payload);
+            return true;
+        }
+
+        if (line.StartsWith("LORE|"))
+        {
+            var payload = line["LORE|".Length..];
+            lock (_sync) _hasRemote = true;
+            GameDataSync.ReceiveLoreRequirement(payload);
+            return true;
+        }
+
         if (line.StartsWith("BOSSRUNE|"))
         {
             var payload = line["BOSSRUNE|".Length..];
@@ -1136,6 +1152,33 @@ public sealed class NetNode : IDisposable
         var line = $"SEED|{seed}\n";
         _ = SendLineSafe(line);
         _log.Information("[NetNode] Sent seed {Seed}", seed);
+    }
+
+    public void SendRoomGenConfig(bool disableLoreRooms, int fixedSeed)
+    {
+        if (!HasAnyConnection())
+        {
+            _log.Information("[NetNode] Skip sending room gen config: no connected client");
+            return;
+        }
+
+        var disablePart = disableLoreRooms ? "1" : "0";
+        SendRaw($"GENCFG|{disablePart}|{fixedSeed}");
+        _log.Information("[NetNode] Sent room gen config");
+    }
+
+    public void SendLoreRequirement(string levelId, bool required)
+    {
+        if (!HasAnyConnection())
+        {
+            _log.Information("[NetNode] Skip sending lore requirement: no connected client");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(levelId))
+            return;
+
+        var requiredPart = required ? "1" : "0";
+        SendRaw($"LORE|{levelId}|{requiredPart}");
     }
 
     public void SendUsername(string username)

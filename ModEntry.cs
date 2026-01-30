@@ -190,6 +190,8 @@ namespace DeadCellsMultiplayerMod
             Hook_Hero.onLevelChanged += hook_level_changed;
             Hook_User.newGame += GameDataSync.user_hook_new_game;
             Hook_LevelGen.generate += GameDataSync.hook_generate;
+            Hook_LevelGen.generateGraph += GameDataSync.hook_generateGraph;
+            Hook_StoryManager.levelRequiresLoreRoom += GameDataSync.hook_levelRequiresLoreRoom;
             Hook_AnimManager.play += Hook_AnimManager_play;
             Hook_MiniMap.track += Hook_MiniMap_track;
             Hook__LevelStruct.get += Hook__LevelStruct_get;
