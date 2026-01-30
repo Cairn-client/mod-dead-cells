@@ -75,40 +75,7 @@ namespace DeadCellsMultiplayerMod.KingHead
         public override void init(Level parent, dc.h2d.Object fromUI, Ref<bool> fromUI1)
         {
             var headSprite = king?.spr;
-            var remoteHeadSkin = ModEntry.Instance!.remoteHeadSkin;
-            if (remoteHeadSkin == null) remoteHeadSkin = "BaseFlame";
-            for(int i=0; i < ModEntry.customHeads.array.length; i++)
-            {
-                var cHead = ModEntry.customHeads.getDyn(i);
-                if(cHead.item.ToString() == remoteHeadSkin)
-                {
-                    var data = new Hashlink.Virtuals.virtual_atlas_glowData_item_particleEffects_properties_();
-                    this.customHead = true;
-                    data.atlas = "customHead".AsHaxeString();
-
-                    var glowData = ArrayUtils.CreateDyn();
-                    var glowData_none = ArrayUtils.CreateDyn();
-                    glowData.array.pushDyn(cHead.glowData.getDyn(0));
-                    if(((ArrayObj)glowData.array).getDyn(0) == null) data.glowData = (ArrayObj)glowData_none.array;
-                    else data.glowData = (ArrayObj)glowData.array;
-                    
-                    data.item = remoteHeadSkin.AsHaxeString();
-                    var particleEffects = ArrayUtils.CreateDyn();
-                    particleEffects.array.pushDyn(cHead.particleEffects.getDyn(0));
-                    var particleEffects_none = ArrayUtils.CreateDyn();
-                    if(((ArrayObj)particleEffects.array).getDyn(0) == null) data.particleEffects = (ArrayObj)particleEffects_none.array;
-                    else data.particleEffects = (ArrayObj)particleEffects.array;
-                    var properties = ArrayUtils.CreateDyn();
-                    for (int b=0; b < cHead.properties.length; b++)
-                    {
-                        properties.array.pushDyn(cHead.properties.getDyn(b));
-                    }
-                    data.properties = (ArrayObj)properties.array; 
-                    this.forcedCustomHead = data;
-                    this._customHeadInfoCache = data;
-
-                }
-            }
+            ApplyRemoteHeadSkin(king?.RemoteHeadSkinId ?? ModEntry.Instance?.remoteHeadSkin);
             if (headSprite != null)
             {
                 headMaterial = headSprite.frameData?.tile;
@@ -135,6 +102,55 @@ namespace DeadCellsMultiplayerMod.KingHead
             this.heroHasHead = true;
             this.alwaysShowHead = true;
             this.alwaysShowEye = true;
+        }
+
+        public void ApplyRemoteHeadSkin(string? headSkin)
+        {
+            var remoteHeadSkin = string.IsNullOrWhiteSpace(headSkin) ? "BaseFlame" : headSkin.Replace("|", "/").Trim();
+            this.customHead = false;
+            this.forcedCustomHead = null;
+            this._customHeadInfoCache = null;
+
+            var allHeads = ModEntry.customHeads;
+            if (allHeads == null)
+                return;
+
+            for (int i = 0; i < allHeads.array.length; i++)
+            {
+                var cHead = allHeads.getDyn(i);
+                if (cHead.item.ToString() == remoteHeadSkin)
+                {
+                    var data = new Hashlink.Virtuals.virtual_atlas_glowData_item_particleEffects_properties_();
+                    this.customHead = true;
+                    data.atlas = "customHead".AsHaxeString();
+
+                    var glowData = ArrayUtils.CreateDyn();
+                    var glowDataNone = ArrayUtils.CreateDyn();
+                    glowData.array.pushDyn(cHead.glowData.getDyn(0));
+                    if (((ArrayObj)glowData.array).getDyn(0) == null)
+                        data.glowData = (ArrayObj)glowDataNone.array;
+                    else
+                        data.glowData = (ArrayObj)glowData.array;
+
+                    data.item = remoteHeadSkin.AsHaxeString();
+                    var particleEffects = ArrayUtils.CreateDyn();
+                    particleEffects.array.pushDyn(cHead.particleEffects.getDyn(0));
+                    var particleEffectsNone = ArrayUtils.CreateDyn();
+                    if (((ArrayObj)particleEffects.array).getDyn(0) == null)
+                        data.particleEffects = (ArrayObj)particleEffectsNone.array;
+                    else
+                        data.particleEffects = (ArrayObj)particleEffects.array;
+
+                    var properties = ArrayUtils.CreateDyn();
+                    for (int b = 0; b < cHead.properties.length; b++)
+                        properties.array.pushDyn(cHead.properties.getDyn(b));
+                    data.properties = (ArrayObj)properties.array;
+
+                    this.forcedCustomHead = data;
+                    this._customHeadInfoCache = data;
+                    return;
+                }
+            }
         }
 
         private void RebuildHeadParticles(dc.h2d.Object particleParent, dc.h2d.Tile? material)

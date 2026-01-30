@@ -26,6 +26,8 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         public StringMap? animationTracks;
 
         public HeroHead head;
+        public string? RemoteSkinId;
+        public string? RemoteHeadSkinId;
 
         ScarfManager scarf;
 
@@ -72,7 +74,7 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         public override void initGfx()
         {
             base.initGfx();
-            var remoteSkin = ModEntry.Instance!.remoteSkin;
+            var remoteSkin = RemoteSkinId ?? ModEntry.Instance?.remoteSkin;
             if (remoteSkin == null) remoteSkin = "PrisonerDefault";
             virtual_colorMap_consoleCmdId_glowData_group_head_incompatibleHeads_item_model_onlyDefaultHead_scarfBlendMode_scarfs_ skinInfo =
                 Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString());
@@ -117,6 +119,22 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             var decayStart = 5.0 * General;
             this.createLight(1161471, radiusCase, decayStart, 0.35);
 
+        }
+
+        public void ApplyRemoteSkin(string? skin)
+        {
+            var cleaned = string.IsNullOrWhiteSpace(skin)
+                ? "PrisonerDefault"
+                : skin.Replace("|", "/").Trim();
+            if (string.Equals(RemoteSkinId, cleaned, StringComparison.Ordinal))
+                return;
+
+            RemoteSkinId = cleaned;
+            if (this.spr != null)
+            {
+                this.disposeGfx();
+                this.initGfx();
+            }
         }
 
         private static StringMap? ResolveAnimationTracks(

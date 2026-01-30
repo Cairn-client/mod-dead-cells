@@ -60,6 +60,8 @@ namespace DeadCellsMultiplayerMod
         public static Kinghead?[] clientHeads = new Kinghead?[NetNode.MaxClientSlots];
         public static string?[] clientLabels = new string?[NetNode.MaxClientSlots];
         public static int[] clientIds = new int[NetNode.MaxClientSlots];
+        public static string?[] clientSkins = new string?[NetNode.MaxClientSlots];
+        public static string?[] clientHeadSkins = new string?[NetNode.MaxClientSlots];
         public static Hero me = null;
         public static GhostHero _ghost = null;
 
@@ -117,9 +119,9 @@ namespace DeadCellsMultiplayerMod
         public static string GetClientLabel(int slotIndex)
         {
             if (slotIndex < 0 || slotIndex >= clientLabels.Length)
-                return GameMenu.RemoteUsername;
+                return string.Empty;
 
-            return clientLabels[slotIndex] ?? GameMenu.RemoteUsername;
+            return clientLabels[slotIndex] ?? string.Empty;
         }
 
         internal static GhostKing? GetPrimaryClient()
@@ -147,6 +149,8 @@ namespace DeadCellsMultiplayerMod
                 clients[i] = null!;
                 clientLabels[i] = null;
                 clientIds[i] = 0;
+                clientSkins[i] = null;
+                clientHeadSkins[i] = null;
                 rLastX[i] = 0;
                 rLastY[i] = 0;
             }
@@ -199,7 +203,15 @@ namespace DeadCellsMultiplayerMod
             Hook_Game.pause += Hook_Game_pause;
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
             Hook__TitleScreen.__constructor__ += Hook_TitleScreen__constructor__;
+            // Hook_Hero.onEnterRoom += 
         }
+
+
+        private void Hook_Hero_onLevelChanged()
+        {
+
+        }
+
 
         private void Hook_TitleScreen__constructor__(Hook__TitleScreen.orig___constructor__ orig, TitleScreen playMusic, bool? titleLib)
         {
@@ -331,6 +343,16 @@ namespace DeadCellsMultiplayerMod
                 clientHeads[i] = newHead;
                 clients[i].head = newHead;
 
+                var knownSkin = clientSkins[i];
+                if (!string.IsNullOrWhiteSpace(knownSkin))
+                    clients[i].ApplyRemoteSkin(knownSkin);
+                var knownHead = clientHeadSkins[i];
+                if (!string.IsNullOrWhiteSpace(knownHead))
+                {
+                    clients[i].RemoteHeadSkinId = knownHead;
+                    clientHeads[i]?.ApplyRemoteHeadSkin(knownHead);
+                }
+
                 rLastX[i] = 0;
                 rLastY[i] = 0;
                 clientLabels[i] = null;
@@ -438,6 +460,49 @@ namespace DeadCellsMultiplayerMod
 
             index = mapped;
             return true;
+        }
+
+        internal static void SetClientSkin(int remoteId, string? skin)
+        {
+            var instance = Instance;
+            if (instance == null)
+                return;
+
+            var net = _net;
+            var localId = net?.id ?? 0;
+            if (!TryGetClientIndex(localId, remoteId, out var index))
+                return;
+
+            var cleaned = string.IsNullOrWhiteSpace(skin)
+                ? "PrisonerDefault"
+                : skin.Replace("|", "/").Trim();
+            clientSkins[index] = cleaned;
+
+            var client = clients[index];
+            if (client != null)
+                client.ApplyRemoteSkin(cleaned);
+        }
+
+        internal static void SetClientHeadSkin(int remoteId, string? skin)
+        {
+            var instance = Instance;
+            if (instance == null)
+                return;
+
+            var net = _net;
+            var localId = net?.id ?? 0;
+            if (!TryGetClientIndex(localId, remoteId, out var index))
+                return;
+
+            var cleaned = string.IsNullOrWhiteSpace(skin)
+                ? "BaseFlame"
+                : skin.Replace("|", "/").Trim();
+            clientHeadSkins[index] = cleaned;
+
+            var client = clients[index];
+            if (client != null)
+                client.RemoteHeadSkinId = cleaned;
+            clientHeads[index]?.ApplyRemoteHeadSkin(cleaned);
         }
 
         private void ReceiveGhostCoords()

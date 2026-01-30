@@ -552,16 +552,15 @@ public sealed class NetNode : IDisposable
                     primaryId = _primaryRemoteId;
                 }
 
-                if (effectiveId.Value == primaryId)
+                try
                 {
-                    try
-                    {
+                    ModEntry.SetClientSkin(effectiveId.Value, skin);
+                    if (effectiveId.Value == primaryId)
                         GameDataSync.ReceiveHeroSkin(skin);
-                    }
-                    catch (Exception ex)
-                    {
-                        _log.Warning("[NetNode] Failed to handle hero skin: {msg}", ex.Message);
-                    }
+                }
+                catch (Exception ex)
+                {
+                    _log.Warning("[NetNode] Failed to handle hero skin: {msg}", ex.Message);
                 }
 
                 if (_role == NetRole.Host && senderId.HasValue)
@@ -591,16 +590,15 @@ public sealed class NetNode : IDisposable
                     primaryId = _primaryRemoteId;
                 }
 
-                if (effectiveId.Value == primaryId)
+                try
                 {
-                    try
-                    {
+                    ModEntry.SetClientHeadSkin(effectiveId.Value, skinHead);
+                    if (effectiveId.Value == primaryId)
                         GameDataSync.ReceiveHeroHeadSkin(skinHead);
-                    }
-                    catch (Exception ex)
-                    {
-                        _log.Warning("[NetNode] Failed to handle hero skin: {msg}", ex.Message);
-                    }
+                }
+                catch (Exception ex)
+                {
+                    _log.Warning("[NetNode] Failed to handle hero skin: {msg}", ex.Message);
                 }
 
                 if (_role == NetRole.Host && senderId.HasValue)
