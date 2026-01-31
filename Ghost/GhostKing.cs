@@ -53,9 +53,8 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             this.inventory = ModEntry.me.inventory.clone();
             kingWeaponsManager = new KingWeaponsManager(ModEntry.me, this);
             kingWeaponsManager.init();
-
-            base.init();
             initScarf();
+            base.init();
         }
 
 

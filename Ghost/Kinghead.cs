@@ -53,29 +53,11 @@ namespace DeadCellsMultiplayerMod.KingHead
         {
         }
 
-        // public new void customHeadFx()
-        // {
-        //     var data = this.forcedCustomHead ?? this._customHeadInfoCache;
-        //     if (data?.particleEffects == null)
-        //         return;
-
-        //     var arr = data.particleEffects;
-        //     for (int i = arr.length - 1; i >= 0; i--)
-        //     {
-        //         if (arr.getDyn(i) == null)
-        //             arr.splice(i, 1);
-        //     }
-
-        //     if (arr.length == 0)
-        //         return;
-
-        //     base.customHeadFx();
-        // }
-
         public override void init(Level parent, dc.h2d.Object fromUI, Ref<bool> fromUI1)
         {
             var headSprite = king?.spr;
             ApplyRemoteHeadSkin(king?.RemoteHeadSkinId ?? ModEntry.Instance?.remoteHeadSkin);
+            _log.Debug($"{king?.RemoteHeadSkinId}|{ModEntry.Instance?.remoteHeadSkin}");
             if (headSprite != null)
             {
                 headMaterial = headSprite.frameData?.tile;
@@ -92,7 +74,6 @@ namespace DeadCellsMultiplayerMod.KingHead
                     headParticleContainer = new dc.h2d.Object(fromUI);
                 }
                 base.init(parent, headParticleContainer, fromUI1);
-                // RebuildHeadParticles(headParticleContainer, headMaterial);
                 this.heroHasHead = true;
                 this.alwaysShowHead = true;
                 this.alwaysShowEye = true;
@@ -153,35 +134,6 @@ namespace DeadCellsMultiplayerMod.KingHead
             }
         }
 
-        private void RebuildHeadParticles(dc.h2d.Object particleParent, dc.h2d.Tile? material)
-        {
-            if (material == null)
-            {
-                return;
-            }
-
-            if (this.pool != null)
-            {
-                this.pool.dispose();
-            }
-            this.pool = new ParticlePool(material, 100, 30);
-
-            if (this.headNormalSb != null && this.headNormalSb.parent != null)
-            {
-                this.headNormalSb.parent.removeChild(this.headNormalSb);
-            }
-            if (this.headAddSb != null && this.headAddSb.parent != null)
-            {
-                this.headAddSb.parent.removeChild(this.headAddSb);
-            }
-
-            this.headNormalSb = new HSpriteBatch(material, particleParent);
-            this.headNormalSb.hasRotationScale = true;
-
-            this.headAddSb = new HSpriteBatch(material, particleParent);
-            this.headAddSb.hasRotationScale = true;
-            this.headAddSb.blendMode = new dc.h2d.BlendMode.Add();
-        }
         public override void updateHeadFx(double c1)
         {
             if (king == null)

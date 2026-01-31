@@ -88,7 +88,6 @@ namespace DeadCellsMultiplayerMod
         public static ArrayDyn customHeads;
 
         public InventItem inventItem;
-        private bool _inventoryAddGuard;
         private bool _inventorySyncGuard;
 
 
@@ -226,35 +225,10 @@ namespace DeadCellsMultiplayerMod
 
             var result = orig(self, i);
 
-            if(_netRole != NetRole.None)
-            {
-                if(IsLocalInventory(self))
-                    SendEquippedWeapons(self);
-                return result;
-            }
+            if(_netRole != NetRole.None && IsLocalInventory(self))
+                SendEquippedWeapons(self);
 
-            if(_inventoryAddGuard)
-                return result;
-
-            _inventoryAddGuard = true;
-            try
-            {
-                var king = GetPrimaryClient();
-                if(king != null && king.inventory != null && i != null && !ReferenceEquals(self, king.inventory))
-                {
-                    var existing = king.inventory.getByPermanentId(i.permanentId);
-                    if(existing == null)
-                    {
-                        king.inventory.add(i);
-                        king.inventory.equip(i);
-                    }
-                }
-                return result;
-            }
-            finally
-            {
-                _inventoryAddGuard = false;
-            }
+            return result;
         }
 
         private bool Hook_Inventory_equip(Hook_Inventory.orig_equip orig, Inventory self, InventItem i)
@@ -515,11 +489,6 @@ namespace DeadCellsMultiplayerMod
             ReceiveGhostAttacks();
             UpdateGhostWeapons();
             UpdateGhostHeads();
-        }
-
-        private void Attacking()
-        {
-            UpdateGhostWeapons();
         }
 
         private void UpdateGhostHeads()
