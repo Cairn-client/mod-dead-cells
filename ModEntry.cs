@@ -393,7 +393,13 @@ namespace DeadCellsMultiplayerMod
 
         private AnimManager Hook_AnimManager_play(Hook_AnimManager.orig_play orig, AnimManager self, dc.String plays, int? queueAnim, bool? g)
         {
+            if(plays == null)
+                return orig(self, plays, queueAnim, g);
+
             var play = plays.ToString();
+            if(string.IsNullOrWhiteSpace(play))
+                return orig(self, plays, queueAnim, g);
+
             if (me != null && me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
             {
                 if (!IsAttackAnim(play))

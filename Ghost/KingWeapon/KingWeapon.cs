@@ -20,6 +20,8 @@ namespace DeadCellsMultiplayerMod.Ghost
         private static ObjFieldInfoCache _cachedAnimId;
         private static ObjFieldInfoCache _cachedAnimSpd;
         private static ObjFieldInfoCache _cachedFxId;
+        private static ObjFieldInfoCache _cachedProps;
+        private static ObjFieldInfoCache _cachedAltAnim;
 
         public KingWeapon(Hero owner, InventItem item, KingSkin source) : base(owner, item)
         {
@@ -51,43 +53,55 @@ namespace DeadCellsMultiplayerMod.Ghost
             }
 
             var fxId = ReadFxId(cinf);
-            if(fxId != null)
+            if(fxId == null)
+                return;
+
+            var lib = Assets.Class.fxWeapon;
+            var groups = lib?.groups;
+            if(groups == null || !groups.exists(fxId))
             {
-                var lib = Assets.Class.fxWeapon;
-                var groups = lib?.groups;
-                if(groups == null || !groups.exists(fxId))
-                {
-                    return;
-                }
-                var group = groups.get(fxId) as LibGroup;
-                if(group == null || group.frames == null || group.frames.length == 0)
-                {
-                    return;
-                }
+                return;
+            }
+            var group = groups.get(fxId) as LibGroup;
+            if(group == null || group.frames == null || group.frames.length == 0)
+            {
+                return;
             }
 
             var fx = source?._level?.fx ?? owner?._level?.fx;
             if(fx == null) return;
 
             var castSpeed = get_curSkill()?.getCastSpeed() ?? 1.0;
-            if(source?.spr != null)
+            try
             {
-                lastFx = fx.playWeaponAnimFromObject(source.spr, cinf, castSpeed, null, null, null, null, null);
+                if(source?.spr != null)
+                {
+                    lastFx = fx.playWeaponAnimFromObject(source.spr, cinf, castSpeed, null, null, null, null, null);
+                }
+                else
+                {
+                    lastFx = fx.playWeaponAnim(owner, cinf, castSpeed, null, null, null);
+                }
             }
-            else
+            catch
             {
-                lastFx = fx.playWeaponAnim(owner, cinf, castSpeed, null, null, null);
+                return;
             }
         }
 
         public override void dynOnAttackAnim(WeaponSkill s, virtual_animId_animSpd_area_breachBonus_canCrit_charge_coolDown_critMul_dynamicCharge_earlyCombo_fxId_fxProps_glowColor_hitFrame_lockCtrlAfter_onionSkinFrame_onionSkinOffX_power_props_sfxCharge_sfxHit_sfxProps_sfxRelease_ a)
         {
-            var animId = ReadAnimId(a);
-            if(animId == null) return;
-
             var spr = source?.spr;
             var anim = spr?.get_anim();
             if(anim == null) return;
+
+            var animId = ReadAnimId(a);
+            if(!HasGroup(spr, animId))
+            {
+                animId = ReadAltAnim(a);
+                if(!HasGroup(spr, animId))
+                    return;
+            }
 
             var animManager = anim.play(animId, null, null);
             var animManager2 = animManager.stopOnLastFrame(Ref<bool>.Null);
@@ -230,6 +244,36 @@ namespace DeadCellsMultiplayerMod.Ghost
             {
                 return null;
             }
+        }
+
+        private static dc.String ReadAltAnim(virtual_animId_animSpd_area_breachBonus_canCrit_charge_coolDown_critMul_dynamicCharge_earlyCombo_fxId_fxProps_glowColor_hitFrame_lockCtrlAfter_onionSkinFrame_onionSkinOffX_power_props_sfxCharge_sfxHit_sfxProps_sfxRelease_ a)
+        {
+            if(a == null) return null;
+            try
+            {
+                var rawProps = HaxeProxyHelper.GetFieldById<object>((HaxeProxyBase)(object)a, "props", ref _cachedProps);
+                if(rawProps == null) return null;
+                var propsBase = rawProps as HaxeProxyBase;
+                if(propsBase == null) return null;
+                var raw = HaxeProxyHelper.GetFieldById<object>(propsBase, "altAnim", ref _cachedAltAnim);
+                if(raw == null) return null;
+                if(raw is dc.String hs) return hs;
+                if(raw is string s) return s.AsHaxeString();
+                return null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool HasGroup(dc.libs.heaps.slib.HSprite spr, dc.String group)
+        {
+            if(spr == null || group == null) return false;
+            var lib = spr.lib;
+            var groups = lib?.groups;
+            if(groups == null) return false;
+            return groups.exists(group);
         }
 
         private void WithKingContext(Action action)
