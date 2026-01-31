@@ -24,6 +24,7 @@ namespace DeadCellsMultiplayerMod.Ghost
         {
             _KingWeapon.__inst_construct__(this, source);
             BindAreasToSource();
+            PatchSkills();
         }
 
         public override double get_shootX()
@@ -115,16 +116,20 @@ namespace DeadCellsMultiplayerMod.Ghost
 
         public override void prepare(double attackSpeed)
         {
+            PatchCurrentSkill();
             WithKingContext(() => base.prepare(attackSpeed));
+            PatchCurrentSkill();
         }
 
         public override void fixedUpdate()
         {
+            PatchCurrentSkill();
             WithKingContext(base.fixedUpdate);
         }
 
         public override void postUpdate()
         {
+            PatchCurrentSkill();
             WithKingContext(base.postUpdate);
         }
 
@@ -149,6 +154,27 @@ namespace DeadCellsMultiplayerMod.Ghost
                     a.setRelativePos(source, a.x, a.y);
                 }
             }
+        }
+
+        private void PatchSkills()
+        {
+            if(skills == null) return;
+            var arr = skills;
+            for(int i = 0; i < arr.length; i++)
+            {
+                var s = arr.array[i] as WeaponSkill;
+                if(s == null) continue;
+                s.lockControlsAfterUseS = 0.0;
+                s.canMoveDuringCharge = true;
+            }
+        }
+
+        private void PatchCurrentSkill()
+        {
+            var s = get_curSkill();
+            if(s == null) return;
+            s.lockControlsAfterUseS = 0.0;
+            s.canMoveDuringCharge = true;
         }
 
         private static double? ReadAnimSpd(virtual_animId_animSpd_area_breachBonus_canCrit_charge_coolDown_critMul_dynamicCharge_earlyCombo_fxId_fxProps_glowColor_hitFrame_lockCtrlAfter_onionSkinFrame_onionSkinOffX_power_props_sfxCharge_sfxHit_sfxProps_sfxRelease_ a)
