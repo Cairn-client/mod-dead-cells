@@ -7,6 +7,8 @@ namespace DeadCellsMultiplayerMod.Tools
     {
         private const double ReferenceWidth = 1920.0;
         private const double ReferenceHeight = 1080.0;
+        private const double MinScale = 0.9;
+        private const double MaxScale = 1.15;
 
         public static double GetResolutionScale()
         {
@@ -24,7 +26,17 @@ namespace DeadCellsMultiplayerMod.Tools
             if (scaleW <= 0 || scaleH <= 0)
                 return 1.0;
 
-            return System.Math.Min(scaleW, scaleH);
+            var scale = System.Math.Min(scaleW, scaleH);
+            if (scale <= 0)
+                return 1.0;
+
+            // Ease scaling: boost small windows, tame large resolutions.
+            scale = System.Math.Sqrt(scale);
+            if (scale < MinScale)
+                scale = MinScale;
+            if (scale > MaxScale)
+                scale = MaxScale;
+            return scale;
         }
     }
 }

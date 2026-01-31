@@ -74,6 +74,8 @@ namespace DeadCellsMultiplayerMod
         private const int KeyRCtrl = 163;
         private const int KeyC = 67;
         private const int KeyV = 86;
+        private const int KeySpace = 32;
+        private const int KeyEsc = 27;
         // Win32 clipboard helpers for text input shortcuts.
         private const uint CfUnicodeText = 13;
         private const uint GmemMoveable = 0x0002;
@@ -1424,6 +1426,32 @@ namespace DeadCellsMultiplayerMod
 
             if (_activeTextInputNoSpaces)
                 RemoveSpacesFromTextInput(textInput);
+
+            if (dc.hxd.Key.Class.isPressed(KeyEsc))
+            {
+                try
+                {
+                    textInput.cancel();
+                }
+                finally
+                {
+                    ClearActiveTextInput();
+                }
+                return;
+            }
+
+            if (dc.hxd.Key.Class.isPressed(KeySpace))
+            {
+                try
+                {
+                    textInput.validate();
+                }
+                finally
+                {
+                    ClearActiveTextInput();
+                }
+                return;
+            }
 
             if (!IsCtrlDown())
                 return;

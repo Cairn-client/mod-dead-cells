@@ -15,6 +15,7 @@ using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using DeadCellsMultiplayerMod.MultiplayerModUI;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using dc.tool;
+using DeadCellsMultiplayerMod.Tools;
 
 
 namespace DeadCellsMultiplayerMod
@@ -179,13 +180,12 @@ namespace DeadCellsMultiplayerMod
             }
             _Assets _Assets = Assets.Class;
             dc.h2d.Text text_h2d = _Assets.makeText(text.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), null, entity.spr);
+            var uiScale = UiScale.GetResolutionScale();
+            var scale = 0.8 * uiScale;
             text_h2d.y -= 80;
             text_h2d.x -= 2.5 * text.Length;
-            text_h2d.font.size = 9;
+            text_h2d.font.size = 12;
             text_h2d.alpha = 0.8;
-            var win = dc.hxd.Window.Class.getInstance();
-            double screenWidth = win.get_width();
-            var scale = screenWidth <= 1920? 0.6d : 0.4d;
             text_h2d.scaleX = scale;
             text_h2d.scaleY = scale;
             text_h2d.textColor = 0;
@@ -208,18 +208,25 @@ namespace DeadCellsMultiplayerMod
                     continue;
                 }
 
-                var baseScale = global::System.Math.Abs(label.scaleX);
-                var baseOffset = global::System.Math.Abs(label.x);
+                var textValue = label.text?.ToString() ?? string.Empty;
+                int len = textValue.Length;
+                var uiScale = UiScale.GetResolutionScale();
+                var targetScale = 0.8 * uiScale;
+                if(targetScale <= 0.6) targetScale = 0.6;
+                var targetX = -2.5 * len;
+                var targetY = -80;
                 if (entity.dir < 0)
                 {
-                    label.scaleX = -baseScale;
-                    label.x = baseOffset;
+                    label.scaleX = -targetScale;
+                    label.x = -targetX;
                 }
                 else
                 {
-                    label.scaleX = baseScale;
-                    label.x = -baseOffset;
+                    label.scaleX = targetScale;
+                    label.x = targetX;
                 }
+                label.scaleY = targetScale;
+                label.y = targetY;
             }
 
             if (toRemove == null) return;
