@@ -343,6 +343,7 @@ namespace DeadCellsMultiplayerMod
             orig(self, dt);
             GameMenu.ProcessMainThreadQueue();
             GameMenu.HandleTextInputClipboardShortcuts();
+            _ghost?.UpdateLabels();
         }
 
 
@@ -441,7 +442,6 @@ namespace DeadCellsMultiplayerMod
                 if (!string.IsNullOrWhiteSpace(knownHead))
                 {
                     clients[i].RemoteHeadSkinId = knownHead;
-                    clientHeads[i]?.ApplyRemoteHeadSkin(knownHead);
                 }
 
                 rLastX[i] = 0;
@@ -596,7 +596,6 @@ namespace DeadCellsMultiplayerMod
             var client = clients[index];
             if (client != null)
                 client.RemoteHeadSkinId = cleaned;
-            clientHeads[index]?.ApplyRemoteHeadSkin(cleaned);
         }
 
         private void ReceiveGhostCoords()

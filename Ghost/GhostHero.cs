@@ -192,5 +192,42 @@ namespace DeadCellsMultiplayerMod
             _labels[entity] = text_h2d;
         }
 
+        public void UpdateLabels()
+        {
+            if (_labels.Count == 0) return;
+            List<Entity>? toRemove = null;
+            foreach (var pair in _labels)
+            {
+                var entity = pair.Key;
+                var label = pair.Value;
+                if (entity == null || label == null || entity.spr == null || label.parent == null)
+                {
+                    toRemove ??= new List<Entity>();
+                    if (entity != null)
+                        toRemove.Add(entity);
+                    continue;
+                }
+
+                var baseScale = global::System.Math.Abs(label.scaleX);
+                var baseOffset = global::System.Math.Abs(label.x);
+                if (entity.dir < 0)
+                {
+                    label.scaleX = -baseScale;
+                    label.x = baseOffset;
+                }
+                else
+                {
+                    label.scaleX = baseScale;
+                    label.x = -baseOffset;
+                }
+            }
+
+            if (toRemove == null) return;
+            for (int i = 0; i < toRemove.Count; i++)
+            {
+                _labels.Remove(toRemove[i]);
+            }
+        }
+
     }
 }

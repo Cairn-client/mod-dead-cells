@@ -56,42 +56,9 @@ namespace DeadCellsMultiplayerMod.KingHead
         public override void init(Level parent, dc.h2d.Object fromUI, Ref<bool> fromUI1)
         {
             var headSprite = king?.spr;
-            ApplyRemoteHeadSkin(king?.RemoteHeadSkinId ?? ModEntry.Instance?.remoteHeadSkin);
-            _log.Debug($"{king?.RemoteHeadSkinId}|{ModEntry.Instance?.remoteHeadSkin}");
-            if (headSprite != null)
-            {
-                headMaterial = headSprite.frameData?.tile;
-                headSkeleton = ResolveHeadSkeleton(headSprite);
-                var useLocal = UseLocalSpace();
-                if (useLocal)
-                {
-                    headContainer = new dc.h2d.Object(headSprite);
-                    headParticleContainer = new dc.h2d.Object(headContainer);
-                }
-                else
-                {
-                    headContainer = null;
-                    headParticleContainer = new dc.h2d.Object(fromUI);
-                }
-                base.init(parent, headParticleContainer, fromUI1);
-                this.heroHasHead = true;
-                this.alwaysShowHead = true;
-                this.alwaysShowEye = true;
-                return;
-            }
-            base.init(parent, fromUI, fromUI1);
-            this.heroHasHead = true;
-            this.alwaysShowHead = true;
-            this.alwaysShowEye = true;
-        }
-
-        public void ApplyRemoteHeadSkin(string? headSkin)
-        {
-            var remoteHeadSkin = string.IsNullOrWhiteSpace(headSkin) ? "BaseFlame" : headSkin.Replace("|", "/").Trim();
-
+            var remoteHeadSkin = ModEntry.Instance?.remoteHeadSkin;
+            if (remoteHeadSkin == null) remoteHeadSkin = "baseFlame";
             var allHeads = ModEntry.customHeads;
-            if (allHeads == null)
-                return;
 
             for (int i = 0; i < allHeads.array.length; i++)
             {
@@ -126,14 +93,44 @@ namespace DeadCellsMultiplayerMod.KingHead
 
                     this.forcedCustomHead = data;
                     this._customHeadInfoCache = data;
+
+                _log.Debug($"{king?.RemoteHeadSkinId}|{ModEntry.Instance?.remoteHeadSkin}");
+                if (headSprite != null)
+                {
+                    headMaterial = headSprite.frameData?.tile;
+                    headSkeleton = ResolveHeadSkeleton(headSprite);
+                    var useLocal = UseLocalSpace();
+                    if (useLocal)
+                    {
+                        headContainer = new dc.h2d.Object(headSprite);
+                        headParticleContainer = new dc.h2d.Object(headContainer);
+                    }
+                    else
+                    {
+                        headContainer = null;
+                        headParticleContainer = new dc.h2d.Object(fromUI);
+                    }
+                    base.init(parent, headParticleContainer, fromUI1);
+                    this.heroHasHead = true;
+                    this.alwaysShowHead = true;
+                    this.alwaysShowEye = true;
                     return;
                 }
+                base.init(parent, fromUI, fromUI1);
+                this.heroHasHead = true;
+                this.alwaysShowHead = true;
+                this.alwaysShowEye = true;
+            }
             }
         }
 
         public override void updateHeadFx(double c1)
         {
             if (king == null)
+            {
+                return;
+            }
+            if (this.headNormalSb == null || this.headAddSb == null)
             {
                 return;
             }

@@ -1687,11 +1687,12 @@ namespace DeadCellsMultiplayerMod
                 ClearActiveTextInput();
                 if (noSpaces && initial.Contains(' ', StringComparison.Ordinal))
                     initial = RemoveSpaces(initial);
+                var initialText = initial ?? string.Empty;
                 var input = new TextInput(
                     screen,
                     MakeHLString(title),
-                    MakeHLString(initial ?? string.Empty),
-                    MakeHLString(GetText.Instance.GetString("OK")),
+                    MakeHLString(initialText),
+                    MakeHLString(initialText),
                     new HlAction<dc.String>(s =>
                     {
                         var text = s?.ToString() ?? string.Empty;
@@ -1706,8 +1707,8 @@ namespace DeadCellsMultiplayerMod
                             ClearActiveTextInput();
                         }
                     }),
+                    MakeHLString(GetText.Instance.GetString("OK")),
                     MakeHLString(GetText.Instance.GetString("Cancel")),
-                    MakeHLString(string.Empty),
                     (dc.hxd.res.Sound?)null);
                 RegisterActiveTextInput(input, noSpaces);
             }
