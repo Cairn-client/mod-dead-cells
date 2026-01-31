@@ -88,9 +88,6 @@ namespace DeadCellsMultiplayerMod.KingHead
         public void ApplyRemoteHeadSkin(string? headSkin)
         {
             var remoteHeadSkin = string.IsNullOrWhiteSpace(headSkin) ? "BaseFlame" : headSkin.Replace("|", "/").Trim();
-            this.customHead = false;
-            this.forcedCustomHead = null;
-            this._customHeadInfoCache = null;
 
             var allHeads = ModEntry.customHeads;
             if (allHeads == null)

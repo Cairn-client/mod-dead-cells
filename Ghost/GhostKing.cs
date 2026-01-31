@@ -11,11 +11,13 @@ using dc.pow;
 using dc.pr;
 using dc.shader;
 using dc.tool;
+using dc.tool._AnimationTrack;
 using Hashlink.Virtuals;
 using ModCore.Storage;
 using ModCore.Utitities;
 using dc.spine.support.utils;
 using DeadCellsMultiplayerMod.Ghost;
+using HaxeProxy.Runtime;
 
 namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 {
@@ -53,7 +55,6 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             this.inventory = ModEntry.me.inventory.clone();
             kingWeaponsManager = new KingWeaponsManager(ModEntry.me, this);
             kingWeaponsManager.init();
-            initScarf();
             base.init();
         }
 
@@ -62,13 +63,16 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         {
             var remoteSkin = RemoteSkinId ?? ModEntry.Instance?.remoteSkin;
             if(remoteSkin == null) remoteSkin = "PrisonerDefault";
-            var item = Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()).item;
-            var scarf = ScarfManager.Class.create(this, item);
-            
-            scarf.owner = this;
-            this.scarf = scarf;
-            // Weapon weapon;
-            // weapon.Class.create();
+            var skinInfo = Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString());
+            if(skinInfo == null) return;
+
+            if(scarf != null)
+                scarf.dispose();
+
+            var item = skinInfo.item;
+            var newScarf = ScarfManager.Class.create(this, item);
+            newScarf.owner = this;
+            scarf = newScarf;
         }
 
 
@@ -87,17 +91,6 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             this.initSprite(heroLib, group, 0.5, 0.5, dp_ROOM_MAIN_HERO, true, null, normalMapFromGroup);
             this.initColorMap(skinInfo);
 
-            // glow
-            // ArrayObj glowData = CdbTypeConverter.Class.getGlowData(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
-            // if (glowData != null)
-            // {
-            //     GlowKey s2 = new GlowKey(glowData);
-            //     if (s2 != null)
-            //     {
-            //         this.spr.addShader(s2);
-            //     }
-            // }
-
             ArrayObj glowData = CdbTypeConverter.Class.getGlowData(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
             if (glowData != null && glowData.length > 0)
             {
@@ -108,6 +101,7 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
                     this.spr.addShader(glowKey);
                 }
                 glowKey.setGlowDatas(glowData);
+                
             }
 
 
@@ -118,6 +112,11 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             General = 0.9 + Math;
             var decayStart = 5.0 * General;
             this.createLight(1161471, radiusCase, decayStart, 0.35);
+
+
+            // Scarf
+            initScarf();
+
 
         }
 
@@ -159,6 +158,72 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         public override void onActivate(Hero by, bool longPress)
         {
             base.onActivate(by, longPress);
+        }
+
+        public override void fixedUpdate()
+        {
+            base.fixedUpdate();
+            scarf?.push(0.0, Ref<bool>.Null);
+        }
+
+        public override void postUpdate()
+        {
+            base.postUpdate();
+            scarf?.postUpdate();
+        }
+
+        public override double get_headX()
+        {
+            if (life <= 0 || destroyed || spr == null || spr.frameData == null || spr.pivot == null || animationTracks == null)
+            {
+                return base.get_headX();
+            }
+
+            var headBone = ResolveHeadSkeleton();
+            if (headBone == null)
+            {
+                return base.get_headX();
+            }
+
+            double baseX = spr.x - spr.frameData.realWid * spr.pivot.centerFactorX * dir;
+            double x = baseX + AnimationTrack_Impl_.Class.x(headBone, spr.frame) * dir;
+            return x == 0.0 ? base.get_headX() : x;
+        }
+
+        public override double get_headY()
+        {
+            if (life <= 0 || destroyed || spr == null || spr.frameData == null || spr.pivot == null || animationTracks == null)
+            {
+                return base.get_headY();
+            }
+
+            var headBone = ResolveHeadSkeleton();
+            if (headBone == null)
+            {
+                return base.get_headY();
+            }
+
+            double baseY = spr.y - spr.frameData.realHei * spr.pivot.centerFactorY;
+            double y = baseY + AnimationTrack_Impl_.Class.y(headBone, spr.frame);
+            return y == 0.0 ? base.get_headY() : y;
+        }
+
+        private ArrayBytes_Int? ResolveHeadSkeleton()
+        {
+            var tracks = animationTracks;
+            var groupName = spr?.groupName;
+            if (tracks == null || groupName == null)
+            {
+                return null;
+            }
+
+            var groupTracks = tracks.get(groupName) as StringMap;
+            if (groupTracks == null)
+            {
+                return null;
+            }
+
+            return groupTracks.get("headBone".AsHaxeString()) as ArrayBytes_Int;
         }
 
     }
