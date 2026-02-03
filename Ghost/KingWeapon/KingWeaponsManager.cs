@@ -1,6 +1,7 @@
 using dc.en;
 using dc.tool;
 using dc.tool.hero;
+using dc.tool.weap;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 
 namespace DeadCellsMultiplayerMod.Ghost
@@ -9,7 +10,7 @@ namespace DeadCellsMultiplayerMod.Ghost
     {
         private readonly GhostKing king;
         private Inventory inventory = null!;
-        private KingWeapon weapon = null!;
+        private Weapon weapon = null!;
         private InventItem weaponItem = null!;
         private int pendingAttacks;
         private int pendingSlot = -1;
@@ -30,14 +31,17 @@ namespace DeadCellsMultiplayerMod.Ghost
             if(inventory == null) inventory = king.inventory;
 
             var item = GetWeaponItem(pendingSlot);
-            if(item == null || item.kind.ToString() == "Meta") return;
+            if(item == null || item.kind?.Index == InventItemKind.Indexes.Meta) return;
 
             if(weapon == null || weaponItem == null || weaponItem.permanentId != item.permanentId)
             {
+                if(weapon != null && !weapon.destroyed)
+                {
+                    try { weapon.dispose(); } catch { }
+                }
+
                 weaponItem = item;
-                weapon = new KingWeapon(hero, item, king);
-                weapon.needButtonRelease = false;
-                weapon.requireRelease = false;
+                weapon = KingWeaponSupport.CreateWeapon(hero, item, king);
             }
 
             var game = dc.pr.Game.Class.ME;
@@ -45,12 +49,22 @@ namespace DeadCellsMultiplayerMod.Ghost
 
             if(pendingAttacks > 0 && weapon.isReady())
             {
-                weapon.SyncSource();
+                KingWeaponSupport.SyncSource(weapon);
+
                 weapon.prepare(getWeaponAttackSpeed(weapon));
+
+                if(weapon is BaseBow)
+                {
+                    weapon.onExecute();
+                }
+                else if(weapon is BaseShield shield)
+                {
+                    shield.startParry();
+                }
                 pendingAttacks--;
             }
 
-            if(!weapon.destroyed)
+            if(!weapon.destroyed && weapon is not BaseBow && weapon is not BaseShield)
             {
                 weapon.fixedUpdate();
                 weapon.postUpdate();
@@ -60,7 +74,8 @@ namespace DeadCellsMultiplayerMod.Ghost
         public void queueAttack(int slot = -1)
         {
             if(slot >= 0) pendingSlot = slot;
-            pendingAttacks++;
+            if(pendingAttacks < 3)
+                pendingAttacks++;
         }
 
         private InventItem? GetWeaponItem(int slot)
