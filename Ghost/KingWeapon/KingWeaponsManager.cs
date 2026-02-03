@@ -33,7 +33,7 @@ namespace DeadCellsMultiplayerMod.Ghost
 
         public void update()
         {
-            if(hero == null || king == null) return;
+            if(hero == null) return;
             if(inventory == null) inventory = king.inventory;
 
             var item = GetWeaponItem(pendingSlot);
@@ -57,7 +57,7 @@ namespace DeadCellsMultiplayerMod.Ghost
             var game = dc.pr.Game.Class.ME;
             if(game != null) weapon.cd.update(game.tmod);
 
-            if(weapon is BaseShield shield)
+            if(weapon is BaseShield)
             {
                 var now = Stopwatch.GetTimestamp();
 
@@ -68,11 +68,7 @@ namespace DeadCellsMultiplayerMod.Ghost
 
                     // When the remote releases the shield, a few late ATK packets can arrive and would re-trigger hold,
                     // causing the animation/state to flicker (release -> hold -> release ...). Ignore pulses briefly after release.
-                    if(now < _shieldIgnorePulsesUntilTicks)
-                    {
-                        // Pulse ignored.
-                    }
-                    else
+                    if(now >= _shieldIgnorePulsesUntilTicks)
                     {
                         _shieldLastPulseTicks = now;
 
@@ -116,7 +112,7 @@ namespace DeadCellsMultiplayerMod.Ghost
                 pendingAttacks--;
             }
 
-            if(!weapon.destroyed && weapon is not BaseBow && weapon is not BaseShield)
+            if(!weapon.destroyed && weapon is not BaseBow)
             {
                 weapon.fixedUpdate();
                 weapon.postUpdate();

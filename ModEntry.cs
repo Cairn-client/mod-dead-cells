@@ -889,15 +889,7 @@ namespace DeadCellsMultiplayerMod
             // make sure we don't push a weapon/hold/parry animation into ANIM replication.
             if(IsAttackAnim(a))
                 return "idle";
-            if(a.IndexOf("hold", StringComparison.OrdinalIgnoreCase) >= 0)
-                return "idle";
-            if(a.IndexOf("parry", StringComparison.OrdinalIgnoreCase) >= 0)
-                return "idle";
             if(a.IndexOf("guard", StringComparison.OrdinalIgnoreCase) >= 0)
-                return "idle";
-            if(a.IndexOf("block", StringComparison.OrdinalIgnoreCase) >= 0)
-                return "idle";
-            if(a.IndexOf("shield", StringComparison.OrdinalIgnoreCase) >= 0)
                 return "idle";
 
             return a;
@@ -1254,9 +1246,7 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
-            var playback = animManager.play(anim.AsHaxeString(), queueAnim, g);
-            if (ShouldLoopRemoteAnim(anim) && !IsAttackAnim(anim))
-                playback.loop(null);
+            animManager.play(anim.AsHaxeString(), queueAnim, g);
         }
 
         private static bool ShouldLoopRemoteAnim(string anim)
@@ -1266,7 +1256,6 @@ namespace DeadCellsMultiplayerMod
 
             // Don't ever force-loop weapon/hold-ish states; those should be driven by weapon replication.
             if(IsAttackAnim(a)) return false;
-            if(a.IndexOf("hold", StringComparison.OrdinalIgnoreCase) >= 0) return false;
             if(a.IndexOf("guard", StringComparison.OrdinalIgnoreCase) >= 0) return false;
             if(a.IndexOf("defend", StringComparison.OrdinalIgnoreCase) >= 0) return false;
 
