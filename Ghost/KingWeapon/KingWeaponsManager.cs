@@ -53,11 +53,7 @@ namespace DeadCellsMultiplayerMod.Ghost
 
                 weapon.prepare(getWeaponAttackSpeed(weapon));
 
-                if(weapon is BaseBow)
-                {
-                    weapon.onExecute();
-                }
-                else if(weapon is BaseShield shield)
+                if(weapon is BaseShield shield)
                 {
                     shield.startParry();
                 }

@@ -249,6 +249,9 @@ namespace DeadCellsMultiplayerMod
             Hook_BaseShield.counterBullet += Hook_BaseShield_counterBullet;
 
             Hook_Entity.recoil += Hook_Entity_recoil;
+            Hook_Entity.bump += Hook_Entity_bump;
+            Hook_Entity.bumpAwayFrom += Hook_Entity_bumpAwayFrom;
+            Hook_Entity.cancelVelocities += Hook_Entity_cancelVelocities;
             Hook_Entity.setAffectS += Hook_Entity_setAffectS;
             Hook_Entity.removeAllAffects += Hook_Entity_removeAllAffects;
         }
@@ -279,6 +282,27 @@ namespace DeadCellsMultiplayerMod
             if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
                 return;
             orig(self, dx);
+        }
+
+        private void Hook_Entity_bump(Hook_Entity.orig_bump orig, Entity self, double dy, double ignoreResist, bool? dx)
+        {
+            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
+                return;
+            orig(self, dy, ignoreResist, dx);
+        }
+
+        private void Hook_Entity_bumpAwayFrom(Hook_Entity.orig_bumpAwayFrom orig, Entity self, Entity e, double? pow, bool? ignoreResist)
+        {
+            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
+                return;
+            orig(self, e, pow, ignoreResist);
+        }
+
+        private void Hook_Entity_cancelVelocities(Hook_Entity.orig_cancelVelocities orig, Entity self)
+        {
+            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
+                return;
+            orig(self);
         }
 
         private void Hook_Entity_setAffectS(Hook_Entity.orig_setAffectS orig, Entity self, int id, double sec, Ref<double> ignoreResist, bool? allowResist)
