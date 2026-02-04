@@ -6,7 +6,7 @@ using System.Diagnostics;
 using System.Net;
 using dc.en;
 using dc.pr;
-using ModCore.Utitities;
+using ModCore.Utilities;
 using ModCore.Modules;
 using dc.level;
 using dc.hl.types;
@@ -16,6 +16,7 @@ using dc.libs.heaps.slib;
 using dc.h3d.mat;
 using dc.ui.hud;
 using dc.h2d;
+using dc.hxbit;
 using Hashlink.Virtuals;
 using dc.tool;
 using dc.tool.weap;
@@ -202,6 +203,7 @@ namespace DeadCellsMultiplayerMod
             Hook_Hero.lockControlFromSkill += Hook_Hero_lockControlFromSkill;
             Hook_Hero.unlockControls += Hook_Hero_unlockControls;
             Hook_User.newGame += GameDataSync.user_hook_new_game;
+            Hook_User.prepareSave += Hook_User_prepareSave;
             Hook_AnimManager.play += Hook_AnimManager_play;
             Hook_AnimManager.stopWithStateAnims += Hook_AnimManager_stopWithStateAnims;
             Hook_Viewport.bumpDir += Hook_Viewport_bumpDir;
@@ -268,6 +270,28 @@ namespace DeadCellsMultiplayerMod
             if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
                 return;
             orig(self);
+        }
+
+        private bool Hook_User_prepareSave(Hook_User.orig_prepareSave orig, User self)
+        {
+            if (_netRole == NetRole.Client)
+            {
+                var swapped = GameDataSync.SwapToOriginalUserData(self);
+                try
+                {
+                    return orig(self);
+                }
+                finally
+                {
+                    if (swapped)
+                        GameDataSync.RestoreRemoteUserData(self);
+                }
+            }
+
+            if (_netRole == NetRole.None)
+                GameDataSync.RestoreOriginalUserState(self, true);
+
+            return orig(self);
         }
 
         private void Hook_Viewport_bumpDir(Hook_Viewport.orig_bumpDir orig, Viewport self, int dir, double? pow)

@@ -13,7 +13,7 @@ using HaxeProxy.Runtime;
 using Newtonsoft.Json;
 using Hashlink.Virtuals;
 using Serilog;
-using ModCore.Utitities;
+using ModCore.Utilities;
 using Microsoft.Win32;
 using Serilog.Core;
 using dc.cine;
@@ -172,9 +172,25 @@ namespace DeadCellsMultiplayerMod
 
         public static void SetRole(NetRole role)
         {
+            var previous = _role;
             lock (Sync)
             {
                 _role = role;
+            }
+            if (previous == NetRole.Client && role != NetRole.Client)
+            {
+                EnqueueMainThread(() =>
+                {
+                    try
+                    {
+                        var main = dc.Main.Class.ME;
+                        if (main?.user != null)
+                            GameDataSync.RestoreOriginalUserState(main.user, true);
+                    }
+                    catch
+                    {
+                    }
+                });
             }
         }
 

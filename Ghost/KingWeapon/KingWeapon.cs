@@ -9,7 +9,7 @@ using Hashlink.Virtuals;
 using HaxeProxy.Runtime;
 using HaxeProxy.Runtime.Internals;
 using HaxeProxy.Runtime.Internals.Cache;
-using ModCore.Utitities;
+using ModCore.Utilities;
 
 namespace DeadCellsMultiplayerMod.Ghost
 {

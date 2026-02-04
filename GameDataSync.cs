@@ -1,11 +1,12 @@
 
 using dc;
 using dc.haxe.ds;
+using dc.hl.types;
 using dc.pr;
 using dc.tool;
 using Hashlink.Virtuals;
 using HaxeProxy.Runtime;
-using ModCore.Utitities;
+using ModCore.Utilities;
 using System;
 using System.Globalization;
 using System.Text;
@@ -31,6 +32,19 @@ namespace DeadCellsMultiplayerMod
         public static string? HostCountersPayload;
         private static string? _remoteBlueprintsPayload;
         public static string? HostBlueprintsPayload;
+        private static bool _hasRemoteCounters;
+        private static bool _hasRemoteBlueprints;
+        private static bool _origStoryCaptured;
+        private static StoryManager? _origStory;
+        private static StringMap? _origCounters;
+        private static bool _origItemMetaCaptured;
+        private static ItemMetaManager? _origItemMeta;
+        private static ArrayObj? _origItemProgress;
+        private static ArrayObj? _origPermanentItems;
+        private static bool _origItemMetaWasNull;
+        private static bool _origBossRuneCaptured;
+        private static int _origBossRune;
+        private static bool _hasRemoteBossRune;
         public GameDataSync(Serilog.ILogger log)
         {
             _log = log;
@@ -57,6 +71,9 @@ namespace DeadCellsMultiplayerMod
             ModEntry._ghost = null;
             var net = GameMenu.NetRef;
 
+            if (net == null || !net.IsAlive)
+                RestoreOriginalUserState(self, true);
+
             if (net != null && net.IsHost)
             {
                 Seed = GameMenu.ForceGenerateServerSeed("NewGame_hook");
@@ -75,7 +92,10 @@ namespace DeadCellsMultiplayerMod
                 }
                 if (TryGetRemoteBossRune(out var bossRune))
                 {
+                    _origBossRune = self.bossRuneActivated;
+                    _origBossRuneCaptured = true;
                     self.bossRuneActivated = bossRune;
+                    _hasRemoteBossRune = true;
                 }
                 else
                 {
@@ -105,12 +125,10 @@ namespace DeadCellsMultiplayerMod
             {
                 var item = new StringBuilder();
                 var escaped = false;
-                var meta = user.itemMeta;
-                if (meta == null)
-                {
-                    meta = new ItemMetaManager(user);
-                    user.itemMeta = meta;
-                }
+                CaptureOriginalUserData(user);
+                var meta = new ItemMetaManager(user);
+                user.itemMeta = meta;
+                _hasRemoteBlueprints = true;
 
                 for (var i = 0; i < payload.Length; i++)
                 {
@@ -203,6 +221,146 @@ namespace DeadCellsMultiplayerMod
                 net.SendBlueprints(payload);
         }
 
+        public static bool SwapToOriginalUserData(User user)
+        {
+            var swapped = false;
+            if (_hasRemoteCounters && _origStoryCaptured)
+            {
+                if (_origStory == null)
+                {
+                    user.story = null;
+                }
+                else
+                {
+                    _log.Debug($"{_origCounters}");
+                    _origStory.counters = _origCounters;
+                    user.story = _origStory;
+                }
+                swapped = true;
+            }
+
+            if (_hasRemoteBlueprints && _origItemMetaCaptured)
+            {
+                if (_origItemMetaWasNull)
+                {
+                    user.itemMeta = null;
+                }
+                else
+                {
+                    var meta = _origItemMeta ?? user.itemMeta ?? new ItemMetaManager(user);
+                    meta.itemProgress = _origItemProgress;
+                    meta.permanentItems = _origPermanentItems;
+                    user.itemMeta = meta;
+                }
+                swapped = true;
+            }
+
+            if (_hasRemoteBossRune && _origBossRuneCaptured)
+            {
+                user.bossRuneActivated = _origBossRune;
+                swapped = true;
+            }
+
+            return swapped;
+        }
+
+        public static bool RestoreOriginalUserState(User user, bool clearRemote)
+        {
+            var restored = false;
+            if (_origStoryCaptured)
+            {
+                if (_origStory == null)
+                {
+                    user.story = null;
+                }
+                else
+                {
+                    _origStory.counters = _origCounters;
+                    user.story = _origStory;
+                }
+                restored = true;
+            }
+
+            if (_origItemMetaCaptured)
+            {
+                if (_origItemMetaWasNull)
+                {
+                    user.itemMeta = null;
+                }
+                else
+                {
+                    var meta = _origItemMeta ?? user.itemMeta ?? new ItemMetaManager(user);
+                    meta.itemProgress = _origItemProgress;
+                    meta.permanentItems = _origPermanentItems;
+                    user.itemMeta = meta;
+                }
+                restored = true;
+            }
+
+            if (_origBossRuneCaptured)
+            {
+                user.bossRuneActivated = _origBossRune;
+                restored = true;
+            }
+
+            if (clearRemote)
+            {
+                _remoteCountersPayload = null;
+                _remoteBlueprintsPayload = null;
+                _hasRemoteCounters = false;
+                _hasRemoteBlueprints = false;
+                _hasRemoteBossRune = false;
+                _origStoryCaptured = false;
+                _origStory = null;
+                _origCounters = null;
+                _origItemMetaCaptured = false;
+                _origItemMeta = null;
+                _origItemProgress = null;
+                _origPermanentItems = null;
+                _origItemMetaWasNull = false;
+                _origBossRuneCaptured = false;
+                _origBossRune = 0;
+            }
+
+            return restored;
+        }
+
+        public static void CaptureOriginalUserData(User user)
+        {
+            if (!_origStoryCaptured)
+            {
+                _origStoryCaptured = true;
+                _origStory = user.story;
+                _origCounters = user.story?.counters;
+            }
+
+            if (!_origItemMetaCaptured)
+            {
+                var meta = user.itemMeta;
+                _origItemMetaCaptured = true;
+                _origItemMeta = meta;
+                _origItemMetaWasNull = meta == null;
+                _origItemProgress = CloneItemProgress(meta?.itemProgress);
+                _origPermanentItems = CloneItemList(meta?.permanentItems);
+            }
+
+            if (!_origBossRuneCaptured)
+            {
+                _origBossRuneCaptured = true;
+                _origBossRune = user.bossRuneActivated;
+            }
+        }
+
+        public static void RestoreRemoteUserData(User user)
+        {
+            if (!string.IsNullOrEmpty(_remoteCountersPayload))
+                ReceiveCounters(_remoteCountersPayload, user);
+            if (!string.IsNullOrEmpty(_remoteBlueprintsPayload))
+                ReceiveBlueprints(_remoteBlueprintsPayload, user);
+            if (_hasRemoteBossRune && TryGetRemoteBossRune(out var bossRune))
+                user.bossRuneActivated = bossRune;
+        }
+
         public static void ReceiveCounters(string payload, User? target = null)
         {
             _remoteCountersPayload = payload;
@@ -211,7 +369,8 @@ namespace DeadCellsMultiplayerMod
 
             void apply(User user)
             {
-                var story = user.story ?? new StoryManager();
+                CaptureOriginalUserData(user);
+                var story = new StoryManager();
                 var map = new StringMap();
                 var key = new StringBuilder();
                 var value = new StringBuilder();
@@ -276,6 +435,7 @@ namespace DeadCellsMultiplayerMod
 
                 story.counters = map;
                 user.story = story;
+                _hasRemoteCounters = true;
             }
 
             if (target != null)
@@ -466,6 +626,43 @@ namespace DeadCellsMultiplayerMod
                 return string.Empty;
 
             return skin.Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
+        }
+
+        private static ArrayObj? CloneItemProgress(ArrayObj? source)
+        {
+            if (source == null)
+                return null;
+
+            var arr = ArrayUtils.CreateDyn();
+            for (int i = 0; i < source.length; i++)
+            {
+                var item = source.getDyn(i) as ItemProgress;
+                if (item == null)
+                    continue;
+                var copy = new ItemProgress(item.itemId);
+                copy.investedCells = item.investedCells;
+                copy.isNew = item.isNew;
+                copy.unlocked = item.unlocked;
+                copy.__uid = item.__uid;
+                arr.array.pushDyn(copy);
+            }
+            return (ArrayObj)arr.array;
+        }
+
+        private static ArrayObj? CloneItemList(ArrayObj? source)
+        {
+            if (source == null)
+                return null;
+
+            var arr = ArrayUtils.CreateDyn();
+            for (int i = 0; i < source.length; i++)
+            {
+                var item = source.getDyn(i);
+                if (item == null)
+                    continue;
+                arr.array.pushDyn(item);
+            }
+            return (ArrayObj)arr.array;
         }
 
         private static int ToInt(object? value)

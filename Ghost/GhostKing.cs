@@ -14,7 +14,7 @@ using dc.tool;
 using dc.tool._AnimationTrack;
 using Hashlink.Virtuals;
 using ModCore.Storage;
-using ModCore.Utitities;
+using ModCore.Utilities;
 using dc.spine.support.utils;
 using DeadCellsMultiplayerMod.Ghost;
 using HaxeProxy.Runtime;
