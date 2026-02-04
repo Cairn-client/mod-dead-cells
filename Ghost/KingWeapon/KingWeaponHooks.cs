@@ -21,6 +21,11 @@ internal static class KingWeaponHooks
             return;
         _installed = true;
 
+        Hook_Inventory.add += Hook_Inventory_add;
+        Hook_Inventory.equip += Hook_Inventory_equip;
+        Hook_Inventory.swapWeapons += Hook_Inventory_swapWeapons;
+        Hook_Inventory.replace += Hook_Inventory_replace;
+
         Hook_Hero.lockControlFromSkill += Hook_Hero_lockControlFromSkill;
         Hook_Hero.unlockControls += Hook_Hero_unlockControls;
         Hook_Viewport.bumpDir += Hook_Viewport_bumpDir;
@@ -63,6 +68,44 @@ internal static class KingWeaponHooks
         Hook_BaseShield.onShieldCounterSuccessful += Hook_BaseShield_onShieldCounterSuccessful;
         Hook_BaseShield.counterGrenade += Hook_BaseShield_counterGrenade;
         Hook_BaseShield.counterBullet += Hook_BaseShield_counterBullet;
+    }
+
+    private static InventItem Hook_Inventory_add(Hook_Inventory.orig_add orig, Inventory self, InventItem i)
+    {
+        var instance = ModEntry.Instance;
+        if(instance != null)
+            return instance.NotifyInventoryAddFromKingWeaponHooks(orig, self, i);
+        return orig(self, i);
+    }
+
+    private static bool Hook_Inventory_equip(Hook_Inventory.orig_equip orig, Inventory self, InventItem i)
+    {
+        var instance = ModEntry.Instance;
+        if(instance != null)
+            return instance.NotifyInventoryEquipFromKingWeaponHooks(orig, self, i);
+        return orig(self, i);
+    }
+
+    private static void Hook_Inventory_swapWeapons(Hook_Inventory.orig_swapWeapons orig, Inventory self)
+    {
+        var instance = ModEntry.Instance;
+        if(instance != null)
+        {
+            instance.NotifyInventorySwapWeaponsFromKingWeaponHooks(orig, self);
+            return;
+        }
+        orig(self);
+    }
+
+    private static void Hook_Inventory_replace(Hook_Inventory.orig_replace orig, Inventory self, InventItem by, InventItem oldPos)
+    {
+        var instance = ModEntry.Instance;
+        if(instance != null)
+        {
+            instance.NotifyInventoryReplaceFromKingWeaponHooks(orig, self, by, oldPos);
+            return;
+        }
+        orig(self, by, oldPos);
     }
 
     private static void Hook_Hero_lockControlFromSkill(Hook_Hero.orig_lockControlFromSkill orig, Hero self, double sec)

@@ -200,13 +200,10 @@ namespace DeadCellsMultiplayerMod
             Hook_Game.init += Hook_gameinit;
             Hook_Hero.wakeup += hook_hero_wakeup;
             Hook_Hero.onLevelChanged += hook_level_changed;
-            Hook_Hero.lockControlFromSkill += Hook_Hero_lockControlFromSkill;
-            Hook_Hero.unlockControls += Hook_Hero_unlockControls;
             Hook_User.newGame += GameDataSync.user_hook_new_game;
             Hook_User.prepareSave += Hook_User_prepareSave;
             Hook_AnimManager.play += Hook_AnimManager_play;
             Hook_AnimManager.stopWithStateAnims += Hook_AnimManager_stopWithStateAnims;
-            Hook_Viewport.bumpDir += Hook_Viewport_bumpDir;
             Hook_MiniMap.track += Hook_MiniMap_track;
             Hook__LevelStruct.get += Hook__LevelStruct_get;
             Hook_Boot.update += hook_boot_update;
@@ -214,48 +211,7 @@ namespace DeadCellsMultiplayerMod
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
             Hook__TitleScreen.__constructor__ += Hook_TitleScreen__constructor__;
             // Hook_Hero.onEnterRoom += 
-            Hook_Inventory.add += Hook_Inventory_add;
-            Hook_Inventory.equip += Hook_Inventory_equip;
-            Hook_Inventory.swapWeapons += Hook_Inventory_swapWeapons;
-            Hook_Inventory.replace += Hook_Inventory_replace;
-            Hook_Weapon.prepare += Hook_Weapon_prepare;
-            Hook_Weapon.get_shootX += Hook_Weapon_get_shootX;
-            Hook_Weapon.get_shootY += Hook_Weapon_get_shootY;
-            Hook_Weapon.fixedUpdate += Hook_Weapon_fixedUpdate;
-            Hook_Weapon.postUpdate += Hook_Weapon_postUpdate;
-            Hook_Weapon.dynOnAttackAnim += Hook_Weapon_dynOnAttackAnim;
-            Hook_Weapon.dynOnFxFrame += Hook_Weapon_dynOnFxFrame;
-            Hook_Weapon.updateAmmoHud += Hook_Weapon_updateAmmoHud;
-
-            Hook_BaseBow.dynOnAttackAnim += Hook_BaseBow_dynOnAttackAnim;
-            Hook_BaseBow.fixedUpdate += Hook_BaseBow_fixedUpdate;
-            Hook_BaseBow.get_shootY += Hook_BaseBow_get_shootY;
-            Hook_BaseBow.playShootAnim += Hook_BaseBow_playShootAnim;
-            Hook_BaseBow.shoot += Hook_BaseBow_shoot;
-            Hook_BaseBow.dynamicChargeExecute += Hook_BaseBow_dynamicChargeExecute;
-            Hook_BaseBow.onBowChargeStart += Hook_BaseBow_onBowChargeStart;
-            Hook_BaseBow.onBowCharging += Hook_BaseBow_onBowCharging;
-            Hook_BaseBow.onExecute += Hook_BaseBow_onExecute;
-            Hook_BaseBow.interrupt += Hook_BaseBow_interrupt;
-
-            Hook_BaseShield.tryToCancel += Hook_BaseShield_tryToCancel;
-            Hook_BaseShield.onShieldChargeStart += Hook_BaseShield_onShieldChargeStart;
-            Hook_BaseShield.onShieldReleased += Hook_BaseShield_onShieldReleased;
-            Hook_BaseShield.startParry += Hook_BaseShield_startParry;
-            Hook_BaseShield.onShieldStartParry += Hook_BaseShield_onShieldStartParry;
-            Hook_BaseShield.onShieldEndParry += Hook_BaseShield_onShieldEndParry;
-            Hook_BaseShield.onShieldHolding += Hook_BaseShield_onShieldHolding;
-            Hook_BaseShield.onShieldBlock += Hook_BaseShield_onShieldBlock;
-            Hook_BaseShield.onShieldCounterSuccessful += Hook_BaseShield_onShieldCounterSuccessful;
-            Hook_BaseShield.counterGrenade += Hook_BaseShield_counterGrenade;
-            Hook_BaseShield.counterBullet += Hook_BaseShield_counterBullet;
-
-            Hook_Entity.recoil += Hook_Entity_recoil;
-            Hook_Entity.bump += Hook_Entity_bump;
-            Hook_Entity.bumpAwayFrom += Hook_Entity_bumpAwayFrom;
-            Hook_Entity.cancelVelocities += Hook_Entity_cancelVelocities;
-            Hook_Entity.setAffectS += Hook_Entity_setAffectS;
-            Hook_Entity.removeAllAffects += Hook_Entity_removeAllAffects;
+            Ghost.KingWeaponHooks.Install();
         }
 
         private void Hook_Hero_lockControlFromSkill(Hook_Hero.orig_lockControlFromSkill orig, Hero self, double sec)
