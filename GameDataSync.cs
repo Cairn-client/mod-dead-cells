@@ -128,9 +128,8 @@ namespace DeadCellsMultiplayerMod
             void apply(User user)
             {
                 CaptureOriginalUserData(user);
-                var meta = user.itemMeta ?? new ItemMetaManager(user);
-                var list = meta.itemProgress;
-                var arr = list ?? (ArrayObj)ArrayUtils.CreateDyn().array;
+                var meta = EnsureItemMeta(user, user.itemMeta);
+                var arr = EnsureArray(meta.itemProgress);
                 var existing = new HashSet<string>(StringComparer.Ordinal);
                 for (int i = 0; i < arr.length; i++)
                 {
@@ -278,9 +277,9 @@ namespace DeadCellsMultiplayerMod
                 }
                 else
                 {
-                    var meta = _origItemMeta ?? user.itemMeta ?? new ItemMetaManager(user);
-                    meta.itemProgress = _origItemProgress;
-                    meta.permanentItems = _origPermanentItems;
+                    var meta = EnsureItemMeta(user, _origItemMeta ?? user.itemMeta);
+                    meta.itemProgress = EnsureArray(_origItemProgress);
+                    meta.permanentItems = EnsureArray(_origPermanentItems);
                     user.itemMeta = meta;
                 }
                 swapped = true;
@@ -320,9 +319,9 @@ namespace DeadCellsMultiplayerMod
                 }
                 else
                 {
-                    var meta = _origItemMeta ?? user.itemMeta ?? new ItemMetaManager(user);
-                    meta.itemProgress = _origItemProgress;
-                    meta.permanentItems = _origPermanentItems;
+                    var meta = EnsureItemMeta(user, _origItemMeta ?? user.itemMeta);
+                    meta.itemProgress = EnsureArray(_origItemProgress);
+                    meta.permanentItems = EnsureArray(_origPermanentItems);
                     user.itemMeta = meta;
                 }
                 restored = true;
@@ -368,6 +367,8 @@ namespace DeadCellsMultiplayerMod
             if (!_origItemMetaCaptured)
             {
                 var meta = user.itemMeta;
+                if (meta != null)
+                    meta = EnsureItemMeta(user, meta);
                 _origItemMetaCaptured = true;
                 _origItemMeta = meta;
                 _origItemMetaWasNull = meta == null;
@@ -789,6 +790,21 @@ namespace DeadCellsMultiplayerMod
             }
 
             return 0;
+        }
+
+        private static ArrayObj EnsureArray(ArrayObj? source)
+        {
+            if (source != null)
+                return source;
+            return (ArrayObj)ArrayUtils.CreateDyn().array;
+        }
+
+        private static ItemMetaManager EnsureItemMeta(User user, ItemMetaManager? meta)
+        {
+            var result = meta ?? user.itemMeta ?? new ItemMetaManager(user);
+            result.itemProgress = EnsureArray(result.itemProgress);
+            result.permanentItems = EnsureArray(result.permanentItems);
+            return result;
         }
 
     }
