@@ -31,6 +31,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<int, int> hostToLocalIndices = new();
         private static readonly Dictionary<int, int> localToHostIndices = new();
         private static readonly Dictionary<int, long> clientAttackUnlockUntilTick = new();
+        private static readonly List<Entity> hostDetectedTargets = new();
+        private static readonly Random hostTargetRandom = new();
 
         private static Level? currentLevel;
         private static long lastHostStateSendTick;
@@ -158,6 +160,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (!IsClientAttackUnlockActive(self))
                     TryLockMobAi(self, ClientAiLockSeconds);
             }
+
+            if (isHost && IsSyncMob(self))
+                TryAssignHostAttackTarget(self);
 
             orig(self);
 
@@ -409,6 +414,104 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             catch
             {
             }
+        }
+
+        private static void TryAssignHostAttackTarget(Mob mob)
+        {
+            if (mob == null)
+                return;
+
+            Entity? selected = null;
+
+            lock (Sync)
+            {
+                hostDetectedTargets.Clear();
+
+                TryCollectDetectedTarget(mob, ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance);
+
+                for (int i = 0; i < ModEntry.clients.Length; i++)
+                {
+                    if (ModEntry.clientIds[i] <= 0)
+                        continue;
+
+                    TryCollectDetectedTarget(mob, ModEntry.clients[i]);
+                }
+
+                if (hostDetectedTargets.Count == 0)
+                    return;
+
+                var currentTarget = mob.nemesisTarget;
+                if (currentTarget != null && hostDetectedTargets.Contains(currentTarget))
+                {
+                    selected = currentTarget;
+                }
+                else if (hostDetectedTargets.Count == 1)
+                {
+                    selected = hostDetectedTargets[0];
+                }
+                else
+                {
+                    selected = hostDetectedTargets[hostTargetRandom.Next(hostDetectedTargets.Count)];
+                }
+            }
+
+            if (selected == null)
+                return;
+
+            try
+            {
+                mob.setAttackTarget(selected);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                mob.setNemesisTarget(selected);
+            }
+            catch
+            {
+            }
+        }
+
+        private static void TryCollectDetectedTarget(Mob mob, Entity? candidate)
+        {
+            if (candidate == null)
+                return;
+            if (ReferenceEquals(candidate, mob))
+                return;
+
+            try
+            {
+                if (candidate.destroyed || candidate.life <= 0)
+                    return;
+            }
+            catch
+            {
+                return;
+            }
+
+            var mobLevel = mob._level;
+            var candidateLevel = candidate._level;
+            if (mobLevel != null && candidateLevel != null && !ReferenceEquals(mobLevel, candidateLevel))
+                return;
+
+            bool inDetectArea;
+            try
+            {
+                inDetectArea = mob.inDetectArea(candidate);
+            }
+            catch
+            {
+                return;
+            }
+
+            if (!inDetectArea)
+                return;
+
+            if (!hostDetectedTargets.Contains(candidate))
+                hostDetectedTargets.Add(candidate);
         }
 
         private static bool IsClientAttackUnlockActive(Mob mob)
