@@ -212,6 +212,26 @@ public sealed class NetNode : IDisposable
         }
     }
 
+    public readonly struct MobAttack
+    {
+        public readonly int Index;
+        public readonly string SkillId;
+        public readonly bool RequiresTargetInArea;
+        public readonly int? Data;
+        public readonly double X;
+        public readonly double Y;
+
+        public MobAttack(int index, string skillId, bool requiresTargetInArea, int? data, double x, double y)
+        {
+            Index = index;
+            SkillId = skillId ?? string.Empty;
+            RequiresTargetInArea = requiresTargetInArea;
+            Data = data;
+            X = x;
+            Y = y;
+        }
+    }
+
     private TcpListener? _listener;   // host
     private TcpClient? _client;     // client
     private NetworkStream? _stream;
@@ -233,6 +253,7 @@ public sealed class NetNode : IDisposable
     private readonly List<RemoteAttack> _pendingAttacks = new();
     private List<MobStateSnapshot> _pendingMobStates = new();
     private readonly List<MobHit> _pendingMobHits = new();
+    private readonly List<MobAttack> _pendingMobAttacks = new();
     private int _primaryRemoteId;
 
     private readonly IPEndPoint _bindEp;   // host bind
@@ -916,6 +937,23 @@ public sealed class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("MOBATK|", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_role == NetRole.Host)
+                return true;
+
+            var payload = line["MOBATK|".Length..];
+            if (TryParseMobAttackPayload(payload, out var attack))
+            {
+                lock (_sync)
+                {
+                    _pendingMobAttacks.Add(attack);
+                    _hasRemote = true;
+                }
+            }
+            return true;
+        }
+
         if (line.StartsWith("DIED", StringComparison.OrdinalIgnoreCase))
         {
             if (_role == NetRole.Host)
@@ -1031,6 +1069,7 @@ public sealed class NetNode : IDisposable
             _pendingAttacks.Clear();
             _pendingMobStates.Clear();
             _pendingMobHits.Clear();
+            _pendingMobAttacks.Clear();
         }
         CloseClientConnection();
         GameMenu.EnqueueMainThread(() => GameMenu.NotifyRemoteDisconnected(_role));
@@ -1245,6 +1284,52 @@ public sealed class NetNode : IDisposable
         return true;
     }
 
+    private static bool TryParseMobAttackPayload(string payload, out MobAttack attack)
+    {
+        attack = default;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        var parts = payload.Split(',');
+        if (parts.Length < 7)
+            return false;
+
+        if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var mobIndex))
+            return false;
+
+        string skillId;
+        try
+        {
+            skillId = Uri.UnescapeDataString(parts[1]);
+        }
+        catch
+        {
+            skillId = parts[1];
+        }
+
+        if (string.IsNullOrWhiteSpace(skillId))
+            return false;
+
+        var requiresTargetInArea = parts[2] == "1";
+        var hasData = parts[3] == "1";
+
+        int? data = null;
+        if (hasData)
+        {
+            if (!int.TryParse(parts[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedData))
+                return false;
+            data = parsedData;
+        }
+
+        if (!double.TryParse(parts[5], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+            return false;
+        if (!double.TryParse(parts[6], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+            return false;
+
+        attack = new MobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y);
+        return true;
+    }
+
     private static bool TryParsePositionLine(string line, int? senderId, out int remoteId, out double rx, out double ry, out int dir, out bool hasDir)
     {
         remoteId = 0;
@@ -1347,6 +1432,26 @@ public sealed class NetNode : IDisposable
         }
         sb.Append('\n');
         return sb.ToString();
+    }
+
+    private static string BuildMobAttackLine(MobAttack attack)
+    {
+        string encodedSkill;
+        try
+        {
+            encodedSkill = Uri.EscapeDataString(attack.SkillId ?? string.Empty);
+        }
+        catch
+        {
+            encodedSkill = attack.SkillId ?? string.Empty;
+        }
+
+        var hasData = attack.Data.HasValue;
+        var dataPart = attack.Data.GetValueOrDefault().ToString(CultureInfo.InvariantCulture);
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"MOBATK|{attack.Index},{encodedSkill},{(attack.RequiresTargetInArea ? 1 : 0)},{(hasData ? 1 : 0)},{dataPart},{attack.X},{attack.Y}\n");
     }
 
     private static string BuildPosLine(int id, double cx, double cy, int dir)
@@ -1700,6 +1805,20 @@ public sealed class NetNode : IDisposable
         _ = SendLineSafe(line);
     }
 
+    public void SendMobAttack(int mobIndex, string skillId, bool requiresTargetInArea, int? data, double x, double y)
+    {
+        if (_role != NetRole.Host)
+            return;
+        if (!HasAnyConnection())
+            return;
+        if (mobIndex < 0 || string.IsNullOrWhiteSpace(skillId))
+            return;
+
+        var attack = new MobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y);
+        var line = BuildMobAttackLine(attack);
+        _ = SendLineSafe(line);
+    }
+
     public void SendMobHit(int mobIndex, int hp, double x, double y)
     {
         if (_role != NetRole.Client)
@@ -1843,6 +1962,22 @@ public sealed class NetNode : IDisposable
             hits = new List<MobHit>(_pendingMobHits);
             _pendingMobHits.Clear();
             return hits.Count > 0;
+        }
+    }
+
+    public bool TryConsumeMobAttacks(out List<MobAttack> attacks)
+    {
+        lock (_sync)
+        {
+            if (_pendingMobAttacks.Count == 0)
+            {
+                attacks = new List<MobAttack>();
+                return false;
+            }
+
+            attacks = new List<MobAttack>(_pendingMobAttacks);
+            _pendingMobAttacks.Clear();
+            return attacks.Count > 0;
         }
     }
 
@@ -2006,6 +2141,7 @@ public sealed class NetNode : IDisposable
             _pendingAttacks.Clear();
             _pendingMobStates.Clear();
             _pendingMobHits.Clear();
+            _pendingMobAttacks.Clear();
         }
         _stream = null; _client = null; _listener = null;
         try { _sendLock.Dispose(); } catch { }

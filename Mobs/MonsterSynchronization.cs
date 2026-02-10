@@ -9,6 +9,7 @@ using dc.libs.heaps.slib;
 using dc.libs.heaps.slib._AnimManager;
 using dc.pr;
 using dc.tool.atk;
+using dc.tool.skill;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using ModCore.Events;
 using ModCore.Modules;
@@ -29,6 +30,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<int, ClientMobState> clientMobTargets = new();
         private static readonly Dictionary<int, int> hostToLocalIndices = new();
         private static readonly Dictionary<int, int> localToHostIndices = new();
+        private static readonly Dictionary<int, long> clientAttackUnlockUntilTick = new();
 
         private static Level? currentLevel;
         private static long lastHostStateSendTick;
@@ -36,11 +38,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double HostStateSendRateHz = 20.0;
         private const double ClientInterpolationAlpha = 0.25;
         private const double ClientAiLockSeconds = 0.3;
+        private const double ClientAttackUnlockSeconds = 0.2;
         private const double ClientAnimSpeedEpsilon = 0.05;
         private static readonly bool ClientSyncVerticalPosition = false;
         private const double PixelsPerCase = 24.0;
         private const double MaxCoordinateMatchDistance = 96.0;
         private const double MaxCoordinateMatchDistanceSq = MaxCoordinateMatchDistance * MaxCoordinateMatchDistance;
+        private const string ContactAttackPacketSkillId = "@contact";
+        private const string OldSkillExecutePacketPrefix = "@oldexec:";
+        private const string NewSkillExecutePacketPrefix = "@newexec:";
 
         private readonly struct ClientMobState
         {
@@ -79,6 +85,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             Hook_Mob.setNemesisTarget += Hook_Mob_setNemesisTarget;
             Hook_Mob.fixedUpdate += Hook_Mob_fixedupdate;
             Hook_Mob.onDamage += Hook_Mob_onDamage;
+            Hook_Mob.contactAttack += Hook_Mob_contactAttack;
+            Hook_OldMobSkill.execute += Hook_OldMobSkill_execute;
+            Hook_MobSkill.execute += Hook_MobSkill_execute;
         }
 
         private static bool IsHost(NetNode? net) => net != null && net.IsAlive && net.IsHost;
@@ -138,12 +147,16 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var isClient = IsClient(net);
 
             if (isClient)
+            {
                 ConsumeIncomingHostMobStates(net!);
+                ConsumeIncomingHostMobAttacks(net!);
+            }
 
             if (isClient && IsSyncMob(self))
             {
                 ApplyClientAnimationStateBeforeUpdate(self);
-                TryLockMobAi(self, ClientAiLockSeconds);
+                if (!IsClientAttackUnlockActive(self))
+                    TryLockMobAi(self, ClientAiLockSeconds);
             }
 
             orig(self);
@@ -187,6 +200,85 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var y = self.spr?.y ?? self.cy;
 
             net!.SendMobHit(mobIndex, hp, x, y);
+        }
+
+        private void Hook_Mob_contactAttack(Hook_Mob.orig_contactAttack orig, Mob self, Entity pow)
+        {
+            orig(self, pow);
+
+            if (self == null)
+                return;
+
+            var net = GameMenu.NetRef;
+            if (!IsHost(net))
+                return;
+
+            TrySendHostMobAttack(self, ContactAttackPacketSkillId, false, null);
+        }
+
+        private void Hook_OldMobSkill_execute(Hook_OldMobSkill.orig_execute orig, OldMobSkill self, double? a)
+        {
+            orig(self, a);
+
+            if (self == null)
+                return;
+
+            var net = GameMenu.NetRef;
+            if (!IsHost(net))
+                return;
+
+            var ownerMob = self.owner as Mob;
+            if (ownerMob == null)
+                return;
+
+            var skillId = self.id?.ToString() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(skillId))
+                return;
+
+            TrySendHostMobAttack(ownerMob, OldSkillExecutePacketPrefix + skillId, false, null);
+        }
+
+        private void Hook_MobSkill_execute(Hook_MobSkill.orig_execute orig, MobSkill self, double? ratio)
+        {
+            orig(self, ratio);
+
+            if (self == null)
+                return;
+
+            var net = GameMenu.NetRef;
+            if (!IsHost(net))
+                return;
+
+            var ownerMob = self.owner as Mob;
+            if (ownerMob == null)
+                return;
+
+            var skillId = self.id?.ToString() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(skillId))
+                return;
+
+            TrySendHostMobAttack(ownerMob, NewSkillExecutePacketPrefix + skillId, false, null);
+        }
+
+        private static void TrySendHostMobAttack(Mob mob, string skillId, bool requiresTargetInArea, int? data)
+        {
+            if (mob == null || string.IsNullOrWhiteSpace(skillId))
+                return;
+
+            var net = GameMenu.NetRef;
+            if (!IsHost(net))
+                return;
+
+            if (!IsSyncMob(mob))
+                return;
+
+            EnsureMobTracked(mob);
+            if (!TryGetTrackedIndex(mob, out var mobIndex))
+                return;
+
+            var x = mob.spr?.x ?? mob.cx;
+            var y = mob.spr?.y ?? mob.cy;
+            net!.SendMobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y);
         }
 
         private void Hook_Mob_setNemesisTarget(Hook_Mob.orig_setNemesisTarget orig, Mob self, Entity e)
@@ -240,6 +332,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             clientMobTargets.Clear();
             hostToLocalIndices.Clear();
             localToHostIndices.Clear();
+            clientAttackUnlockUntilTick.Clear();
             currentLevel = null;
             lastHostStateSendTick = 0;
         }
@@ -315,6 +408,25 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
             catch
             {
+            }
+        }
+
+        private static bool IsClientAttackUnlockActive(Mob mob)
+        {
+            if (!TryGetTrackedIndex(mob, out var localIndex))
+                return false;
+
+            lock (Sync)
+            {
+                if (!clientAttackUnlockUntilTick.TryGetValue(localIndex, out var until))
+                    return false;
+
+                var now = Stopwatch.GetTimestamp();
+                if (now <= until)
+                    return true;
+
+                clientAttackUnlockUntilTick.Remove(localIndex);
+                return false;
             }
         }
 
@@ -568,14 +680,166 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
+        private static void ConsumeIncomingHostMobAttacks(NetNode net)
+        {
+            if (!net.TryConsumeMobAttacks(out var attacks))
+                return;
+
+            for (int i = 0; i < attacks.Count; i++)
+            {
+                var attack = attacks[i];
+                Mob? mob = null;
+
+                lock (Sync)
+                {
+                    var localIndex = ResolveLocalIndexByCoordinatesLocked(attack.Index, attack.X, attack.Y);
+                    if (localIndex >= 0 && localIndex < trackedMobs.Count)
+                    {
+                        mob = trackedMobs[localIndex];
+                        var unlockTicks = (long)(Stopwatch.Frequency * ClientAttackUnlockSeconds);
+                        clientAttackUnlockUntilTick[localIndex] = Stopwatch.GetTimestamp() + unlockTicks;
+                    }
+                }
+
+                if (mob == null)
+                    continue;
+
+                TryQueueClientMobAttack(mob, attack.SkillId, attack.RequiresTargetInArea, attack.Data);
+            }
+        }
+
+        private static void TryQueueClientMobAttack(Mob mob, string skillId, bool requiresTargetInArea, int? data)
+        {
+            if (mob == null || string.IsNullOrWhiteSpace(skillId))
+                return;
+
+            if (string.Equals(skillId, ContactAttackPacketSkillId, StringComparison.Ordinal))
+            {
+                TryApplyClientContactAttack(mob);
+                return;
+            }
+
+            if (skillId.StartsWith(OldSkillExecutePacketPrefix, StringComparison.Ordinal))
+            {
+                TryExecuteClientOldSkill(mob, skillId[OldSkillExecutePacketPrefix.Length..], data);
+                return;
+            }
+
+            if (skillId.StartsWith(NewSkillExecutePacketPrefix, StringComparison.Ordinal))
+            {
+                TryExecuteClientNewSkill(mob, skillId[NewSkillExecutePacketPrefix.Length..], data);
+                return;
+            }
+
+            try
+            {
+                var hero = ModCore.Modules.Game.Instance?.HeroInstance;
+                if (hero != null)
+                {
+                    try { mob.setAttackTarget(hero); } catch { }
+                    try { mob.setNemesisTarget(hero); } catch { }
+                }
+
+                var haxeSkillId = skillId.AsHaxeString();
+                if (!mob.hasOldSkill(haxeSkillId))
+                    return;
+
+                var oldSkill = mob.getOldSkill(haxeSkillId) as OldMobSkill;
+                if (oldSkill == null)
+                    return;
+
+                mob.queueAttack(oldSkill, requiresTargetInArea, data);
+            }
+            catch
+            {
+            }
+        }
+
+        private static void TryExecuteClientOldSkill(Mob mob, string rawSkillId, int? data)
+        {
+            if (mob == null || string.IsNullOrWhiteSpace(rawSkillId))
+                return;
+
+            try
+            {
+                var hero = ModCore.Modules.Game.Instance?.HeroInstance;
+                if (hero != null)
+                {
+                    try { mob.setAttackTarget(hero); } catch { }
+                    try { mob.setNemesisTarget(hero); } catch { }
+                }
+
+                var skillId = rawSkillId.AsHaxeString();
+                if (!mob.hasOldSkill(skillId))
+                    return;
+
+                var oldSkill = mob.getOldSkill(skillId) as OldMobSkill;
+                if (oldSkill == null)
+                    return;
+
+                try { oldSkill.prepare(data); } catch { }
+                oldSkill.execute(null);
+            }
+            catch
+            {
+            }
+        }
+
+        private static void TryExecuteClientNewSkill(Mob mob, string rawSkillId, int? data)
+        {
+            if (mob == null || string.IsNullOrWhiteSpace(rawSkillId))
+                return;
+
+            try
+            {
+                var hero = ModCore.Modules.Game.Instance?.HeroInstance;
+                if (hero != null)
+                {
+                    try { mob.setAttackTarget(hero); } catch { }
+                    try { mob.setNemesisTarget(hero); } catch { }
+                }
+
+                var skillId = rawSkillId.AsHaxeString();
+                var skill = mob.getSkill(skillId) as MobSkill;
+                if (skill == null)
+                    return;
+
+                try { skill.prepare(data); } catch { }
+                skill.execute(null);
+            }
+            catch
+            {
+            }
+        }
+
+        private static void TryApplyClientContactAttack(Mob mob)
+        {
+            try
+            {
+                var hero = ModCore.Modules.Game.Instance?.HeroInstance;
+                if (hero == null)
+                    return;
+
+                mob.contactAttack(hero);
+            }
+            catch
+            {
+            }
+        }
+
         private static int ResolveLocalIndexByCoordinatesLocked(NetNode.MobStateSnapshot hostState)
         {
-            if (hostToLocalIndices.TryGetValue(hostState.Index, out var mappedIndex))
+            return ResolveLocalIndexByCoordinatesLocked(hostState.Index, hostState.X, hostState.Y);
+        }
+
+        private static int ResolveLocalIndexByCoordinatesLocked(int hostIndex, double hostX, double hostY)
+        {
+            if (hostToLocalIndices.TryGetValue(hostIndex, out var mappedIndex))
             {
                 if (IsValidLocalMobIndexLocked(mappedIndex))
                     return mappedIndex;
 
-                hostToLocalIndices.Remove(hostState.Index);
+                hostToLocalIndices.Remove(hostIndex);
                 localToHostIndices.Remove(mappedIndex);
             }
 
@@ -587,14 +851,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (!IsValidLocalMobIndexLocked(i))
                     continue;
 
-                if (localToHostIndices.TryGetValue(i, out var boundHost) && boundHost != hostState.Index)
+                if (localToHostIndices.TryGetValue(i, out var boundHost) && boundHost != hostIndex)
                     continue;
 
                 var mob = trackedMobs[i];
                 var x = mob.spr?.x ?? mob.cx;
                 var y = mob.spr?.y ?? mob.cy;
-                var dx = x - hostState.X;
-                var dy = y - hostState.Y;
+                var dx = x - hostX;
+                var dy = y - hostY;
                 var distSq = dx * dx + dy * dy;
 
                 if (distSq < bestDistance)
@@ -606,16 +870,16 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (bestIndex >= 0 && bestDistance <= MaxCoordinateMatchDistanceSq)
             {
-                hostToLocalIndices[hostState.Index] = bestIndex;
-                localToHostIndices[bestIndex] = hostState.Index;
+                hostToLocalIndices[hostIndex] = bestIndex;
+                localToHostIndices[bestIndex] = hostIndex;
                 return bestIndex;
             }
 
-            if (hostState.Index >= 0 && hostState.Index < trackedMobs.Count && IsValidLocalMobIndexLocked(hostState.Index))
+            if (hostIndex >= 0 && hostIndex < trackedMobs.Count && IsValidLocalMobIndexLocked(hostIndex))
             {
-                hostToLocalIndices[hostState.Index] = hostState.Index;
-                localToHostIndices[hostState.Index] = hostState.Index;
-                return hostState.Index;
+                hostToLocalIndices[hostIndex] = hostIndex;
+                localToHostIndices[hostIndex] = hostIndex;
+                return hostIndex;
             }
 
             return -1;
