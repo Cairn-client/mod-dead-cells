@@ -35,6 +35,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Random hostTargetRandom = new();
 
         private static Level? currentLevel;
+        private static Level? lastClientNetPumpLevel;
+        private static Level? lastHostNetPumpLevel;
+        private static double lastClientNetPumpFrame = double.NaN;
+        private static double lastHostNetPumpFrame = double.NaN;
         private static long lastHostStateSendTick;
 
         private const double HostStateSendRateHz = 20.0;
@@ -85,7 +89,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             Hook_Level.onDispose += Hook_Level_onDispose;
 
             Hook_Mob.setNemesisTarget += Hook_Mob_setNemesisTarget;
+            Hook_Mob.preUpdate += Hook_Mob_preUpdate;
             Hook_Mob.fixedUpdate += Hook_Mob_fixedupdate;
+            Hook_Mob.postUpdate += Hook_Mob_postUpdate;
             Hook_Mob.onDamage += Hook_Mob_onDamage;
             Hook_Mob.contactAttack += Hook_Mob_contactAttack;
             Hook_OldMobSkill.execute += Hook_OldMobSkill_execute;
@@ -134,7 +140,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private void Hook_Mob_fixedupdate(Hook_Mob.orig_fixedUpdate orig, Mob self)
+        private void Hook_Mob_preUpdate(Hook_Mob.orig_preUpdate orig, Mob self)
         {
             if (self == null)
             {
@@ -148,7 +154,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var isHost = IsHost(net);
             var isClient = IsClient(net);
 
-            if (isClient)
+            if (isClient && ShouldRunClientNetPumpForFrame(self))
             {
                 ConsumeIncomingHostMobStates(net!);
                 ConsumeIncomingHostMobAttacks(net!);
@@ -165,18 +171,52 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 TryAssignHostAttackTarget(self);
 
             orig(self);
+        }
+
+        private void Hook_Mob_fixedupdate(Hook_Mob.orig_fixedUpdate orig, Mob self)
+        {
+            if (self == null)
+            {
+                orig(self);
+                return;
+            }
+
+            EnsureMobTracked(self);
+
+            var net = GameMenu.NetRef;
+            var isClient = IsClient(net);
+
+            orig(self);
 
             if (!IsSyncMob(self))
                 return;
 
-            if (isHost)
+            if (isClient)
+                ApplyInterpolatedState(self);
+        }
+
+        private void Hook_Mob_postUpdate(Hook_Mob.orig_postUpdate orig, Mob self)
+        {
+            if (self == null)
+            {
+                orig(self);
+                return;
+            }
+
+            EnsureMobTracked(self);
+
+            var net = GameMenu.NetRef;
+            var isHost = IsHost(net);
+
+            orig(self);
+
+            if (!IsSyncMob(self))
+                return;
+
+            if (isHost && ShouldRunHostNetPumpForFrame(self))
             {
                 ConsumeIncomingMobHits(net!);
                 TrySendHostMobStates(net!);
-            }
-            else if (isClient)
-            {
-                ApplyInterpolatedState(self);
             }
         }
 
@@ -339,6 +379,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             localToHostIndices.Clear();
             clientAttackUnlockUntilTick.Clear();
             currentLevel = null;
+            lastClientNetPumpLevel = null;
+            lastHostNetPumpLevel = null;
+            lastClientNetPumpFrame = double.NaN;
+            lastHostNetPumpFrame = double.NaN;
             lastHostStateSendTick = 0;
         }
 
@@ -413,6 +457,49 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
             catch
             {
+            }
+        }
+
+        private static bool ShouldRunClientNetPumpForFrame(Mob mob)
+        {
+            return ShouldRunNetPumpForFrame(mob, isClientPump: true);
+        }
+
+        private static bool ShouldRunHostNetPumpForFrame(Mob mob)
+        {
+            return ShouldRunNetPumpForFrame(mob, isClientPump: false);
+        }
+
+        private static bool ShouldRunNetPumpForFrame(Mob mob, bool isClientPump)
+        {
+            var level = mob._level ?? currentLevel;
+            if (level == null)
+                return true;
+
+            var frame = level.ftime;
+
+            lock (Sync)
+            {
+                if (isClientPump)
+                {
+                    if (!ReferenceEquals(lastClientNetPumpLevel, level) || lastClientNetPumpFrame != frame)
+                    {
+                        lastClientNetPumpLevel = level;
+                        lastClientNetPumpFrame = frame;
+                        return true;
+                    }
+
+                    return false;
+                }
+
+                if (!ReferenceEquals(lastHostNetPumpLevel, level) || lastHostNetPumpFrame != frame)
+                {
+                    lastHostNetPumpLevel = level;
+                    lastHostNetPumpFrame = frame;
+                    return true;
+                }
+
+                return false;
             }
         }
 
