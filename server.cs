@@ -960,11 +960,11 @@ public sealed class NetNode : IDisposable
                 return true;
 
             var payload = line["MOBDRAW|".Length..];
-            if (TryParseMobDrawPayload(payload, senderId, forceSenderId, out var draw))
+            if (TryParseMobDrawPayload(payload, senderId, forceSenderId, out var draws))
             {
                 lock (_sync)
                 {
-                    _pendingMobDraws.Add(draw);
+                    _pendingMobDraws.AddRange(draws);
                     _hasRemote = true;
                 }
             }
@@ -1364,12 +1364,30 @@ public sealed class NetNode : IDisposable
         return true;
     }
 
-    private static bool TryParseMobDrawPayload(string payload, int? senderId, bool forceSenderId, out MobDraw draw)
+    private static bool TryParseMobDrawPayload(string payload, int? senderId, bool forceSenderId, out List<MobDraw> draws)
     {
-        draw = default;
+        draws = new List<MobDraw>();
         if (string.IsNullOrWhiteSpace(payload))
             return false;
 
+        var entries = payload.Split(';', StringSplitOptions.RemoveEmptyEntries);
+        if (entries.Length == 0)
+            entries = new[] { payload };
+
+        for (int i = 0; i < entries.Length; i++)
+        {
+            if (!TryParseSingleMobDrawPayload(entries[i], senderId, forceSenderId, out var draw))
+                continue;
+
+            draws.Add(draw);
+        }
+
+        return draws.Count > 0;
+    }
+
+    private static bool TryParseSingleMobDrawPayload(string payload, int? senderId, bool forceSenderId, out MobDraw draw)
+    {
+        draw = default;
         var parts = payload.Split('|');
         if (parts.Length < 4)
             return false;
@@ -1521,6 +1539,31 @@ public sealed class NetNode : IDisposable
         return string.Create(
             CultureInfo.InvariantCulture,
             $"MOBDRAW|{userId}|{mobIndex}|{(isOutOfGame ? 1 : 0)}|{(isOnScreen ? 1 : 0)}\n");
+    }
+
+    private static string BuildMobDrawLine(IReadOnlyList<MobDraw> draws)
+    {
+        var sb = new StringBuilder("MOBDRAW|");
+        if (draws != null)
+        {
+            for (int i = 0; i < draws.Count; i++)
+            {
+                var draw = draws[i];
+                if (i > 0)
+                    sb.Append(';');
+
+                sb.Append(draw.UserId.ToString(CultureInfo.InvariantCulture));
+                sb.Append('|');
+                sb.Append(draw.MobIndex.ToString(CultureInfo.InvariantCulture));
+                sb.Append('|');
+                sb.Append(draw.IsOutOfGame ? '1' : '0');
+                sb.Append('|');
+                sb.Append(draw.IsOnScreen ? '1' : '0');
+            }
+        }
+
+        sb.Append('\n');
+        return sb.ToString();
     }
 
     private static string BuildPosLine(int id, double cx, double cy, int dir)
@@ -1915,6 +1958,21 @@ public sealed class NetNode : IDisposable
             return;
 
         var line = BuildMobDrawLine(ID, mobIndex, isOutOfGame, isOnScreen);
+        _ = SendLineSafe(line);
+    }
+
+    public void SendMobDrawBatch(IReadOnlyList<MobDraw> draws)
+    {
+        if (_role != NetRole.Client)
+            return;
+        if (!HasAnyConnection())
+            return;
+        if (ID <= 0)
+            return;
+        if (draws == null || draws.Count == 0)
+            return;
+
+        var line = BuildMobDrawLine(draws);
         _ = SendLineSafe(line);
     }
 

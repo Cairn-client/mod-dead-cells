@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.Threading.Tasks;
 using dc;
 using dc.en;
 using dc.h2d;
@@ -33,6 +34,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<int, long> clientAttackUnlockUntilTick = new();
         private static readonly List<Entity> hostDetectedTargets = new();
         private static readonly Random hostTargetRandom = new();
+        private static readonly object AsyncPumpSync = new();
 
         private static Level? currentLevel;
         private static Level? lastClientNetPumpLevel;
@@ -41,6 +43,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static double lastHostNetPumpFrame = double.NaN;
         private static long lastClientMobDrawSendTick;
         private static long lastHostStateSendTick;
+        private static Task? clientNetPumpTask;
+        private static Task? hostNetPumpTask;
+        private static int asyncSessionToken;
 
         private const double ClientMobDrawSendRateHz = 20.0;
         private const double HostStateSendRateHz = 20.0;
@@ -158,8 +163,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (isClient && ShouldRunClientNetPumpForFrame(self))
             {
-                ConsumeIncomingHostMobStates(net!);
-                ConsumeIncomingHostMobAttacks(net!);
+                ScheduleClientNetPumpAsync(net!);
                 TrySendClientMobDraws(net!);
             }
 
@@ -218,8 +222,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (isHost && ShouldRunHostNetPumpForFrame(self))
             {
-                ConsumeIncomingMobDraws(net!);
-                ConsumeIncomingMobHits(net!);
+                ScheduleHostNetPumpAsync(net!);
                 TrySendHostMobStates(net!);
             }
         }
@@ -389,6 +392,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             lastHostNetPumpFrame = double.NaN;
             lastClientMobDrawSendTick = 0;
             lastHostStateSendTick = 0;
+            unchecked
+            {
+                asyncSessionToken++;
+            }
+            lock (AsyncPumpSync)
+            {
+                clientNetPumpTask = null;
+                hostNetPumpTask = null;
+            }
         }
 
         private static int CompareMobsForStableOrder(Mob a, Mob b)
@@ -505,6 +517,102 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 }
 
                 return false;
+            }
+        }
+
+        private static void ScheduleClientNetPumpAsync(NetNode net)
+        {
+            int session;
+            lock (Sync)
+            {
+                session = asyncSessionToken;
+            }
+
+            lock (AsyncPumpSync)
+            {
+                if (clientNetPumpTask != null && !clientNetPumpTask.IsCompleted)
+                    return;
+
+                clientNetPumpTask = Task.Run(() =>
+                {
+                    try
+                    {
+                        if (net.TryConsumeMobStates(out var states) && states.Count > 0)
+                        {
+                            GameMenu.EnqueueMainThread(() =>
+                            {
+                                if (!IsCurrentAsyncSession(session))
+                                    return;
+                                ApplyIncomingHostMobStates(states);
+                            });
+                        }
+
+                        if (net.TryConsumeMobAttacks(out var attacks) && attacks.Count > 0)
+                        {
+                            GameMenu.EnqueueMainThread(() =>
+                            {
+                                if (!IsCurrentAsyncSession(session))
+                                    return;
+                                ApplyIncomingHostMobAttacks(attacks);
+                            });
+                        }
+                    }
+                    catch
+                    {
+                    }
+                });
+            }
+        }
+
+        private static void ScheduleHostNetPumpAsync(NetNode net)
+        {
+            int session;
+            lock (Sync)
+            {
+                session = asyncSessionToken;
+            }
+
+            lock (AsyncPumpSync)
+            {
+                if (hostNetPumpTask != null && !hostNetPumpTask.IsCompleted)
+                    return;
+
+                hostNetPumpTask = Task.Run(() =>
+                {
+                    try
+                    {
+                        if (net.TryConsumeMobDraws(out var draws) && draws.Count > 0)
+                        {
+                            GameMenu.EnqueueMainThread(() =>
+                            {
+                                if (!IsCurrentAsyncSession(session))
+                                    return;
+                                ApplyIncomingMobDraws(draws);
+                            });
+                        }
+
+                        if (net.TryConsumeMobHits(out var hits) && hits.Count > 0)
+                        {
+                            GameMenu.EnqueueMainThread(() =>
+                            {
+                                if (!IsCurrentAsyncSession(session))
+                                    return;
+                                ApplyIncomingMobHits(hits);
+                            });
+                        }
+                    }
+                    catch
+                    {
+                    }
+                });
+            }
+        }
+
+        private static bool IsCurrentAsyncSession(int token)
+        {
+            lock (Sync)
+            {
+                return asyncSessionToken == token;
             }
         }
 
@@ -856,6 +964,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!net.TryConsumeMobStates(out var states))
                 return;
 
+            ApplyIncomingHostMobStates(states);
+        }
+
+        private static void ApplyIncomingHostMobStates(IReadOnlyList<NetNode.MobStateSnapshot> states)
+        {
+            if (states == null || states.Count == 0)
+                return;
+
             lock (Sync)
             {
                 foreach (var state in states)
@@ -878,6 +994,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static void ConsumeIncomingHostMobAttacks(NetNode net)
         {
             if (!net.TryConsumeMobAttacks(out var attacks))
+                return;
+
+            ApplyIncomingHostMobAttacks(attacks);
+        }
+
+        private static void ApplyIncomingHostMobAttacks(IReadOnlyList<NetNode.MobAttack> attacks)
+        {
+            if (attacks == null || attacks.Count == 0)
                 return;
 
             for (int i = 0; i < attacks.Count; i++)
@@ -911,6 +1035,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
             lastClientMobDrawSendTick = now;
 
+            List<NetNode.MobDraw> draws = new();
             lock (Sync)
             {
                 for (int i = 0; i < trackedMobs.Count; i++)
@@ -934,14 +1059,25 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     if (!isOnScreen && isOutOfGame)
                         continue;
 
-                    net.SendMobDraw(i, isOutOfGame, isOnScreen);
+                    draws.Add(new NetNode.MobDraw(net.id, i, isOutOfGame, isOnScreen));
                 }
             }
+
+            if (draws.Count > 0)
+                net.SendMobDrawBatch(draws);
         }
 
         private static void ConsumeIncomingMobDraws(NetNode net)
         {
             if (!net.TryConsumeMobDraws(out var draws))
+                return;
+
+            ApplyIncomingMobDraws(draws);
+        }
+
+        private static void ApplyIncomingMobDraws(IReadOnlyList<NetNode.MobDraw> draws)
+        {
+            if (draws == null || draws.Count == 0)
                 return;
 
             lock (Sync)
@@ -1287,6 +1423,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static void ConsumeIncomingMobHits(NetNode net)
         {
             if (!net.TryConsumeMobHits(out var hits))
+                return;
+
+            ApplyIncomingMobHits(hits);
+        }
+
+        private static void ApplyIncomingMobHits(IReadOnlyList<NetNode.MobHit> hits)
+        {
+            if (hits == null || hits.Count == 0)
                 return;
 
             lock (Sync)
