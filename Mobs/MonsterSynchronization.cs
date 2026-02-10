@@ -39,8 +39,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static Level? lastHostNetPumpLevel;
         private static double lastClientNetPumpFrame = double.NaN;
         private static double lastHostNetPumpFrame = double.NaN;
+        private static long lastClientMobDrawSendTick;
         private static long lastHostStateSendTick;
 
+        private const double ClientMobDrawSendRateHz = 20.0;
         private const double HostStateSendRateHz = 20.0;
         private const double ClientInterpolationAlpha = 0.25;
         private const double ClientAiLockSeconds = 0.3;
@@ -158,6 +160,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 ConsumeIncomingHostMobStates(net!);
                 ConsumeIncomingHostMobAttacks(net!);
+                TrySendClientMobDraws(net!);
             }
 
             if (isClient && IsSyncMob(self))
@@ -215,6 +218,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (isHost && ShouldRunHostNetPumpForFrame(self))
             {
+                ConsumeIncomingMobDraws(net!);
                 ConsumeIncomingMobHits(net!);
                 TrySendHostMobStates(net!);
             }
@@ -383,6 +387,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             lastHostNetPumpLevel = null;
             lastClientNetPumpFrame = double.NaN;
             lastHostNetPumpFrame = double.NaN;
+            lastClientMobDrawSendTick = 0;
             lastHostStateSendTick = 0;
         }
 
@@ -895,6 +900,119 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     continue;
 
                 TryQueueClientMobAttack(mob, attack.SkillId, attack.RequiresTargetInArea, attack.Data);
+            }
+        }
+
+        private static void TrySendClientMobDraws(NetNode net)
+        {
+            var now = Stopwatch.GetTimestamp();
+            var minDelta = (long)(Stopwatch.Frequency / ClientMobDrawSendRateHz);
+            if (lastClientMobDrawSendTick != 0 && now - lastClientMobDrawSendTick < minDelta)
+                return;
+            lastClientMobDrawSendTick = now;
+
+            lock (Sync)
+            {
+                for (int i = 0; i < trackedMobs.Count; i++)
+                {
+                    var mob = trackedMobs[i];
+                    if (!IsSyncMob(mob))
+                        continue;
+
+                    bool isOutOfGame;
+                    bool isOnScreen;
+                    try
+                    {
+                        isOutOfGame = mob!.isOutOfGame;
+                        isOnScreen = mob.isOnScreen;
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (!isOnScreen && isOutOfGame)
+                        continue;
+
+                    net.SendMobDraw(i, isOutOfGame, isOnScreen);
+                }
+            }
+        }
+
+        private static void ConsumeIncomingMobDraws(NetNode net)
+        {
+            if (!net.TryConsumeMobDraws(out var draws))
+                return;
+
+            lock (Sync)
+            {
+                for (int i = 0; i < draws.Count; i++)
+                {
+                    var draw = draws[i];
+                    if (draw.MobIndex < 0 || draw.MobIndex >= trackedMobs.Count)
+                        continue;
+
+                    var mob = trackedMobs[draw.MobIndex];
+                    if (!IsSyncMob(mob))
+                        continue;
+
+                    TryApplyHostDrawRequestLocked(mob!, draw);
+                }
+            }
+        }
+
+        private static void TryApplyHostDrawRequestLocked(Mob mob, NetNode.MobDraw draw)
+        {
+            if (mob == null)
+                return;
+
+            if (!draw.IsOnScreen && draw.IsOutOfGame)
+                return;
+
+            try
+            {
+                if (draw.IsOnScreen)
+                    mob.isOnScreen = true;
+                mob.onScreenRecent = 0.0;
+            }
+            catch
+            {
+            }
+
+            var wasOutOfGame = false;
+            try
+            {
+                wasOutOfGame = mob.isOutOfGame;
+            }
+            catch
+            {
+            }
+
+            if (!wasOutOfGame)
+                return;
+
+            try
+            {
+                mob.isOutOfGame = false;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                mob.lastOutOfGame = false;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                mob.onOutOfGameChange();
+            }
+            catch
+            {
             }
         }
 
