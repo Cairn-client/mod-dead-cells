@@ -46,6 +46,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static Task? clientNetPumpTask;
         private static Task? hostNetPumpTask;
         private static int asyncSessionToken;
+        private static int forceExactNemesisTargetDepth;
 
         private const double ClientMobDrawSendRateHz = 20.0;
         private const double HostStateSendRateHz = 20.0;
@@ -265,7 +266,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!IsHost(net))
                 return;
 
-            TrySendHostMobAttack(self, ContactAttackPacketSkillId, false, null);
+            TrySendHostMobAttack(self, ContactAttackPacketSkillId, false, null, pow);
         }
 
         private void Hook_OldMobSkill_execute(Hook_OldMobSkill.orig_execute orig, OldMobSkill self, double? a)
@@ -312,7 +313,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             TrySendHostMobAttack(ownerMob, NewSkillExecutePacketPrefix + skillId, false, null);
         }
 
-        private static void TrySendHostMobAttack(Mob mob, string skillId, bool requiresTargetInArea, int? data)
+        private static void TrySendHostMobAttack(Mob mob, string skillId, bool requiresTargetInArea, int? data, Entity? explicitTarget = null)
         {
             if (mob == null || string.IsNullOrWhiteSpace(skillId))
                 return;
@@ -328,13 +329,33 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!TryGetTrackedIndex(mob, out var mobIndex))
                 return;
 
+            var targetEntity = explicitTarget;
+            if (targetEntity == null)
+            {
+                try
+                {
+                    targetEntity = mob.nemesisTarget;
+                }
+                catch
+                {
+                    targetEntity = null;
+                }
+            }
+
+            var targetUserId = ResolveHostTargetUserId(targetEntity, net!.id);
             var x = mob.spr?.x ?? mob.cx;
             var y = mob.spr?.y ?? mob.cy;
-            net!.SendMobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y);
+            net.SendMobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y, targetUserId);
         }
 
         private void Hook_Mob_setNemesisTarget(Hook_Mob.orig_setNemesisTarget orig, Mob self, Entity e)
         {
+            if (System.Threading.Volatile.Read(ref forceExactNemesisTargetDepth) > 0)
+            {
+                orig(self, e);
+                return;
+            }
+
             if (e == ModCore.Modules.Game.Instance.HeroInstance)
             {
                 var team = self._team;
@@ -666,13 +687,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
             }
 
-            try
-            {
-                mob.setNemesisTarget(selected);
-            }
-            catch
-            {
-            }
+            TrySetNemesisTargetExact(mob, selected);
         }
 
         private static void TryCollectDetectedTarget(Mob mob, Entity? candidate)
@@ -712,6 +727,68 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (!hostDetectedTargets.Contains(candidate))
                 hostDetectedTargets.Add(candidate);
+        }
+
+        private static int ResolveHostTargetUserId(Entity? target, int localUserId)
+        {
+            if (target == null || localUserId <= 0)
+                return 0;
+
+            var localHero = ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+            if (localHero != null && ReferenceEquals(target, localHero))
+                return localUserId;
+
+            var gameHero = ModCore.Modules.Game.Instance?.HeroInstance;
+            if (gameHero != null && ReferenceEquals(target, gameHero))
+                return localUserId;
+
+            for (int i = 0; i < ModEntry.clients.Length; i++)
+            {
+                var clientId = ModEntry.clientIds[i];
+                var client = ModEntry.clients[i];
+                if (clientId <= 0 || client == null)
+                    continue;
+
+                if (ReferenceEquals(target, client))
+                    return clientId;
+            }
+
+            return 0;
+        }
+
+        private static void TrySetNemesisTargetExact(Mob mob, Entity target)
+        {
+            if (mob == null || target == null)
+                return;
+
+            System.Threading.Interlocked.Increment(ref forceExactNemesisTargetDepth);
+            try
+            {
+                mob.setNemesisTarget(target);
+            }
+            catch
+            {
+            }
+            finally
+            {
+                System.Threading.Interlocked.Decrement(ref forceExactNemesisTargetDepth);
+            }
+        }
+
+        private static void TrySetMobAttackTargetsExact(Mob mob, Entity target)
+        {
+            if (mob == null || target == null)
+                return;
+
+            try
+            {
+                mob.setAttackTarget(target);
+            }
+            catch
+            {
+            }
+
+            TrySetNemesisTargetExact(mob, target);
         }
 
         private static bool IsClientAttackUnlockActive(Mob mob)
@@ -1023,7 +1100,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (mob == null)
                     continue;
 
-                TryQueueClientMobAttack(mob, attack.SkillId, attack.RequiresTargetInArea, attack.Data);
+                TryQueueClientMobAttack(mob, attack.SkillId, attack.RequiresTargetInArea, attack.Data, attack.TargetUserId);
             }
         }
 
@@ -1152,37 +1229,32 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static void TryQueueClientMobAttack(Mob mob, string skillId, bool requiresTargetInArea, int? data)
+        private static void TryQueueClientMobAttack(Mob mob, string skillId, bool requiresTargetInArea, int? data, int targetUserId)
         {
             if (mob == null || string.IsNullOrWhiteSpace(skillId))
                 return;
 
             if (string.Equals(skillId, ContactAttackPacketSkillId, StringComparison.Ordinal))
             {
-                TryApplyClientContactAttack(mob);
+                TryApplyClientContactAttack(mob, targetUserId);
                 return;
             }
 
             if (skillId.StartsWith(OldSkillExecutePacketPrefix, StringComparison.Ordinal))
             {
-                TryExecuteClientOldSkill(mob, skillId[OldSkillExecutePacketPrefix.Length..], data);
+                TryExecuteClientOldSkill(mob, skillId[OldSkillExecutePacketPrefix.Length..], data, targetUserId);
                 return;
             }
 
             if (skillId.StartsWith(NewSkillExecutePacketPrefix, StringComparison.Ordinal))
             {
-                TryExecuteClientNewSkill(mob, skillId[NewSkillExecutePacketPrefix.Length..], data);
+                TryExecuteClientNewSkill(mob, skillId[NewSkillExecutePacketPrefix.Length..], data, targetUserId);
                 return;
             }
 
             try
             {
-                var hero = ModCore.Modules.Game.Instance?.HeroInstance;
-                if (hero != null)
-                {
-                    try { mob.setAttackTarget(hero); } catch { }
-                    try { mob.setNemesisTarget(hero); } catch { }
-                }
+                TrySetClientMobAttackTarget(mob, targetUserId);
 
                 var haxeSkillId = skillId.AsHaxeString();
                 if (!mob.hasOldSkill(haxeSkillId))
@@ -1199,19 +1271,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static void TryExecuteClientOldSkill(Mob mob, string rawSkillId, int? data)
+        private static void TryExecuteClientOldSkill(Mob mob, string rawSkillId, int? data, int targetUserId)
         {
             if (mob == null || string.IsNullOrWhiteSpace(rawSkillId))
                 return;
 
             try
             {
-                var hero = ModCore.Modules.Game.Instance?.HeroInstance;
-                if (hero != null)
-                {
-                    try { mob.setAttackTarget(hero); } catch { }
-                    try { mob.setNemesisTarget(hero); } catch { }
-                }
+                TrySetClientMobAttackTarget(mob, targetUserId);
 
                 var skillId = rawSkillId.AsHaxeString();
                 if (!mob.hasOldSkill(skillId))
@@ -1229,19 +1296,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static void TryExecuteClientNewSkill(Mob mob, string rawSkillId, int? data)
+        private static void TryExecuteClientNewSkill(Mob mob, string rawSkillId, int? data, int targetUserId)
         {
             if (mob == null || string.IsNullOrWhiteSpace(rawSkillId))
                 return;
 
             try
             {
-                var hero = ModCore.Modules.Game.Instance?.HeroInstance;
-                if (hero != null)
-                {
-                    try { mob.setAttackTarget(hero); } catch { }
-                    try { mob.setNemesisTarget(hero); } catch { }
-                }
+                TrySetClientMobAttackTarget(mob, targetUserId);
 
                 var skillId = rawSkillId.AsHaxeString();
                 var skill = mob.getSkill(skillId) as MobSkill;
@@ -1256,18 +1318,58 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static void TryApplyClientContactAttack(Mob mob)
+        private static void TryApplyClientContactAttack(Mob mob, int targetUserId)
         {
             try
             {
-                var hero = ModCore.Modules.Game.Instance?.HeroInstance;
-                if (hero == null)
+                var target = ResolveClientAttackTargetEntity(mob, targetUserId);
+                if (target == null)
                     return;
 
-                mob.contactAttack(hero);
+                TrySetMobAttackTargetsExact(mob, target);
+                mob.contactAttack(target);
             }
             catch
             {
+            }
+        }
+
+        private static void TrySetClientMobAttackTarget(Mob mob, int targetUserId)
+        {
+            var target = ResolveClientAttackTargetEntity(mob, targetUserId);
+            if (target == null)
+                return;
+
+            TrySetMobAttackTargetsExact(mob, target);
+        }
+
+        private static Entity? ResolveClientAttackTargetEntity(Mob mob, int targetUserId)
+        {
+            if (targetUserId > 0)
+            {
+                var net = GameMenu.NetRef;
+                var localId = net?.id ?? 0;
+                if (localId > 0)
+                {
+                    if (targetUserId == localId)
+                        return ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+
+                    if (ModEntry.TryGetClientIndex(localId, targetUserId, out var index))
+                    {
+                        var client = ModEntry.clients[index];
+                        if (client != null)
+                            return client;
+                    }
+                }
+            }
+
+            try
+            {
+                return mob.nemesisTarget;
+            }
+            catch
+            {
+                return null;
             }
         }
 

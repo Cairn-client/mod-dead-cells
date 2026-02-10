@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Globalization;
 using DeadCellsMultiplayerMod;
@@ -220,8 +221,9 @@ public sealed class NetNode : IDisposable
         public readonly int? Data;
         public readonly double X;
         public readonly double Y;
+        public readonly int TargetUserId;
 
-        public MobAttack(int index, string skillId, bool requiresTargetInArea, int? data, double x, double y)
+        public MobAttack(int index, string skillId, bool requiresTargetInArea, int? data, double x, double y, int targetUserId)
         {
             Index = index;
             SkillId = skillId ?? string.Empty;
@@ -229,6 +231,7 @@ public sealed class NetNode : IDisposable
             Data = data;
             X = x;
             Y = y;
+            TargetUserId = targetUserId;
         }
     }
 
@@ -501,7 +504,44 @@ public sealed class NetNode : IDisposable
     // ============== COMMON IO ==============
     private async Task RecvLoop(NetworkStream stream, CancellationToken ct, int? senderId, ClientConnection? sender)
     {
-        var buf = new byte[2048];
+        using var recvCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var recvCt = recvCts.Token;
+        var incomingLines = Channel.CreateUnbounded<string>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = true,
+            AllowSynchronousContinuations = false
+        });
+
+        try
+        {
+            var readTask = ReadIncomingLinesLoop(stream, incomingLines.Writer, recvCt);
+            var processTask = ProcessIncomingLinesLoop(incomingLines.Reader, senderId, sender, recvCts, recvCt);
+            await Task.WhenAll(readTask, processTask).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (recvCt.IsCancellationRequested) { }
+        catch (ObjectDisposedException) { }
+        catch (Exception ex)
+        {
+            _log.Warning("[NetNode] RecvLoop error: {msg}", ex.Message);
+        }
+        finally
+        {
+            try { recvCts.Cancel(); } catch { }
+            if (_role == NetRole.Host && sender != null)
+            {
+                CleanupHostClient(sender);
+            }
+            else
+            {
+                CleanupClient();
+            }
+        }
+    }
+
+    private async Task ReadIncomingLinesLoop(NetworkStream stream, ChannelWriter<string> writer, CancellationToken ct)
+    {
+        var buf = new byte[4096];
         var sb = new StringBuilder();
 
         try
@@ -509,22 +549,48 @@ public sealed class NetNode : IDisposable
             while (!ct.IsCancellationRequested)
             {
                 int n = await stream.ReadAsync(buf.AsMemory(0, buf.Length), ct).ConfigureAwait(false);
-                if (n <= 0) break;
+                if (n <= 0)
+                    break;
 
                 sb.Append(Encoding.UTF8.GetString(buf, 0, n));
 
-                while (true)
+                while (TryReadBufferedLine(sb, out var line))
                 {
-                    var text = sb.ToString();
-                    int idx = text.IndexOf('\n');
-                    if (idx < 0) break;
+                    if (line.Length == 0)
+                        continue;
 
-                    var line = text[..idx].Trim();
-                    sb.Remove(0, idx + 1);
-                    if (line.Length == 0) continue;
+                    await writer.WriteAsync(line, ct).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (ObjectDisposedException) { }
+        catch (Exception ex)
+        {
+            _log.Warning("[NetNode] Recv read error: {msg}", ex.Message);
+        }
+        finally
+        {
+            writer.TryComplete();
+        }
+    }
 
+    private async Task ProcessIncomingLinesLoop(
+        ChannelReader<string> reader,
+        int? senderId,
+        ClientConnection? sender,
+        CancellationTokenSource recvCts,
+        CancellationToken ct)
+    {
+        try
+        {
+            while (await reader.WaitToReadAsync(ct).ConfigureAwait(false))
+            {
+                while (reader.TryRead(out var line))
+                {
                     if (!HandleLine(line, senderId, out var forwardLine))
                     {
+                        try { recvCts.Cancel(); } catch { }
                         return;
                     }
 
@@ -535,23 +601,27 @@ public sealed class NetNode : IDisposable
                 }
             }
         }
-        catch (OperationCanceledException) { }
-        catch (ObjectDisposedException) { }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            _log.Warning("[NetNode] RecvLoop error: {msg}", ex.Message);
+            _log.Warning("[NetNode] Recv process error: {msg}", ex.Message);
         }
-        finally
+    }
+
+    private static bool TryReadBufferedLine(StringBuilder buffer, out string line)
+    {
+        for (var i = 0; i < buffer.Length; i++)
         {
-            if (_role == NetRole.Host && sender != null)
-            {
-                CleanupHostClient(sender);
-            }
-            else
-            {
-                CleanupClient();
-            }
+            if (buffer[i] != '\n')
+                continue;
+
+            line = buffer.ToString(0, i).Trim();
+            buffer.Remove(0, i + 1);
+            return true;
         }
+
+        line = string.Empty;
+        return false;
     }
 
     private bool HandleLine(string line, int? senderId, out string? forwardLine)
@@ -1360,7 +1430,11 @@ public sealed class NetNode : IDisposable
         if (!double.TryParse(parts[6], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
             return false;
 
-        attack = new MobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y);
+        var targetUserId = 0;
+        if (parts.Length > 7)
+            int.TryParse(parts[7], NumberStyles.Integer, CultureInfo.InvariantCulture, out targetUserId);
+
+        attack = new MobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y, targetUserId);
         return true;
     }
 
@@ -1531,7 +1605,7 @@ public sealed class NetNode : IDisposable
 
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"MOBATK|{attack.Index},{encodedSkill},{(attack.RequiresTargetInArea ? 1 : 0)},{(hasData ? 1 : 0)},{dataPart},{attack.X},{attack.Y}\n");
+            $"MOBATK|{attack.Index},{encodedSkill},{(attack.RequiresTargetInArea ? 1 : 0)},{(hasData ? 1 : 0)},{dataPart},{attack.X},{attack.Y},{attack.TargetUserId}\n");
     }
 
     private static string BuildMobDrawLine(int userId, int mobIndex, bool isOutOfGame, bool isOnScreen)
@@ -1917,7 +1991,7 @@ public sealed class NetNode : IDisposable
         _ = SendLineSafe(line);
     }
 
-    public void SendMobAttack(int mobIndex, string skillId, bool requiresTargetInArea, int? data, double x, double y)
+    public void SendMobAttack(int mobIndex, string skillId, bool requiresTargetInArea, int? data, double x, double y, int targetUserId)
     {
         if (_role != NetRole.Host)
             return;
@@ -1926,7 +2000,7 @@ public sealed class NetNode : IDisposable
         if (mobIndex < 0 || string.IsNullOrWhiteSpace(skillId))
             return;
 
-        var attack = new MobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y);
+        var attack = new MobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y, targetUserId);
         var line = BuildMobAttackLine(attack);
         _ = SendLineSafe(line);
     }
