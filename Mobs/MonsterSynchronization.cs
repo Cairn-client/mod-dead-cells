@@ -36,6 +36,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double HostStateSendRateHz = 20.0;
         private const double ClientInterpolationAlpha = 0.25;
         private const double ClientAiLockSeconds = 0.3;
+        private const double ClientAnimSpeedEpsilon = 0.05;
         private static readonly bool ClientSyncVerticalPosition = false;
         private const double PixelsPerCase = 24.0;
         private const double MaxCoordinateMatchDistance = 96.0;
@@ -344,14 +345,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private readonly struct ParsedAnimPayload
         {
             public readonly string Group;
-            public readonly int Frame;
             public readonly bool Reverse;
             public readonly double Speed;
 
-            public ParsedAnimPayload(string group, int frame, bool reverse, double speed)
+            public ParsedAnimPayload(string group, bool reverse, double speed)
             {
                 Group = group ?? string.Empty;
-                Frame = frame;
                 Reverse = reverse;
                 Speed = speed;
             }
@@ -396,7 +395,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return string.Empty;
 
             var group = spr.groupName?.ToString() ?? string.Empty;
-            var frame = System.Math.Max(0, spr.frame);
             var reverse = false;
             var speed = 1.0;
 
@@ -432,7 +430,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             return string.Create(
                 CultureInfo.InvariantCulture,
-                $"{encodedGroup}~{frame}~{(reverse ? 1 : 0)}~{speed:R}");
+                $"{encodedGroup}~{(reverse ? 1 : 0)}~{speed:R}");
         }
 
         private static bool TryParseAnimPayload(string? payload, out ParsedAnimPayload parsed)
@@ -442,7 +440,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return false;
 
             var parts = payload.Split('~', StringSplitOptions.None);
-            if (parts.Length < 4)
+            if (parts.Length < 3)
                 return false;
 
             var encodedGroup = parts[0];
@@ -458,14 +456,17 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (string.IsNullOrWhiteSpace(group))
                 return false;
-            if (!int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var frame))
-                return false;
 
-            var reverse = parts[2] == "1";
-            if (!double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var speed))
+            var hasLegacyFrame = parts.Length >= 4 &&
+                int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out _);
+            var reversePart = hasLegacyFrame ? parts[2] : parts[1];
+            var speedPart = hasLegacyFrame ? parts[3] : parts[2];
+
+            var reverse = reversePart == "1";
+            if (!double.TryParse(speedPart, NumberStyles.Float, CultureInfo.InvariantCulture, out var speed))
                 speed = 1.0;
 
-            parsed = new ParsedAnimPayload(group, System.Math.Max(0, frame), reverse, System.Math.Max(0.01, speed));
+            parsed = new ParsedAnimPayload(group, reverse, System.Math.Max(0.01, speed));
             return true;
         }
 
@@ -486,7 +487,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 var currentGroup = spr.groupName?.ToString() ?? string.Empty;
                 if (!string.Equals(currentGroup, parsed.Group, StringComparison.Ordinal))
-                    animManager.play(parsed.Group.AsHaxeString(), null, null);
+                {
+                    animManager.play(parsed.Group.AsHaxeString(), null, null).loop(null);
+                }
             }
             catch
             {
@@ -497,23 +500,16 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 var top = GetTopAnimInstance(animManager);
                 if (top != null)
                 {
-                    top.reverse = parsed.Reverse;
-                    top.speed = parsed.Speed;
+                    if (top.reverse != parsed.Reverse)
+                        top.reverse = parsed.Reverse;
+                    if (System.Math.Abs(top.speed - parsed.Speed) > ClientAnimSpeedEpsilon)
+                        top.speed = parsed.Speed;
                 }
             }
             catch
             {
             }
 
-            try
-            {
-                var currentGroup = spr.groupName?.ToString() ?? string.Empty;
-                if (string.Equals(currentGroup, parsed.Group, StringComparison.Ordinal) && spr.frame != parsed.Frame)
-                    spr.setFrame(parsed.Frame);
-            }
-            catch
-            {
-            }
         }
 
         private static void TrySendHostMobStates(NetNode net)
@@ -696,8 +692,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 self.maxLife = target.MaxLife;
             if (target.Life >= 0 && self.life != target.Life)
                 self.life = target.Life;
-
-            ApplyAnimPayload(self, target.AnimPayload);
         }
 
         private static void ApplyClientAnimationStateBeforeUpdate(Mob self)
