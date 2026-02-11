@@ -77,7 +77,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
         private Graphics? _chatInputBackground;
         private Flow? _chatMessagesFlow;
         private dc.h2d.TextInput? _chatInput;
-        private readonly List<dc.h2d.Text> _chatLineTexts = new();
+        private readonly List<dc.h2d.Object> _chatLineTexts = new();
         private readonly List<string> _chatHistory = new();
 
         private static readonly object ChatSync = new();
@@ -87,6 +87,10 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
         private double _chatAlpha;
         private double _chatTargetAlpha;
         private bool _chatLayoutDirty = true;
+        private int _chatPendingFocusFrames;
+        private double _chatLastLayoutScale = -1;
+        private int _chatLastLayoutWinWidth = -1;
+        private int _chatLastLayoutWinHeight = -1;
 
         private const int KeyEnter = 13;
         private const int KeyEsc = 27;
@@ -94,14 +98,20 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
         private const int MaxChatHistory = 80;
         private const int MaxChatInputLength = 180;
         private const double ChatPanelXOffsetPx = 20.0;
-        private const double ChatPanelBottomOffsetPx = 24.0;
+        private const double ChatPanelBottomOffsetPx = 75.0;
         private const double ChatPanelWidthPx = 260.0;
         private const double ChatPanelHeightPx = 146.0;
-        private const double ChatPanelCornerRadiusPx = 8.0;
         private const double ChatPanelBorderThicknessPx = 1.5;
         private const double ChatPaddingPx = 10.0;
         private const double ChatInputHeightPx = 22.0;
         private const double ChatControlLockSeconds = 0.12;
+        private const double ChatInputOffsetDownPx = 6.0;
+        private const int ChatBoxColor = 0x27303C;
+        private const double ChatBoxAlpha = 0.84;
+        private const int ChatBorderColor = 0xA6BCD8;
+        private const double ChatBorderAlpha = 0.95;
+        private const int ChatInputColor = 0x27303C;
+        private const double ChatInputAlpha = 0.84;
 
         public MultiplayerUI(ModEntry Entry, int slotIndex = 0)
         {
@@ -436,10 +446,10 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
         private static readonly List<SystemMessageEntry> ActiveSystemMessages = new();
 
         private const int MaxSystemMessages = 8;
-        private const double DefaultSystemMsgLifetimeSeconds = 10.0; // dont change that
+        private const double DefaultSystemMsgLifetimeSeconds = 10.0;
         private const double DefaultSystemMsgFadeSeconds = 2.5;
         private const double SystemMsgXOffsetPx = 20.0;
-        private const double SystemMsgYOffsetPx = 250.0; // dont change that
+        private const double SystemMsgYOffsetPx = 250.0;
         private const double SystemMsgScale = 1.15;
 
         public static void PushSystemMessage(string message, double lifetimeSeconds = DefaultSystemMsgLifetimeSeconds, double fadeSeconds = DefaultSystemMsgFadeSeconds)
@@ -622,6 +632,10 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
             _chatAlpha = 0;
             _chatTargetAlpha = 0;
             _chatLayoutDirty = true;
+            _chatPendingFocusFrames = 0;
+            _chatLastLayoutScale = -1;
+            _chatLastLayoutWinWidth = -1;
+            _chatLastLayoutWinHeight = -1;
         }
 
         private bool EnsureChatUi()
@@ -662,7 +676,13 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
             _chatInput = new dc.h2d.TextInput(font, _chatRoot);
             _chatInput.text = string.Empty.AsHaxeString();
             _chatInput.textColor = 0xFFFFFF;
+            _chatInput.canEdit = true;
             _chatInput.cursorBlinkTime = 0.45;
+            if (_chatInput.interactive != null)
+            {
+                _chatInput.interactive.cancelEvents = false;
+                _chatInput.interactive.propagateEvents = false;
+            }
             _chatInput.onChange = new HlAction(() =>
             {
                 if (_chatInput == null)
@@ -677,26 +697,6 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
             return true;
         }
 
-        private static void DrawRoundedRect(Graphics target, double x, double y, double width, double height, double radius)
-        {
-            if (target == null || width <= 0 || height <= 0)
-                return;
-
-            var r = System.Math.Max(0, System.Math.Min(radius, System.Math.Min(width, height) * 0.5));
-            if (r <= 0.01)
-            {
-                target.drawRect(x, y, width, height);
-                return;
-            }
-
-            target.drawRect(x + r, y, width - (r * 2), height);
-            target.drawRect(x, y + r, width, height - (r * 2));
-            target.drawCircle(x + r, y + r, r, Ref<int>.Null);
-            target.drawCircle(x + width - r, y + r, r, Ref<int>.Null);
-            target.drawCircle(x + r, y + height - r, r, Ref<int>.Null);
-            target.drawCircle(x + width - r, y + height - r, r, Ref<int>.Null);
-        }
-
         private void UpdateChatLayout()
         {
             if (!EnsureChatUi())
@@ -707,47 +707,57 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
                 return;
 
             var pixelScale = hud.get_pixelScale.Invoke();
+            var win = dc.hxd.Window.Class.getInstance();
+            var winWidth = win.get_width();
+            var winHeight = win.get_height();
+            var scaleChanged = System.Math.Abs(_chatLastLayoutScale - pixelScale) > 0.001;
+            var sizeChanged = _chatLastLayoutWinWidth != winWidth || _chatLastLayoutWinHeight != winHeight;
+            if (!scaleChanged && !sizeChanged)
+                return;
+
+            _chatLastLayoutScale = pixelScale;
+            _chatLastLayoutWinWidth = winWidth;
+            _chatLastLayoutWinHeight = winHeight;
+
             var width = ChatPanelWidthPx * pixelScale;
             var height = ChatPanelHeightPx * pixelScale;
             var padding = ChatPaddingPx * pixelScale;
             var inputHeight = ChatInputHeightPx * pixelScale;
-            var inputAreaY = height - inputHeight - padding;
+            var inputAreaY = height - inputHeight - padding + (ChatInputOffsetDownPx * pixelScale);
             var separatorY = inputAreaY - (3 * pixelScale);
-            var radius = ChatPanelCornerRadiusPx * pixelScale;
             var borderThickness = ChatPanelBorderThicknessPx * pixelScale;
+            var inputBaseWidth = width - (padding * 2);
+            var inputBoxWidth = System.Math.Max(60 * pixelScale, inputBaseWidth * 0.72);
+            var inputBoxX = (width - inputBoxWidth) * 0.5;
 
-            var win = dc.hxd.Window.Class.getInstance();
             _chatRoot.x = ChatPanelXOffsetPx * pixelScale;
-            _chatRoot.y = win.get_height() - height - (ChatPanelBottomOffsetPx * pixelScale);
+            _chatRoot.y = winHeight - height - (ChatPanelBottomOffsetPx * pixelScale);
 
             if (_chatBackground != null)
             {
                 _chatBackground.clear();
 
-                int borderColor = 0xFFFFFF;
-                double borderAlpha = 0.9;
-                _chatBackground.beginFill(Ref<int>.From(ref borderColor), Ref<double>.From(ref borderAlpha));
-                DrawRoundedRect(_chatBackground, 0, 0, width, height, radius);
+                int bgColor = ChatBoxColor;
+                double bgAlpha = ChatBoxAlpha;
+                _chatBackground.beginFill(Ref<int>.From(ref bgColor), Ref<double>.From(ref bgAlpha));
+                _chatBackground.drawRect(0, 0, width, height);
                 _chatBackground.endFill();
 
-                int bgColor = 0x575757;
-                double bgAlpha = 0.72;
-                _chatBackground.beginFill(Ref<int>.From(ref bgColor), Ref<double>.From(ref bgAlpha));
-                DrawRoundedRect(
-                    _chatBackground,
-                    borderThickness,
-                    borderThickness,
-                    width - (borderThickness * 2),
-                    height - (borderThickness * 2),
-                    System.Math.Max(0, radius - borderThickness));
+                int borderColor = ChatBorderColor;
+                double borderAlpha = ChatBorderAlpha;
+                _chatBackground.beginFill(Ref<int>.From(ref borderColor), Ref<double>.From(ref borderAlpha));
+                _chatBackground.drawRect(0, 0, width, borderThickness);
+                _chatBackground.drawRect(0, height - borderThickness, width, borderThickness);
+                _chatBackground.drawRect(0, 0, borderThickness, height);
+                _chatBackground.drawRect(width - borderThickness, 0, borderThickness, height);
                 _chatBackground.endFill();
             }
 
             if (_chatSeparator != null)
             {
                 _chatSeparator.clear();
-                int lineColor = 0xBDBDBD;
-                double lineAlpha = 0.9;
+                int lineColor = ChatBorderColor;
+                double lineAlpha = 0.82;
                 _chatSeparator.beginFill(Ref<int>.From(ref lineColor), Ref<double>.From(ref lineAlpha));
                 _chatSeparator.drawRect(padding, separatorY, width - (padding * 2), 1.5 * pixelScale);
                 _chatSeparator.endFill();
@@ -756,10 +766,10 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
             if (_chatInputBackground != null)
             {
                 _chatInputBackground.clear();
-                int inputBgColor = 0x575757;
-                double inputBgAlpha = 0.72;
+                int inputBgColor = ChatInputColor;
+                double inputBgAlpha = ChatInputAlpha;
                 _chatInputBackground.beginFill(Ref<int>.From(ref inputBgColor), Ref<double>.From(ref inputBgAlpha));
-                DrawRoundedRect(_chatInputBackground, padding, inputAreaY, width - (padding * 2), inputHeight, 4 * pixelScale);
+                _chatInputBackground.drawRect(inputBoxX, inputAreaY, inputBoxWidth, inputHeight);
                 _chatInputBackground.endFill();
             }
 
@@ -772,9 +782,14 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
 
             if (_chatInput != null)
             {
-                _chatInput.x = padding + (4 * pixelScale);
+                _chatInput.x = inputBoxX - (4 * pixelScale);
                 _chatInput.y = inputAreaY + (2 * pixelScale);
-                _chatInput.inputWidth = (int)(width - (padding * 2) - (8 * pixelScale));
+                _chatInput.inputWidth = (int)(inputBoxWidth + (8 * pixelScale));
+                if (_chatInput.interactive != null)
+                {
+                    _chatInput.interactive.width = inputBoxWidth;
+                    _chatInput.interactive.height = inputHeight;
+                }
             }
         }
 
@@ -801,14 +816,37 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
             for (int i = start; i < _chatHistory.Count; i++)
             {
                 var line = _chatHistory[i];
+                if (line.StartsWith("System:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var lineFlow = new Flow(_chatMessagesFlow);
+                    lineFlow.isVertical = false;
+                    lineFlow.set_horizontalAlign(new FlowAlign.Left());
+
+                    var systemWord = Assets.Class.makeText(
+                        "System".AsHaxeString(),
+                        dc.ui.Text.Class.COLORS.get("WO".AsHaxeString()),
+                        false,
+                        lineFlow);
+                    systemWord.textColor = 0xFF4D4D;
+
+                    var tail = line.Length > "System".Length ? line["System".Length..] : string.Empty;
+                    var tailText = Assets.Class.makeText(
+                        tail.AsHaxeString(),
+                        dc.ui.Text.Class.COLORS.get("WO".AsHaxeString()),
+                        false,
+                        lineFlow);
+                    tailText.textColor = 0xF2F2F2;
+
+                    _chatLineTexts.Add(lineFlow);
+                    continue;
+                }
+
                 var text = Assets.Class.makeText(
                     line.AsHaxeString(),
                     dc.ui.Text.Class.COLORS.get("WO".AsHaxeString()),
                     false,
                     _chatMessagesFlow);
-                text.textColor = line.StartsWith("System:", StringComparison.OrdinalIgnoreCase)
-                    ? 0xFFD487
-                    : 0xF2F2F2;
+                text.textColor = 0xF2F2F2;
                 _chatLineTexts.Add(text);
             }
 
@@ -837,13 +875,19 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
             _chatTargetAlpha = 1;
             if (_chatRoot != null)
                 _chatRoot.visible = true;
-            _chatInput?.focus();
+            _chatPendingFocusFrames = 45;
+            if (_chatInput != null)
+            {
+                _chatInput.canEdit = true;
+                _chatInput.scrollX = 0;
+            }
         }
 
         private void HideChat()
         {
             _chatOpened = false;
             _chatTargetAlpha = 0;
+            _chatPendingFocusFrames = 0;
         }
 
         private void SubmitChatMessage()
@@ -929,14 +973,15 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
 
         private void RefreshChatControlLock()
         {
-            if (!_chatOpened)
-                return;
-
             var hero = ModEntry.me;
             if (hero == null)
                 return;
 
-            hero.lockControlsS(ChatControlLockSeconds);
+            if (_chatOpened)
+            {
+                hero.lockControlsS(ChatControlLockSeconds);
+                hero.lockControlFromSkill(ChatControlLockSeconds);
+            }
         }
 
         private void UpdateChat(double dt)
@@ -960,10 +1005,21 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
                 HideChat();
             }
 
-            if (_chatOpened && _chatInput != null && !_chatInput.hasFocus())
-                _chatInput.focus();
-
             RefreshChatControlLock();
+
+            if (_chatOpened && _chatInput != null && _chatPendingFocusFrames > 0)
+            {
+                if (_chatInput.hasFocus())
+                {
+                    _chatPendingFocusFrames = 0;
+                }
+                else
+                {
+                    _chatInput.focus();
+                    _chatInput.interactive?.focus();
+                    _chatPendingFocusFrames--;
+                }
+            }
 
             UpdateChatFade(dt);
         }
