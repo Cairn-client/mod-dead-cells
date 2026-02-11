@@ -18,6 +18,7 @@ using Microsoft.Win32;
 using Serilog.Core;
 using dc.cine;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
+using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using ModCore.Modules;
 
 
@@ -54,6 +55,10 @@ namespace DeadCellsMultiplayerMod
         private static bool _mainMenuButtonAdded;
         private static bool _suppressAutoButton;
         private static bool _worldExitHandled;
+        private static bool _hostDisconnectCountdownActive;
+        private static DateTime _hostDisconnectCountdownUntil = DateTime.MinValue;
+        private static int _lastHostDisconnectCountdown = -1;
+        private const int HostDisconnectCountdownSeconds = 5;
         private static bool _seedArrived;
         private static string _username = "guest";
         private static string _remoteUsername = "guest";
@@ -136,6 +141,9 @@ namespace DeadCellsMultiplayerMod
                 _clientConnecting = false;
                 _deathRestartCooldownUntil = DateTime.MinValue;
                 _cachedLevelDescSync = null;
+                _hostDisconnectCountdownActive = false;
+                _hostDisconnectCountdownUntil = DateTime.MinValue;
+                _lastHostDisconnectCountdown = -1;
             }
 
             InitializeMenuUiHooks();
@@ -356,11 +364,16 @@ namespace DeadCellsMultiplayerMod
         public static void ReceiveRemoteUsername(string username)
         {
             var cleaned = CleanUsername(username);
+            string previous;
             lock (Sync)
             {
+                previous = _remoteUsername;
                 _remoteUsername = cleaned;
             }
             _log?.Information("[NetMod] Received remote username {Username}", cleaned);
+            if (_role == NetRole.Host &&
+                !string.Equals(previous, cleaned, StringComparison.Ordinal))
+                MultiplayerUI.PushSystemMessage($"{cleaned} connected to the server.");
         }
 
         private static void SendCachedGeneratePayload()
@@ -404,6 +417,7 @@ namespace DeadCellsMultiplayerMod
 
         public static void TickMenu(double dt)
         {
+            UpdateHostDisconnectCountdown();
             if (DateTime.UtcNow < _autoStartRetryAt)
                 return;
 
@@ -1010,6 +1024,7 @@ namespace DeadCellsMultiplayerMod
 
         private static void StopNetworkFromMenu()
         {
+            ResetHostDisconnectCountdown();
             try
             {
                 ModEntry.Instance?.StopNetworkFromMenu();
@@ -1031,6 +1046,7 @@ namespace DeadCellsMultiplayerMod
 
         public static void NotifyRemoteConnected(NetRole role)
         {
+            ResetHostDisconnectCountdown();
             SendUsernameToRemote();
 
             if (role == NetRole.Host)
@@ -1091,6 +1107,8 @@ namespace DeadCellsMultiplayerMod
         {
             if (role == NetRole.Host)
             {
+                var disconnectedName = string.IsNullOrWhiteSpace(_remoteUsername) ? "Guest" : _remoteUsername.Trim();
+                MultiplayerUI.PushSystemMessage($"{disconnectedName} disconnect from the server.");
                 _remoteUsername = "guest";
                 _localReady = false;
                 _genArrived = false;
@@ -1103,6 +1121,7 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
+            var wasInRun = _inActualRun;
             SetRole(NetRole.None);
             NetRef = null;
             _waitingForHost = false;
@@ -1113,6 +1132,9 @@ namespace DeadCellsMultiplayerMod
             _remoteUsername = "guest";
             _localReady = false;
             _genArrived = false;
+            MultiplayerUI.PushSystemMessage("Host has disconnect from server.");
+            if (wasInRun)
+                StartHostDisconnectCountdown();
         }
 
         private static void SendUsernameToRemote()
@@ -1159,6 +1181,43 @@ namespace DeadCellsMultiplayerMod
             CacheLevelDescSync(null);
             _genArrived = false;
             _seedArrived = false;
+        }
+
+        private static void StartHostDisconnectCountdown()
+        {
+            _hostDisconnectCountdownActive = true;
+            _hostDisconnectCountdownUntil = DateTime.UtcNow.AddSeconds(HostDisconnectCountdownSeconds);
+            _lastHostDisconnectCountdown = HostDisconnectCountdownSeconds;
+            MultiplayerUI.PushSystemMessage($"Back to menu in {HostDisconnectCountdownSeconds}...");
+        }
+
+        private static void ResetHostDisconnectCountdown()
+        {
+            _hostDisconnectCountdownActive = false;
+            _hostDisconnectCountdownUntil = DateTime.MinValue;
+            _lastHostDisconnectCountdown = -1;
+        }
+
+        private static void UpdateHostDisconnectCountdown()
+        {
+            if (!_hostDisconnectCountdownActive)
+                return;
+
+            var remaining = (int)Math.Ceiling((_hostDisconnectCountdownUntil - DateTime.UtcNow).TotalSeconds);
+            if (remaining < 0)
+                remaining = 0;
+
+            if (remaining != _lastHostDisconnectCountdown)
+            {
+                _lastHostDisconnectCountdown = remaining;
+                MultiplayerUI.PushSystemMessage($"Back to menu in {remaining}...");
+            }
+
+            if (remaining > 0)
+                return;
+
+            _hostDisconnectCountdownActive = false;
+            ForceExitToMainMenu();
         }
 
         public static void ReceiveGeneratePayload(string json)

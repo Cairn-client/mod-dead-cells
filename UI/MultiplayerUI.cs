@@ -343,41 +343,159 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
         }
 
 
-        private static Queue<dc.h2d.Text> textQueue = new Queue<dc.h2d.Text>();
-        private const int MAX_TEXTS = 10;
+        private sealed class SystemMessageEntry
+        {
+            public dc.h2d.Text Text = null!;
+            public double LifetimeSeconds;
+            public double FadeSeconds;
+            public double ElapsedSeconds;
+        }
+
+        private sealed class PendingSystemMessage
+        {
+            public string Text = string.Empty;
+            public double LifetimeSeconds;
+            public double FadeSeconds;
+        }
+
+        private static readonly object SystemMsgSync = new();
+        private static readonly Queue<PendingSystemMessage> PendingSystemMessages = new();
+        private static readonly List<SystemMessageEntry> ActiveSystemMessages = new();
+
+        private const int MaxSystemMessages = 8;
+        private const double DefaultSystemMsgLifetimeSeconds = 12.0;
+        private const double DefaultSystemMsgFadeSeconds = 2.5;
+        private const double SystemMsgXOffsetPx = 20.0;
+        private const double SystemMsgYOffsetPx = 250.0;
+        private const double SystemMsgScale = 1.15;
+
+        public static void PushSystemMessage(string message, double lifetimeSeconds = DefaultSystemMsgLifetimeSeconds, double fadeSeconds = DefaultSystemMsgFadeSeconds)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+                return;
+
+            var normalizedLifetime = System.Math.Max(0.25, lifetimeSeconds);
+            var normalizedFade = System.Math.Max(0.15, System.Math.Min(fadeSeconds, normalizedLifetime));
+            lock (SystemMsgSync)
+            {
+                PendingSystemMessages.Enqueue(new PendingSystemMessage
+                {
+                    Text = message.Trim(),
+                    LifetimeSeconds = normalizedLifetime,
+                    FadeSeconds = normalizedFade
+                });
+            }
+        }
 
         public void DebugUI(string @string)
         {
-            if (flowContainer == null)
+            PushSystemMessage(@string, 5.0, 1.5);
+        }
+
+        private static bool EnsureSystemMessageFlow()
+        {
+            var hud = HUD.Class.ME;
+            var root = hud?.root;
+            if (root == null)
+                return false;
+
+            if (flowContainer == null || flowContainer.parent == null || !ReferenceEquals(flowContainer.parent, root))
             {
-                flowContainer = new dc.h2d.Flow(HUD.Class.ME.root);
+                try { flowContainer?.remove(); } catch { }
+                flowContainer = new dc.h2d.Flow(root);
                 flowContainer.multiline = true;
                 flowContainer.isVertical = true;
                 flowContainer.set_verticalAlign(new FlowAlign.Top());
                 flowContainer.set_horizontalAlign(new FlowAlign.Left());
             }
 
-            dc.h2d.Text text_h2d = Assets.Class.makeText(@string.AsHaxeString(),
-                dc.ui.Text.Class.COLORS.get("WO".AsHaxeString()),
-                false, flowContainer);
-            text_h2d.scaleX = 1.5;
-            text_h2d.scaleY = 1.5;
-            text_h2d.textColor = 16766720;
+            var pixelScale = hud.get_pixelScale.Invoke();
+            flowContainer.x = SystemMsgXOffsetPx * pixelScale;
+            flowContainer.y = SystemMsgYOffsetPx * pixelScale;
+            return true;
+        }
 
-            textQueue.Enqueue(text_h2d);
+        private static void RemoveSystemMessageAt(int index)
+        {
+            if (index < 0 || index >= ActiveSystemMessages.Count)
+                return;
 
-            if (textQueue.Count > MAX_TEXTS)
+            var entry = ActiveSystemMessages[index];
+            try
             {
-                var oldestText = textQueue.Dequeue();
-                flowContainer.removeChild(oldestText);
-                oldestText.remove();
+                flowContainer?.removeChild(entry.Text);
+                entry.Text.remove();
+            }
+            catch
+            {
+            }
+            ActiveSystemMessages.RemoveAt(index);
+        }
+
+        private static void EnqueueSystemMessageInternal(PendingSystemMessage pending)
+        {
+            if (flowContainer == null || pending == null)
+                return;
+
+            var text = Assets.Class.makeText(
+                pending.Text.AsHaxeString(),
+                dc.ui.Text.Class.COLORS.get("WO".AsHaxeString()),
+                false,
+                flowContainer);
+            text.scaleX = SystemMsgScale;
+            text.scaleY = SystemMsgScale;
+            text.textColor = 16766720;
+            text.alpha = 1;
+
+            ActiveSystemMessages.Add(new SystemMessageEntry
+            {
+                Text = text,
+                LifetimeSeconds = pending.LifetimeSeconds,
+                FadeSeconds = pending.FadeSeconds,
+                ElapsedSeconds = 0
+            });
+
+            while (ActiveSystemMessages.Count > MaxSystemMessages)
+                RemoveSystemMessageAt(0);
+        }
+
+        private void UpdateSystemMessages(double dt)
+        {
+            if (!EnsureSystemMessageFlow())
+                return;
+
+            lock (SystemMsgSync)
+            {
+                while (PendingSystemMessages.Count > 0)
+                    EnqueueSystemMessageInternal(PendingSystemMessages.Dequeue());
             }
 
+            if (ActiveSystemMessages.Count == 0)
+                return;
 
+            for (int i = ActiveSystemMessages.Count - 1; i >= 0; i--)
+            {
+                var msg = ActiveSystemMessages[i];
+                msg.ElapsedSeconds += dt;
+
+                var fadeStart = System.Math.Max(0.0, msg.LifetimeSeconds - msg.FadeSeconds);
+                if (msg.ElapsedSeconds >= fadeStart)
+                {
+                    var fadeT = (msg.ElapsedSeconds - fadeStart) / System.Math.Max(0.01, msg.FadeSeconds);
+                    var alpha = 1.0 - fadeT;
+                    if (alpha < 0) alpha = 0;
+                    msg.Text.alpha = alpha;
+                }
+
+                if (msg.ElapsedSeconds >= msg.LifetimeSeconds)
+                    RemoveSystemMessageAt(i);
+            }
         }
+
         private bool f = true;
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
+            UpdateSystemMessages(dt);
             Debugkeys();
         }
     }
