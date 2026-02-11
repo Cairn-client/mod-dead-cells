@@ -173,6 +173,20 @@ public sealed class NetNode : IDisposable
         }
     }
 
+    public readonly struct RemoteChatMessage
+    {
+        public readonly int Id;
+        public readonly string? Username;
+        public readonly string Message;
+
+        public RemoteChatMessage(int id, string? username, string message)
+        {
+            Id = id;
+            Username = username;
+            Message = message ?? string.Empty;
+        }
+    }
+
     public readonly struct MobStateSnapshot
     {
         public readonly int Index;
@@ -270,6 +284,7 @@ public sealed class NetNode : IDisposable
     private readonly Dictionary<int, ClientConnection> _clients = new();
     private readonly Dictionary<int, RemoteState> _remotes = new();
     private readonly List<RemoteAttack> _pendingAttacks = new();
+    private readonly List<RemoteChatMessage> _pendingChatMessages = new();
     private List<MobStateSnapshot> _pendingMobStates = new();
     private readonly List<MobHit> _pendingMobHits = new();
     private readonly List<MobAttack> _pendingMobAttacks = new();
@@ -729,6 +744,36 @@ public sealed class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("CHAT|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["CHAT|".Length..];
+            ParseChatPayload(payload, out var parsedId, out var message);
+            var effectiveId = parsedId ?? senderId;
+            if (forceSenderId)
+                effectiveId = senderId;
+
+            message = SanitizeChatMessage(message);
+            if (effectiveId.HasValue && !string.IsNullOrWhiteSpace(message))
+            {
+                string? username;
+                lock (_sync)
+                {
+                    var state = GetOrCreateRemoteLocked(effectiveId.Value);
+                    state.HasRemote = true;
+                    _hasRemote = true;
+                    if (_primaryRemoteId == 0)
+                        _primaryRemoteId = effectiveId.Value;
+                    username = state.Username;
+                    _pendingChatMessages.Add(new RemoteChatMessage(effectiveId.Value, username, message));
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = BuildChatLine(effectiveId.Value, message);
+            }
+
+            return true;
+        }
+
         if (line.StartsWith("LDESC|"))
         {
             var payload = line["LDESC|".Length..];
@@ -1154,6 +1199,7 @@ public sealed class NetNode : IDisposable
         {
             RemoveRemoteLocked(sender.AssignedId);
             _pendingAttacks.RemoveAll(a => a.Id == sender.AssignedId);
+            _pendingChatMessages.RemoveAll(m => m.Id == sender.AssignedId);
             _pendingMobHits.RemoveAll(h => h.UserId == sender.AssignedId);
             _hasRemote = hasClients;
         }
@@ -1179,6 +1225,7 @@ public sealed class NetNode : IDisposable
             _remotes.Clear();
             _primaryRemoteId = 0;
             _pendingAttacks.Clear();
+            _pendingChatMessages.Clear();
             _pendingMobStates.Clear();
             _pendingMobHits.Clear();
             _pendingMobAttacks.Clear();
@@ -1331,6 +1378,25 @@ public sealed class NetNode : IDisposable
         if (parts.Length > startIndex + 4 &&
             int.TryParse(parts[startIndex + 4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedRecover))
             recover = parsedRecover;
+    }
+
+    private static void ParseChatPayload(string payload, out int? parsedId, out string message)
+    {
+        parsedId = null;
+        message = string.Empty;
+        if (string.IsNullOrWhiteSpace(payload))
+            return;
+
+        var parts = payload.Split(new[] { '|' }, 2);
+        if (parts.Length == 2 &&
+            int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var idValue))
+        {
+            parsedId = idValue;
+            message = parts[1];
+            return;
+        }
+
+        message = payload;
     }
 
     private static List<MobStateSnapshot> ParseMobStatesPayload(string payload)
@@ -1565,6 +1631,27 @@ public sealed class NetNode : IDisposable
     private static string BuildHpLine(int id, int life, int maxLife, int lif, int bonusLife, int recover)
     {
         return $"HP|{id}|{life}|{maxLife}|{lif}|{bonusLife}|{recover}\n";
+    }
+
+    private static string BuildChatLine(int id, string message)
+    {
+        var safe = SanitizeChatMessage(message);
+        return $"CHAT|{id}|{safe}\n";
+    }
+
+    private static string SanitizeChatMessage(string? message)
+    {
+        var safe = (message ?? string.Empty)
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Replace("|", "/", StringComparison.Ordinal)
+            .Trim();
+
+        const int maxLength = 256;
+        if (safe.Length > maxLength)
+            safe = safe[..maxLength];
+
+        return safe;
     }
 
     private bool TryBuildLocalHpLine(out string line)
@@ -1892,6 +1979,19 @@ public sealed class NetNode : IDisposable
         SendRaw($"HP|{idPart}{life}|{maxLife}|{lif}|{bonusLife}|{recover}");
     }
 
+    public void SendChatMessage(string message)
+    {
+        if (!HasAnyConnection())
+            return;
+
+        var safe = SanitizeChatMessage(message);
+        if (string.IsNullOrWhiteSpace(safe))
+            return;
+
+        var idPart = ID > 0 ? $"{ID}|" : string.Empty;
+        SendRaw($"CHAT|{idPart}{safe}");
+    }
+
     public void SendLevelId(int senderId, string levelId)
     {
         if (!HasAnyConnection())
@@ -2180,6 +2280,22 @@ public sealed class NetNode : IDisposable
             attacks = new List<RemoteAttack>(_pendingAttacks);
             _pendingAttacks.Clear();
             return attacks.Count > 0;
+        }
+    }
+
+    public bool TryConsumeChatMessages(out List<RemoteChatMessage> messages)
+    {
+        lock (_sync)
+        {
+            if (_pendingChatMessages.Count == 0)
+            {
+                messages = new List<RemoteChatMessage>();
+                return false;
+            }
+
+            messages = new List<RemoteChatMessage>(_pendingChatMessages);
+            _pendingChatMessages.Clear();
+            return messages.Count > 0;
         }
     }
 

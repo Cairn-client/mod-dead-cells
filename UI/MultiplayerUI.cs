@@ -69,10 +69,45 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
         private int lastMaxLife = 0;
         private int _lastHostConnectedClientCount = -1;
 
+        private static MultiplayerUI? _instance;
+
+        private dc.h2d.Object? _chatRoot;
+        private Graphics? _chatBackground;
+        private Graphics? _chatSeparator;
+        private Graphics? _chatInputBackground;
+        private Flow? _chatMessagesFlow;
+        private dc.h2d.TextInput? _chatInput;
+        private readonly List<dc.h2d.Text> _chatLineTexts = new();
+        private readonly List<string> _chatHistory = new();
+
+        private static readonly object ChatSync = new();
+        private static readonly Queue<string> PendingChatLines = new();
+
+        private bool _chatOpened;
+        private double _chatAlpha;
+        private double _chatTargetAlpha;
+        private bool _chatLayoutDirty = true;
+
+        private const int KeyEnter = 13;
+        private const int KeyEsc = 27;
+        private const int MaxChatLines = 10;
+        private const int MaxChatHistory = 80;
+        private const int MaxChatInputLength = 180;
+        private const double ChatPanelXOffsetPx = 20.0;
+        private const double ChatPanelBottomOffsetPx = 24.0;
+        private const double ChatPanelWidthPx = 260.0;
+        private const double ChatPanelHeightPx = 146.0;
+        private const double ChatPanelCornerRadiusPx = 8.0;
+        private const double ChatPanelBorderThicknessPx = 1.5;
+        private const double ChatPaddingPx = 10.0;
+        private const double ChatInputHeightPx = 22.0;
+        private const double ChatControlLockSeconds = 0.12;
+
         public MultiplayerUI(ModEntry Entry, int slotIndex = 0)
         {
             mod = Entry;
             SlotIndex = slotIndex;
+            _instance = this;
             EventSystem.AddReceiver(this);
         }
 
@@ -93,6 +128,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
             int slotCount = NetNode.MaxClientSlots;
             _slots = new LifeSlot?[slotCount];
             _slotActive = new bool[slotCount];
+            ResetChatUi();
         }
         public bool CanUseJumpHit()
         {
@@ -400,16 +436,18 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
         private static readonly List<SystemMessageEntry> ActiveSystemMessages = new();
 
         private const int MaxSystemMessages = 8;
-        private const double DefaultSystemMsgLifetimeSeconds = 12.0;
+        private const double DefaultSystemMsgLifetimeSeconds = 10.0; // dont change that
         private const double DefaultSystemMsgFadeSeconds = 2.5;
         private const double SystemMsgXOffsetPx = 20.0;
-        private const double SystemMsgYOffsetPx = 250.0;
+        private const double SystemMsgYOffsetPx = 250.0; // dont change that
         private const double SystemMsgScale = 1.15;
 
         public static void PushSystemMessage(string message, double lifetimeSeconds = DefaultSystemMsgLifetimeSeconds, double fadeSeconds = DefaultSystemMsgFadeSeconds)
         {
             if (string.IsNullOrWhiteSpace(message))
                 return;
+
+            EnqueueChatLine($"System: {message.Trim()}");
 
             var normalizedLifetime = System.Math.Max(0.25, lifetimeSeconds);
             var normalizedFade = System.Math.Max(0.15, System.Math.Min(fadeSeconds, normalizedLifetime));
@@ -434,6 +472,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
             var hud = HUD.Class.ME;
             var root = hud?.root;
             if (root == null)
+                return false;
+            if (hud == null)
                 return false;
 
             if (flowContainer == null || flowContainer.parent == null || !ReferenceEquals(flowContainer.parent, root))
@@ -529,10 +569,409 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
             }
         }
 
-        private bool f = true;
+        private static void EnqueueChatLine(string line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                return;
+
+            lock (ChatSync)
+            {
+                PendingChatLines.Enqueue(line.Trim());
+            }
+        }
+
+        private void FlushPendingChatLines()
+        {
+            lock (ChatSync)
+            {
+                while (PendingChatLines.Count > 0)
+                    AppendChatHistoryLine(PendingChatLines.Dequeue());
+            }
+        }
+
+        private void AppendChatHistoryLine(string line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                return;
+
+            _chatHistory.Add(line);
+            while (_chatHistory.Count > MaxChatHistory)
+                _chatHistory.RemoveAt(0);
+
+            _chatLayoutDirty = true;
+        }
+
+        private void ResetChatUi()
+        {
+            try
+            {
+                _chatRoot?.remove();
+            }
+            catch
+            {
+            }
+
+            _chatRoot = null;
+            _chatBackground = null;
+            _chatSeparator = null;
+            _chatInputBackground = null;
+            _chatMessagesFlow = null;
+            _chatInput = null;
+            _chatLineTexts.Clear();
+            _chatOpened = false;
+            _chatAlpha = 0;
+            _chatTargetAlpha = 0;
+            _chatLayoutDirty = true;
+        }
+
+        private bool EnsureChatUi()
+        {
+            var hud = HUD.Class.ME;
+            var root = hud?.root;
+            if (root == null)
+                return false;
+            if (hud == null)
+                return false;
+
+            if (_chatRoot != null && _chatRoot.parent != null && ReferenceEquals(_chatRoot.parent, root))
+                return true;
+
+            ResetChatUi();
+
+            _chatRoot = new dc.h2d.Object(root);
+            _chatRoot.visible = false;
+            _chatRoot.alpha = 0;
+
+            _chatBackground = new Graphics(_chatRoot);
+            _chatSeparator = new Graphics(_chatRoot);
+            _chatInputBackground = new Graphics(_chatRoot);
+
+            _chatMessagesFlow = new Flow(_chatRoot);
+            _chatMessagesFlow.isVertical = true;
+            _chatMessagesFlow.set_verticalAlign(new FlowAlign.Top());
+            _chatMessagesFlow.set_horizontalAlign(new FlowAlign.Left());
+
+            var sampleText = Assets.Class.makeText(
+                "chat".AsHaxeString(),
+                dc.ui.Text.Class.COLORS.get("WO".AsHaxeString()),
+                false,
+                _chatRoot);
+            var font = sampleText.font;
+            sampleText.remove();
+
+            _chatInput = new dc.h2d.TextInput(font, _chatRoot);
+            _chatInput.text = string.Empty.AsHaxeString();
+            _chatInput.textColor = 0xFFFFFF;
+            _chatInput.cursorBlinkTime = 0.45;
+            _chatInput.onChange = new HlAction(() =>
+            {
+                if (_chatInput == null)
+                    return;
+
+                var txt = _chatInput.text?.ToString() ?? string.Empty;
+                if (txt.Length > MaxChatInputLength)
+                    _chatInput.text = txt[..MaxChatInputLength].AsHaxeString();
+            });
+
+            _chatLayoutDirty = true;
+            return true;
+        }
+
+        private static void DrawRoundedRect(Graphics target, double x, double y, double width, double height, double radius)
+        {
+            if (target == null || width <= 0 || height <= 0)
+                return;
+
+            var r = System.Math.Max(0, System.Math.Min(radius, System.Math.Min(width, height) * 0.5));
+            if (r <= 0.01)
+            {
+                target.drawRect(x, y, width, height);
+                return;
+            }
+
+            target.drawRect(x + r, y, width - (r * 2), height);
+            target.drawRect(x, y + r, width, height - (r * 2));
+            target.drawCircle(x + r, y + r, r, Ref<int>.Null);
+            target.drawCircle(x + width - r, y + r, r, Ref<int>.Null);
+            target.drawCircle(x + r, y + height - r, r, Ref<int>.Null);
+            target.drawCircle(x + width - r, y + height - r, r, Ref<int>.Null);
+        }
+
+        private void UpdateChatLayout()
+        {
+            if (!EnsureChatUi())
+                return;
+
+            var hud = HUD.Class.ME;
+            if (hud == null || _chatRoot == null)
+                return;
+
+            var pixelScale = hud.get_pixelScale.Invoke();
+            var width = ChatPanelWidthPx * pixelScale;
+            var height = ChatPanelHeightPx * pixelScale;
+            var padding = ChatPaddingPx * pixelScale;
+            var inputHeight = ChatInputHeightPx * pixelScale;
+            var inputAreaY = height - inputHeight - padding;
+            var separatorY = inputAreaY - (3 * pixelScale);
+            var radius = ChatPanelCornerRadiusPx * pixelScale;
+            var borderThickness = ChatPanelBorderThicknessPx * pixelScale;
+
+            var win = dc.hxd.Window.Class.getInstance();
+            _chatRoot.x = ChatPanelXOffsetPx * pixelScale;
+            _chatRoot.y = win.get_height() - height - (ChatPanelBottomOffsetPx * pixelScale);
+
+            if (_chatBackground != null)
+            {
+                _chatBackground.clear();
+
+                int borderColor = 0xFFFFFF;
+                double borderAlpha = 0.9;
+                _chatBackground.beginFill(Ref<int>.From(ref borderColor), Ref<double>.From(ref borderAlpha));
+                DrawRoundedRect(_chatBackground, 0, 0, width, height, radius);
+                _chatBackground.endFill();
+
+                int bgColor = 0x575757;
+                double bgAlpha = 0.72;
+                _chatBackground.beginFill(Ref<int>.From(ref bgColor), Ref<double>.From(ref bgAlpha));
+                DrawRoundedRect(
+                    _chatBackground,
+                    borderThickness,
+                    borderThickness,
+                    width - (borderThickness * 2),
+                    height - (borderThickness * 2),
+                    System.Math.Max(0, radius - borderThickness));
+                _chatBackground.endFill();
+            }
+
+            if (_chatSeparator != null)
+            {
+                _chatSeparator.clear();
+                int lineColor = 0xBDBDBD;
+                double lineAlpha = 0.9;
+                _chatSeparator.beginFill(Ref<int>.From(ref lineColor), Ref<double>.From(ref lineAlpha));
+                _chatSeparator.drawRect(padding, separatorY, width - (padding * 2), 1.5 * pixelScale);
+                _chatSeparator.endFill();
+            }
+
+            if (_chatInputBackground != null)
+            {
+                _chatInputBackground.clear();
+                int inputBgColor = 0x575757;
+                double inputBgAlpha = 0.72;
+                _chatInputBackground.beginFill(Ref<int>.From(ref inputBgColor), Ref<double>.From(ref inputBgAlpha));
+                DrawRoundedRect(_chatInputBackground, padding, inputAreaY, width - (padding * 2), inputHeight, 4 * pixelScale);
+                _chatInputBackground.endFill();
+            }
+
+            if (_chatMessagesFlow != null)
+            {
+                _chatMessagesFlow.x = padding;
+                _chatMessagesFlow.y = padding;
+                _chatMessagesFlow.set_verticalSpacing((int)(2 * pixelScale));
+            }
+
+            if (_chatInput != null)
+            {
+                _chatInput.x = padding + (4 * pixelScale);
+                _chatInput.y = inputAreaY + (2 * pixelScale);
+                _chatInput.inputWidth = (int)(width - (padding * 2) - (8 * pixelScale));
+            }
+        }
+
+        private void RebuildChatText()
+        {
+            if (_chatMessagesFlow == null)
+                return;
+
+            for (int i = 0; i < _chatLineTexts.Count; i++)
+            {
+                try
+                {
+                    var line = _chatLineTexts[i];
+                    _chatMessagesFlow.removeChild(line);
+                    line.remove();
+                }
+                catch
+                {
+                }
+            }
+            _chatLineTexts.Clear();
+
+            var start = System.Math.Max(0, _chatHistory.Count - MaxChatLines);
+            for (int i = start; i < _chatHistory.Count; i++)
+            {
+                var line = _chatHistory[i];
+                var text = Assets.Class.makeText(
+                    line.AsHaxeString(),
+                    dc.ui.Text.Class.COLORS.get("WO".AsHaxeString()),
+                    false,
+                    _chatMessagesFlow);
+                text.textColor = line.StartsWith("System:", StringComparison.OrdinalIgnoreCase)
+                    ? 0xFFD487
+                    : 0xF2F2F2;
+                _chatLineTexts.Add(text);
+            }
+
+            _chatLayoutDirty = false;
+        }
+
+        private static string SanitizeChatInput(string raw)
+        {
+            var text = (raw ?? string.Empty)
+                .Replace("\r", " ", StringComparison.Ordinal)
+                .Replace("\n", " ", StringComparison.Ordinal)
+                .Trim();
+
+            if (text.Length > MaxChatInputLength)
+                text = text[..MaxChatInputLength];
+
+            return text;
+        }
+
+        private void OpenChat()
+        {
+            if (!EnsureChatUi())
+                return;
+
+            _chatOpened = true;
+            _chatTargetAlpha = 1;
+            if (_chatRoot != null)
+                _chatRoot.visible = true;
+            _chatInput?.focus();
+        }
+
+        private void HideChat()
+        {
+            _chatOpened = false;
+            _chatTargetAlpha = 0;
+        }
+
+        private void SubmitChatMessage()
+        {
+            if (_chatInput == null)
+                return;
+
+            var message = SanitizeChatInput(_chatInput.text?.ToString() ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                HideChat();
+                return;
+            }
+
+            _chatInput.text = string.Empty.AsHaxeString();
+
+            var net = ModEntry._net;
+            net?.SendChatMessage(message);
+
+            var localName = string.IsNullOrWhiteSpace(GameMenu.Username)
+                ? "Guest"
+                : GameMenu.Username.Trim();
+            EnqueueChatLine($"{localName}: {message}");
+            _chatInput.focus();
+        }
+
+        private static string ResolveChatAuthor(NetNode.RemoteChatMessage message)
+        {
+            if (!string.IsNullOrWhiteSpace(message.Username))
+                return message.Username.Trim();
+
+            var net = ModEntry._net;
+            var localId = net?.id ?? 0;
+            if (ModEntry.TryGetClientIndex(localId, message.Id, out var slotIndex))
+            {
+                var label = ModEntry.GetClientLabel(slotIndex);
+                if (!string.IsNullOrWhiteSpace(label))
+                    return label.Trim();
+            }
+
+            if (message.Id == 1)
+                return "Host";
+
+            return $"Player {message.Id}";
+        }
+
+        private void ConsumeNetworkChatMessages()
+        {
+            var net = ModEntry._net;
+            if (net == null)
+                return;
+
+            if (!net.TryConsumeChatMessages(out var messages) || messages.Count == 0)
+                return;
+
+            for (int i = 0; i < messages.Count; i++)
+            {
+                var message = messages[i];
+                var body = SanitizeChatInput(message.Message);
+                if (string.IsNullOrWhiteSpace(body))
+                    continue;
+
+                var author = ResolveChatAuthor(message);
+                EnqueueChatLine($"{author}: {body}");
+            }
+        }
+
+        private void UpdateChatFade(double dt)
+        {
+            if (_chatRoot == null)
+                return;
+
+            var fadeDuration = System.Math.Max(0.08, DefaultSystemMsgFadeSeconds);
+            var step = dt / fadeDuration;
+            if (_chatAlpha < _chatTargetAlpha)
+                _chatAlpha = System.Math.Min(_chatTargetAlpha, _chatAlpha + step);
+            else if (_chatAlpha > _chatTargetAlpha)
+                _chatAlpha = System.Math.Max(_chatTargetAlpha, _chatAlpha - step);
+
+            _chatRoot.alpha = _chatAlpha;
+            _chatRoot.visible = _chatAlpha > 0.001 || _chatOpened;
+        }
+
+        private void RefreshChatControlLock()
+        {
+            if (!_chatOpened)
+                return;
+
+            var hero = ModEntry.me;
+            if (hero == null)
+                return;
+
+            hero.lockControlsS(ChatControlLockSeconds);
+        }
+
+        private void UpdateChat(double dt)
+        {
+            ConsumeNetworkChatMessages();
+            FlushPendingChatLines();
+            UpdateChatLayout();
+
+            if (_chatLayoutDirty)
+                RebuildChatText();
+
+            if (Key.Class.isPressed(KeyEnter))
+            {
+                if (_chatOpened)
+                    SubmitChatMessage();
+                else
+                    OpenChat();
+            }
+            else if (_chatOpened && Key.Class.isPressed(KeyEsc))
+            {
+                HideChat();
+            }
+
+            if (_chatOpened && _chatInput != null && !_chatInput.hasFocus())
+                _chatInput.focus();
+
+            RefreshChatControlLock();
+
+            UpdateChatFade(dt);
+        }
+
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
             UpdateSystemMessages(dt);
+            UpdateChat(dt);
             var hero = ModEntry.me;
             if (hero != null)
                 KingLifeUpdate(hero);
