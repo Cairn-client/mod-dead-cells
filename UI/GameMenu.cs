@@ -523,11 +523,24 @@ namespace DeadCellsMultiplayerMod
 
         private static void MainMenuHook(Hook_TitleScreen.orig_mainMenu orig, TitleScreen self)
         {
+            TryDisconnectWhenReturningToMainMenu();
             StoreTitleScreen(self);
             _mainMenuButtonAdded = false;
             orig(self);
 
             EnsureMainMenuMultiplayerButton(self);
+        }
+
+        private static void TryDisconnectWhenReturningToMainMenu()
+        {
+            if (_role == NetRole.None)
+                return;
+
+            if (!_inActualRun)
+                return;
+
+            _log?.Information("[NetMod] Main menu opened during run; stopping network");
+            StopNetworkFromMenu();
         }
 
         private static virtual_cb_help_inter_isEnable_t_<bool> AddMenuHook(
@@ -1030,6 +1043,10 @@ namespace DeadCellsMultiplayerMod
                 ModEntry.Instance?.StopNetworkFromMenu();
             }
             catch { }
+            lock (Sync)
+            {
+                _inActualRun = false;
+            }
         }
 
         private static void EditUsername(TitleScreen screen)
