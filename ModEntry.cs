@@ -394,7 +394,7 @@ namespace DeadCellsMultiplayerMod
                     if(item != null && TryGetWeaponKindId(item, out var kindId))
                     {
                         var slot = GetWeaponSlot(me.inventory, item);
-                        _net?.SendAttack(kindId!, slot, item.permanentId);
+                        _net?.SendAttack(kindId!, slot, item.permanentId, GetWeaponAmmoForSync(item));
                         _suppressHeroAnimUntilTicks = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * 0.25);
                     }
                 }
@@ -1209,7 +1209,7 @@ namespace DeadCellsMultiplayerMod
 
             foreach (var update in updates)
             {
-                ApplyRemoteWeaponUpdate(update.Id, update.Kind, update.Slot, update.PermanentId);
+                ApplyRemoteWeaponUpdate(update.Id, update.Kind, update.Slot, update.PermanentId, update.Ammo);
             }
         }
 
@@ -1224,7 +1224,7 @@ namespace DeadCellsMultiplayerMod
             var localId = net.id;
             foreach (var attack in attacks)
             {
-                ApplyRemoteWeaponUpdate(attack.Id, attack.Kind, attack.Slot, attack.PermanentId);
+                ApplyRemoteWeaponUpdate(attack.Id, attack.Kind, attack.Slot, attack.PermanentId, attack.Ammo);
                 if (!TryGetClientIndex(localId, attack.Id, out var index))
                     continue;
 
@@ -1369,7 +1369,7 @@ namespace DeadCellsMultiplayerMod
             if (!TryGetWeaponKindId(item, out var kindId)) return;
             var net = _net;
             if (net == null || string.IsNullOrWhiteSpace(kindId)) return;
-            net.SendInventoryWeapon(kindId!, slot, item.permanentId);
+            net.SendInventoryWeapon(kindId!, slot, item.permanentId, GetWeaponAmmoForSync(item));
         }
 
         private static bool TryGetWeaponKindId(InventItem item, out string? kindId)
@@ -1383,6 +1383,28 @@ namespace DeadCellsMultiplayerMod
                 return !string.IsNullOrWhiteSpace(kindId);
             }
             return false;
+        }
+
+        private static int? GetWeaponAmmoForSync(InventItem? item)
+        {
+            if(item == null)
+                return null;
+
+            try
+            {
+                var maxAmmo = item.getMaxAmmo();
+                if(maxAmmo <= 0)
+                    return null;
+
+                var ammo = item.ammo;
+                if(ammo < 0) ammo = 0;
+                if(ammo > maxAmmo) ammo = maxAmmo;
+                return ammo;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static int GetWeaponSlot(Inventory inv, InventItem item)
@@ -1401,7 +1423,7 @@ namespace DeadCellsMultiplayerMod
             return me != null && self != null && ReferenceEquals(self, me.inventory);
         }
 
-        private void ApplyRemoteWeaponUpdate(int remoteId, string? kindId, int slot, int permanentId)
+        private void ApplyRemoteWeaponUpdate(int remoteId, string? kindId, int slot, int permanentId, int? ammo = null)
         {
             if (string.IsNullOrWhiteSpace(kindId)) return;
             var net = _net;
@@ -1473,10 +1495,32 @@ namespace DeadCellsMultiplayerMod
             try
             {
                 inv.equip(existing);
+                ApplyRemoteWeaponAmmo(existing, ammo);
             }
             finally
             {
                 _inventorySyncGuard = false;
+            }
+        }
+
+        private static void ApplyRemoteWeaponAmmo(InventItem item, int? ammo)
+        {
+            if(item == null || !ammo.HasValue)
+                return;
+
+            try
+            {
+                var maxAmmo = item.getMaxAmmo();
+                if(maxAmmo <= 0)
+                    return;
+
+                var value = ammo.Value;
+                if(value < 0) value = 0;
+                if(value > maxAmmo) value = maxAmmo;
+                item.ammo = value;
+            }
+            catch
+            {
             }
         }
 

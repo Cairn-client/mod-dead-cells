@@ -108,7 +108,8 @@ public partial class ModEntry
             _lastLocalShieldPulseTicks = now;
         }
 
-        _net?.SendAttack(kindId!, slot, item.permanentId);
+        var ammo = GetWeaponAmmoForSync(item);
+        _net?.SendAttack(kindId!, slot, item.permanentId, ammo);
         _suppressHeroAnimUntilTicks = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * 0.18);
     }
 
@@ -135,7 +136,8 @@ public partial class ModEntry
         if(slot < 0)
             slot = 0;
 
-        _net?.SendAttack(kindId!, slot, item.permanentId);
+        var ammo = GetWeaponAmmoForSync(item);
+        _net?.SendAttack(kindId!, slot, item.permanentId, ammo);
         _lastLocalShieldPulseTicks = now;
     }
 

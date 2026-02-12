@@ -92,7 +92,15 @@ namespace DeadCellsMultiplayerMod.Ghost
                     var releaseAfter = (long)(Stopwatch.Frequency * 0.18);
                     if(_shieldLastPulseTicks != 0 && sincePulse > releaseAfter)
                     {
-                        weapon.interrupt();
+                        if(weapon is BaseShield shield)
+                        {
+                            try { shield.tryToCancel(false); } catch { }
+                            try { shield.onShieldReleased(); } catch { }
+                        }
+
+                        try { weapon.interrupt(); } catch { }
+                        try { weapon.fixedUpdate(); } catch { }
+                        try { weapon.postUpdate(); } catch { }
                         _shieldActive = false;
                         _shieldLastPulseTicks = 0;
                         _shieldIgnorePulsesUntilTicks = now + (long)(Stopwatch.Frequency * 0.25);
@@ -115,10 +123,19 @@ namespace DeadCellsMultiplayerMod.Ghost
             if(pendingAttacks > 1)
                 pendingAttacks = 1;
 
-            if(!weapon.destroyed && weapon is not BaseBow)
+            if(!weapon.destroyed)
             {
-                weapon.fixedUpdate();
-                weapon.postUpdate();
+                if(weapon is BaseBow)
+                {
+                    // Keep ranged recoveries (mini-arrows/boomerangs) bound to KingSkin context
+                    // without re-triggering full bow fixed logic each tick.
+                    weapon.postUpdate();
+                }
+                else
+                {
+                    weapon.fixedUpdate();
+                    weapon.postUpdate();
+                }
             }
         }
 

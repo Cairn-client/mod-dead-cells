@@ -69,6 +69,7 @@ public sealed class NetNode : IDisposable
         public string? WeaponKind;
         public int WeaponSlot;
         public int WeaponPermanentId;
+        public int WeaponAmmo = int.MinValue;
         public bool HasWeaponUpdate;
 
         public RemoteState(int id)
@@ -113,13 +114,15 @@ public sealed class NetNode : IDisposable
         public readonly string? Kind;
         public readonly int Slot;
         public readonly int PermanentId;
+        public readonly int? Ammo;
 
-        public RemoteWeaponSnapshot(int id, string? kind, int slot, int permanentId)
+        public RemoteWeaponSnapshot(int id, string? kind, int slot, int permanentId, int? ammo)
         {
             Id = id;
             Kind = kind;
             Slot = slot;
             PermanentId = permanentId;
+            Ammo = ammo;
         }
     }
 
@@ -129,13 +132,15 @@ public sealed class NetNode : IDisposable
         public readonly string? Kind;
         public readonly int Slot;
         public readonly int PermanentId;
+        public readonly int? Ammo;
 
-        public RemoteAttack(int id, string? kind, int slot, int permanentId)
+        public RemoteAttack(int id, string? kind, int slot, int permanentId, int? ammo)
         {
             Id = id;
             Kind = kind;
             Slot = slot;
             PermanentId = permanentId;
+            Ammo = ammo;
         }
     }
 
@@ -1007,7 +1012,7 @@ public sealed class NetNode : IDisposable
         if (line.StartsWith("INV|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line[(line.IndexOf('|') + 1)..];
-            ParseWeaponPayload(payload, out var parsedId, out var kind, out var slot, out var permanentId);
+            ParseWeaponPayload(payload, out var parsedId, out var kind, out var slot, out var permanentId, out var ammo);
             var effectiveId = parsedId ?? senderId;
             if (forceSenderId)
                 effectiveId = senderId;
@@ -1019,6 +1024,7 @@ public sealed class NetNode : IDisposable
                     state.WeaponKind = kind;
                     state.WeaponSlot = slot;
                     state.WeaponPermanentId = permanentId;
+                    state.WeaponAmmo = ammo ?? int.MinValue;
                     state.HasWeaponUpdate = true;
                     state.HasRemote = true;
                     _hasRemote = true;
@@ -1027,7 +1033,7 @@ public sealed class NetNode : IDisposable
                 }
 
                 if (_role == NetRole.Host && senderId.HasValue)
-                    forwardLine = BuildWeaponLine("INV", effectiveId.Value, kind, slot, permanentId);
+                    forwardLine = BuildWeaponLine("INV", effectiveId.Value, kind, slot, permanentId, ammo);
             }
             return true;
         }
@@ -1035,7 +1041,7 @@ public sealed class NetNode : IDisposable
         if (line.StartsWith("ATK|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line[(line.IndexOf('|') + 1)..];
-            ParseWeaponPayload(payload, out var parsedId, out var kind, out var slot, out var permanentId);
+            ParseWeaponPayload(payload, out var parsedId, out var kind, out var slot, out var permanentId, out var ammo);
             var effectiveId = parsedId ?? senderId;
             if (forceSenderId)
                 effectiveId = senderId;
@@ -1044,7 +1050,7 @@ public sealed class NetNode : IDisposable
                 lock (_sync)
                 {
                     var state = GetOrCreateRemoteLocked(effectiveId.Value);
-                    _pendingAttacks.Add(new RemoteAttack(effectiveId.Value, kind, slot, permanentId));
+                    _pendingAttacks.Add(new RemoteAttack(effectiveId.Value, kind, slot, permanentId, ammo));
                     state.HasRemote = true;
                     _hasRemote = true;
                     if (_primaryRemoteId == 0)
@@ -1052,7 +1058,7 @@ public sealed class NetNode : IDisposable
                 }
 
                 if (_role == NetRole.Host && senderId.HasValue)
-                    forwardLine = BuildWeaponLine("ATK", effectiveId.Value, kind, slot, permanentId);
+                    forwardLine = BuildWeaponLine("ATK", effectiveId.Value, kind, slot, permanentId, ammo);
             }
             return true;
         }
@@ -1378,12 +1384,13 @@ public sealed class NetNode : IDisposable
             animName = parts[startIndex];
     }
 
-    private static void ParseWeaponPayload(string payload, out int? parsedId, out string kind, out int slot, out int permanentId)
+    private static void ParseWeaponPayload(string payload, out int? parsedId, out string kind, out int slot, out int permanentId, out int? ammo)
     {
         parsedId = null;
         kind = string.Empty;
         slot = -1;
         permanentId = 0;
+        ammo = null;
 
         var parts = payload.Split('|');
         var startIndex = 0;
@@ -1404,6 +1411,10 @@ public sealed class NetNode : IDisposable
         if (parts.Length > startIndex + 2 &&
             int.TryParse(parts[startIndex + 2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedPermanent))
             permanentId = parsedPermanent;
+
+        if (parts.Length > startIndex + 3 &&
+            int.TryParse(parts[startIndex + 3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedAmmo))
+            ammo = parsedAmmo;
     }
 
     private static void ParseHpPayload(string payload, out int? parsedId, out int life, out int maxLife, out int lif, out int bonusLife, out int recover)
@@ -1720,8 +1731,10 @@ public sealed class NetNode : IDisposable
         return $"HEADANIM|{id}|{animName}\n";
     }
 
-    private static string BuildWeaponLine(string tag, int id, string kind, int slot, int permanentId)
+    private static string BuildWeaponLine(string tag, int id, string kind, int slot, int permanentId, int? ammo)
     {
+        if (ammo.HasValue)
+            return $"{tag}|{id}|{kind}|{slot}|{permanentId}|{ammo.Value}\n";
         return $"{tag}|{id}|{kind}|{slot}|{permanentId}\n";
     }
 
@@ -2155,7 +2168,7 @@ public sealed class NetNode : IDisposable
         SendRaw($"ANIM|{idPart}{safe}|{queuePart}|{gPart}");
     }
 
-    public void SendInventoryWeapon(string kind, int slot, int permanentId)
+    public void SendInventoryWeapon(string kind, int slot, int permanentId, int? ammo = null)
     {
         if (!HasAnyConnection())
         {
@@ -2166,10 +2179,13 @@ public sealed class NetNode : IDisposable
         if (safe.Length == 0) return;
 
         var idPart = ID > 0 ? $"{ID}|" : string.Empty;
-        SendRaw($"INV|{idPart}{safe}|{slot}|{permanentId}");
+        if (ammo.HasValue)
+            SendRaw($"INV|{idPart}{safe}|{slot}|{permanentId}|{ammo.Value}");
+        else
+            SendRaw($"INV|{idPart}{safe}|{slot}|{permanentId}");
     }
 
-    public void SendAttack(string kind, int slot, int permanentId)
+    public void SendAttack(string kind, int slot, int permanentId, int? ammo = null)
     {
         if (!HasAnyConnection())
         {
@@ -2180,7 +2196,10 @@ public sealed class NetNode : IDisposable
         if (safe.Length == 0) return;
 
         var idPart = ID > 0 ? $"{ID}|" : string.Empty;
-        SendRaw($"ATK|{idPart}{safe}|{slot}|{permanentId}");
+        if (ammo.HasValue)
+            SendRaw($"ATK|{idPart}{safe}|{slot}|{permanentId}|{ammo.Value}");
+        else
+            SendRaw($"ATK|{idPart}{safe}|{slot}|{permanentId}");
     }
 
     public void SendHeroSkin(string skin)
@@ -2388,7 +2407,8 @@ public sealed class NetNode : IDisposable
                 if (!state.HasRemote || !state.HasWeaponUpdate)
                     continue;
 
-                snapshot.Add(new RemoteWeaponSnapshot(state.Id, state.WeaponKind, state.WeaponSlot, state.WeaponPermanentId));
+                int? ammo = state.WeaponAmmo != int.MinValue ? state.WeaponAmmo : (int?)null;
+                snapshot.Add(new RemoteWeaponSnapshot(state.Id, state.WeaponKind, state.WeaponSlot, state.WeaponPermanentId, ammo));
                 state.HasWeaponUpdate = false;
             }
 
