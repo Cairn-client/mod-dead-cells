@@ -265,6 +265,28 @@ public sealed class NetNode : IDisposable
         }
     }
 
+    public readonly struct ExitReadyState
+    {
+        public readonly int UserId;
+        public readonly int DoorCx;
+        public readonly int DoorCy;
+        public readonly bool Pressed;
+        public readonly bool InsideCircle;
+        public readonly bool IsOutOfGame;
+        public readonly bool IsOnScreen;
+
+        public ExitReadyState(int userId, int doorCx, int doorCy, bool pressed, bool insideCircle, bool isOutOfGame, bool isOnScreen)
+        {
+            UserId = userId;
+            DoorCx = doorCx;
+            DoorCy = doorCy;
+            Pressed = pressed;
+            InsideCircle = insideCircle;
+            IsOutOfGame = isOutOfGame;
+            IsOnScreen = isOnScreen;
+        }
+    }
+
     private TcpListener? _listener;   // host
     private TcpClient? _client;     // client
     private NetworkStream? _stream;
@@ -289,6 +311,7 @@ public sealed class NetNode : IDisposable
     private readonly List<MobHit> _pendingMobHits = new();
     private readonly List<MobAttack> _pendingMobAttacks = new();
     private readonly List<MobDraw> _pendingMobDraws = new();
+    private readonly List<ExitReadyState> _pendingExitReadyStates = new();
     private int _primaryRemoteId;
 
     private readonly IPEndPoint _bindEp;   // host bind
@@ -1094,6 +1117,23 @@ public sealed class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("EXITREADY|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["EXITREADY|".Length..];
+            if (TryParseExitReadyPayload(payload, senderId, forceSenderId, out var state))
+            {
+                lock (_sync)
+                {
+                    _pendingExitReadyStates.Add(state);
+                    _hasRemote = true;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = BuildExitReadyLine(state);
+            }
+            return true;
+        }
+
         if (line.StartsWith("MOBATK|", StringComparison.OrdinalIgnoreCase))
         {
             if (_role == NetRole.Host)
@@ -1201,6 +1241,7 @@ public sealed class NetNode : IDisposable
             _pendingAttacks.RemoveAll(a => a.Id == sender.AssignedId);
             _pendingChatMessages.RemoveAll(m => m.Id == sender.AssignedId);
             _pendingMobHits.RemoveAll(h => h.UserId == sender.AssignedId);
+            _pendingExitReadyStates.RemoveAll(s => s.UserId == sender.AssignedId);
             _hasRemote = hasClients;
         }
 
@@ -1229,6 +1270,8 @@ public sealed class NetNode : IDisposable
             _pendingMobStates.Clear();
             _pendingMobHits.Clear();
             _pendingMobAttacks.Clear();
+            _pendingMobDraws.Clear();
+            _pendingExitReadyStates.Clear();
         }
         CloseClientConnection();
         GameMenu.EnqueueMainThread(() => GameMenu.NotifyRemoteDisconnected(_role));
@@ -1558,6 +1601,42 @@ public sealed class NetNode : IDisposable
         return true;
     }
 
+    private static bool TryParseExitReadyPayload(string payload, int? senderId, bool forceSenderId, out ExitReadyState state)
+    {
+        state = default;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        var parts = payload.Split('|');
+        if (parts.Length < 7)
+            return false;
+
+        int parsedUserId = 0;
+        if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out parsedUserId))
+            parsedUserId = senderId ?? 0;
+
+        if (forceSenderId && senderId.HasValue)
+            parsedUserId = senderId.Value;
+        if (parsedUserId <= 0)
+            return false;
+
+        if (!int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var doorCx))
+            return false;
+        if (!int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var doorCy))
+            return false;
+        if (!TryParseBool(parts[3], out var pressed))
+            return false;
+        if (!TryParseBool(parts[4], out var insideCircle))
+            return false;
+        if (!TryParseBool(parts[5], out var isOutOfGame))
+            return false;
+        if (!TryParseBool(parts[6], out var isOnScreen))
+            return false;
+
+        state = new ExitReadyState(parsedUserId, doorCx, doorCy, pressed, insideCircle, isOutOfGame, isOnScreen);
+        return true;
+    }
+
     private static bool TryParsePositionLine(string line, int? senderId, out int remoteId, out double rx, out double ry, out int dir, out bool hasDir)
     {
         remoteId = 0;
@@ -1749,6 +1828,13 @@ public sealed class NetNode : IDisposable
 
         sb.Append('\n');
         return sb.ToString();
+    }
+
+    private static string BuildExitReadyLine(ExitReadyState state)
+    {
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"EXITREADY|{state.UserId}|{state.DoorCx}|{state.DoorCy}|{(state.Pressed ? 1 : 0)}|{(state.InsideCircle ? 1 : 0)}|{(state.IsOutOfGame ? 1 : 0)}|{(state.IsOnScreen ? 1 : 0)}\n");
     }
 
     private static string BuildPosLine(int id, double cx, double cy, int dir)
@@ -2184,6 +2270,18 @@ public sealed class NetNode : IDisposable
         _ = SendLineSafe(line);
     }
 
+    public void SendExitReady(int doorCx, int doorCy, bool pressed, bool insideCircle, bool isOutOfGame, bool isOnScreen)
+    {
+        if (!HasAnyConnection())
+            return;
+        if (ID <= 0)
+            return;
+
+        var state = new ExitReadyState(ID, doorCx, doorCy, pressed, insideCircle, isOutOfGame, isOnScreen);
+        var line = BuildExitReadyLine(state);
+        _ = SendLineSafe(line);
+    }
+
     private void SendRaw(string payload)
     {
         var line = payload.EndsWith('\n') ? payload : payload + "\n";
@@ -2363,6 +2461,22 @@ public sealed class NetNode : IDisposable
         }
     }
 
+    public bool TryConsumeExitReadyStates(out List<ExitReadyState> states)
+    {
+        lock (_sync)
+        {
+            if (_pendingExitReadyStates.Count == 0)
+            {
+                states = new List<ExitReadyState>();
+                return false;
+            }
+
+            states = new List<ExitReadyState>(_pendingExitReadyStates);
+            _pendingExitReadyStates.Clear();
+            return states.Count > 0;
+        }
+    }
+
     public bool TryGetRemoteHpSnapshots(out List<RemoteHpSnapshot> snapshot)
     {
         lock (_sync)
@@ -2525,6 +2639,7 @@ public sealed class NetNode : IDisposable
             _pendingMobHits.Clear();
             _pendingMobAttacks.Clear();
             _pendingMobDraws.Clear();
+            _pendingExitReadyStates.Clear();
         }
         _stream = null; _client = null; _listener = null;
         try { _sendLock.Dispose(); } catch { }

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
-using System.Threading.Tasks;
 using dc;
 using dc.en;
 using dc.h2d;
@@ -35,7 +34,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<int, long> hostContactAttackSendTick = new();
         private static readonly List<Entity> hostDetectedTargets = new();
         private static readonly Random hostTargetRandom = new();
-        private static readonly object AsyncPumpSync = new();
 
         private static Level? currentLevel;
         private static Level? lastClientNetPumpLevel;
@@ -44,9 +42,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static double lastHostNetPumpFrame = double.NaN;
         private static long lastClientMobDrawSendTick;
         private static long lastHostStateSendTick;
-        private static Task? clientNetPumpTask;
-        private static Task? hostNetPumpTask;
-        private static int asyncSessionToken;
         private static int forceExactNemesisTargetDepth;
         private static readonly Dictionary<int, QueuedOldSkillMarker> hostQueuedOldSkillMarkers = new();
 
@@ -102,6 +97,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             EventSystem.AddReceiver(this);
             modEntry = entry;
+        }
+
+        public static void ClearTrackingForLevelChange()
+        {
+            lock (Sync)
+            {
+                ResetMobTrackingLocked();
+            }
         }
 
         public void OnAdvancedModuleInitializing(ModEntry entry)
@@ -160,7 +163,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             orig(self, clid);
 
-            if (clid is not Mob mob || !IsSyncMob(mob))
+            if (clid is not Mob mob)
                 return;
 
             lock (Sync)
@@ -198,7 +201,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (isClient && ShouldRunClientNetPumpForFrame(self))
             {
-                ScheduleClientNetPumpAsync(net!);
+                ConsumeIncomingHostMobAttacks(net!);
+                ConsumeIncomingHostMobStates(net!);
                 TrySendClientMobDraws(net!);
             }
 
@@ -257,7 +261,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (isHost && ShouldRunHostNetPumpForFrame(self))
             {
-                ScheduleHostNetPumpAsync(net!);
+                ConsumeIncomingMobDraws(net!);
+                ConsumeIncomingMobHits(net!);
                 TrySendHostMobStates(net!);
             }
         }
@@ -492,6 +497,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             clientAttackUnlockUntilTick.Clear();
             hostContactAttackSendTick.Clear();
             hostQueuedOldSkillMarkers.Clear();
+            hostDetectedTargets.Clear();
             currentLevel = null;
             lastClientNetPumpLevel = null;
             lastHostNetPumpLevel = null;
@@ -499,15 +505,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             lastHostNetPumpFrame = double.NaN;
             lastClientMobDrawSendTick = 0;
             lastHostStateSendTick = 0;
-            unchecked
-            {
-                asyncSessionToken++;
-            }
-            lock (AsyncPumpSync)
-            {
-                clientNetPumpTask = null;
-                hostNetPumpTask = null;
-            }
         }
 
         private static void RemoveTrackedMobLocked(Mob mob)
@@ -520,6 +517,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (index >= 0 && index < trackedMobs.Count && ReferenceEquals(trackedMobs[index], mob))
                 trackedMobs[index] = null;
 
+            RemoveTrackedLocalIndexBindingsLocked(index);
+        }
+
+        private static void RemoveTrackedLocalIndexBindingsLocked(int index)
+        {
             clientMobTargets.Remove(index);
             clientAttackUnlockUntilTick.Remove(index);
             hostContactAttackSendTick.Remove(index);
@@ -541,10 +543,41 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 staleHost.Add(pair.Key);
             }
 
-            if (staleHost != null)
+            if (staleHost == null)
+                return;
+
+            for (int i = 0; i < staleHost.Count; i++)
+                hostToLocalIndices.Remove(staleHost[i]);
+        }
+
+        private static void PruneInvalidTrackedMobsLocked()
+        {
+            if (trackedMobs.Count == 0)
+                return;
+
+            for (int i = 0; i < trackedMobs.Count; i++)
             {
-                for (int i = 0; i < staleHost.Count; i++)
-                    hostToLocalIndices.Remove(staleHost[i]);
+                var mob = trackedMobs[i];
+                if (mob == null)
+                {
+                    RemoveTrackedLocalIndexBindingsLocked(i);
+                    continue;
+                }
+
+                var shouldRemove = false;
+                try
+                {
+                    shouldRemove = mob.destroyed || mob._level == null;
+                }
+                catch
+                {
+                    shouldRemove = true;
+                }
+
+                if (!shouldRemove)
+                    continue;
+
+                RemoveTrackedMobLocked(mob);
             }
         }
 
@@ -690,102 +723,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 }
 
                 return false;
-            }
-        }
-
-        private static void ScheduleClientNetPumpAsync(NetNode net)
-        {
-            int session;
-            lock (Sync)
-            {
-                session = asyncSessionToken;
-            }
-
-            lock (AsyncPumpSync)
-            {
-                if (clientNetPumpTask != null && !clientNetPumpTask.IsCompleted)
-                    return;
-
-                clientNetPumpTask = Task.Run(() =>
-                {
-                    try
-                    {
-                        if (net.TryConsumeMobAttacks(out var attacks) && attacks.Count > 0)
-                        {
-                            GameMenu.EnqueueMainThread(() =>
-                            {
-                                if (!IsCurrentAsyncSession(session))
-                                    return;
-                                ApplyIncomingHostMobAttacks(attacks);
-                            });
-                        }
-
-                        if (net.TryConsumeMobStates(out var states) && states.Count > 0)
-                        {
-                            GameMenu.EnqueueMainThread(() =>
-                            {
-                                if (!IsCurrentAsyncSession(session))
-                                    return;
-                                ApplyIncomingHostMobStates(states);
-                            });
-                        }
-                    }
-                    catch
-                    {
-                    }
-                });
-            }
-        }
-
-        private static void ScheduleHostNetPumpAsync(NetNode net)
-        {
-            int session;
-            lock (Sync)
-            {
-                session = asyncSessionToken;
-            }
-
-            lock (AsyncPumpSync)
-            {
-                if (hostNetPumpTask != null && !hostNetPumpTask.IsCompleted)
-                    return;
-
-                hostNetPumpTask = Task.Run(() =>
-                {
-                    try
-                    {
-                        if (net.TryConsumeMobDraws(out var draws) && draws.Count > 0)
-                        {
-                            GameMenu.EnqueueMainThread(() =>
-                            {
-                                if (!IsCurrentAsyncSession(session))
-                                    return;
-                                ApplyIncomingMobDraws(draws);
-                            });
-                        }
-
-                        if (net.TryConsumeMobHits(out var hits) && hits.Count > 0)
-                        {
-                            GameMenu.EnqueueMainThread(() =>
-                            {
-                                if (!IsCurrentAsyncSession(session))
-                                    return;
-                                ApplyIncomingMobHits(hits);
-                            });
-                        }
-                    }
-                    catch
-                    {
-                    }
-                });
-            }
-        }
-
-        private static bool IsCurrentAsyncSession(int token)
-        {
-            lock (Sync)
-            {
-                return asyncSessionToken == token;
             }
         }
 
@@ -1287,6 +1224,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             List<NetNode.MobStateSnapshot> states = new();
             lock (Sync)
             {
+                PruneInvalidTrackedMobsLocked();
                 for (int i = 0; i < trackedMobs.Count; i++)
                 {
                     var mob = trackedMobs[i];
@@ -1336,6 +1274,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             lock (Sync)
             {
+                PruneInvalidTrackedMobsLocked();
                 var nowTick = Stopwatch.GetTimestamp();
 
                 foreach (var state in states)
@@ -1409,6 +1348,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             List<NetNode.MobDraw> draws = new();
             lock (Sync)
             {
+                PruneInvalidTrackedMobsLocked();
                 for (int i = 0; i < trackedMobs.Count; i++)
                 {
                     var mob = trackedMobs[i];
@@ -1453,6 +1393,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             lock (Sync)
             {
+                PruneInvalidTrackedMobsLocked();
                 for (int i = 0; i < draws.Count; i++)
                 {
                     var draw = draws[i];
@@ -1834,6 +1775,16 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (mob == null || !IsSyncMob(mob))
                 return false;
 
+            try
+            {
+                if (mob.destroyed || mob._level == null)
+                    return false;
+            }
+            catch
+            {
+                return false;
+            }
+
             return true;
         }
 
@@ -1934,6 +1885,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             lock (Sync)
             {
+                PruneInvalidTrackedMobsLocked();
                 foreach (var hit in hits)
                 {
                     var mob = ResolveMobFromHitLocked(hit);
