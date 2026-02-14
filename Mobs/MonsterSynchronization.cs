@@ -248,21 +248,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             var net = GameMenu.NetRef;
             var isClient = IsClient(net);
-            if (!isClient)
+
+            if (isClient && IsSyncMob(self))
             {
-                orig(self);
+                // Client-side AI Suppression: Skip vanilla physics and decision logic.
+                ApplyInterpolatedState(self);
                 return;
             }
 
-            EnsureMobTracked(self);
-
             orig(self);
-
-            if (!IsSyncMob(self))
-                return;
-
-            if (isClient)
-                ApplyInterpolatedState(self);
         }
 
         private void Hook_Mob_postUpdate(Hook_Mob.orig_postUpdate orig, Mob self)
@@ -298,29 +292,26 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private void Hook_Mob_onDamage(Hook_Mob.orig_onDamage orig, Mob self, AttackData i)
         {
+            // ALWAYS run orig(self, i) to ensure local red numbers, sounds, and visual feedback
             orig(self, i);
 
-            if (self == null)
+            if (self == null || i == null)
                 return;
 
             var net = GameMenu.NetRef;
-            if (!IsClient(net))
+            if (!IsClient(net) || !IsSyncMob(self))
                 return;
 
-            if (!IsSyncMob(self))
-                return;
-
-            if (i?.source != null && ModEntry.me != null && !ReferenceEquals(i.source, ModEntry.me))
+            // Only report damage dealt by local player to avoid loops and redundant traffic
+            if (i.source != null && ModEntry.me != null && !ReferenceEquals(i.source, ModEntry.me))
                 return;
 
             if (!TryGetTrackedIndex(self, out var mobIndex))
                 return;
 
-            var hp = self.life;
-            var x = GetSyncX(self);
-            var y = GetSyncY(self);
-
-            net!.SendMobHit(mobIndex, hp, x, y);
+            // Report damage to host. Host will be authoritative, but client feels the impact locally.
+            // We send the current life after orig damage for the host to resolve.
+            net!.SendMobHit(mobIndex, self.life, GetSyncX(self), GetSyncY(self));
         }
 
         private void Hook_Mob_contactAttack(Hook_Mob.orig_contactAttack orig, Mob self, Entity pow)
@@ -502,14 +493,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 for (int i = 0; i < entities.length; i++)
                 {
                     var mob = entities.getDyn(i) as Mob;
-                    if (!IsSyncMob(mob))
+                    if (mob == null || !IsSyncMob(mob))
                         continue;
-                    buffer.Add(mob!);
+                    buffer.Add(mob);
                 }
 
+                // Deterministic Sort: Required for all players to have matching indices
                 buffer.Sort(CompareMobsForStableOrder);
-                for (int i = 0; i < buffer.Count; i++)
-                    trackedMobs.Add(buffer[i]);
+                
+                foreach (var mob in buffer)
+                {
+                    trackedMobs.Add(mob);
+                }
             }
         }
 
@@ -1245,6 +1240,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static void ApplyAnimPayload(Mob mob, string? payload)
         {
+            if (mob == null || mob.life <= 0 || mob.destroyed)
+                return;
+
             if (!TryParseAnimPayload(payload, out var parsed))
                 return;
 
@@ -1662,7 +1660,32 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return;
 
                 TrySetMobAttackTargetsExact(mob, target);
+                
+                // Manual hit feedback for heroes
+                if (target is Hero hero)
+                {
+                    try 
+                    {
+                        var atk = new AttackData();
+                        atk.finalDmg = 1; 
+                        hero.onDamage(atk);
+                    } 
+                    catch { }
+                }
+
                 mob.onTouch(target);
+                
+                // Ensure animation resets to idle if stuck in attack pose
+                try
+                {
+                    var animManager = GetMobAnimManager(mob);
+                    var top = GetTopAnimInstance(animManager);
+                    if (top != null && (top.group?.ToString().Contains("attack") == true || top.group?.ToString().Contains("melee") == true))
+                    {
+                        animManager.play("idle".AsHaxeString(), null, null);
+                    }
+                }
+                catch { }
             }
             catch
             {
@@ -1918,7 +1941,27 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (target.MaxLife > 0 && self.maxLife != target.MaxLife)
                 self.maxLife = target.MaxLife;
             if (target.Life >= 0 && self.life != target.Life)
+            {
+                var wasAlive = self.life > 0;
                 self.life = target.Life;
+
+                if (self.life <= 0 && wasAlive)
+                {
+                    // Clean death transition on client
+                    try 
+                    { 
+                        self.onDie(); 
+                        var animManager = GetMobAnimManager(self);
+                        if (animManager != null)
+                        {
+                            // Reset animation stack to prevent freezing in attack poses
+                            while (animManager.stack != null && animManager.stack.length > 0)
+                                animManager.stack.pop();
+                        }
+                    } 
+                    catch { }
+                }
+            }
         }
 
         private static void ApplyClientAnimationStateBeforeUpdate(Mob self)
@@ -1976,13 +2019,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                         TryWakeMobForForcedSimulation(mob);
                         try
                         {
-                            if (mob.life <= 0)
-                                mob.life = 1;
-                            mob.kill();
+                            // Authority Check: If HP is 0, they MUST die.
+                            // We use onDie() to trigger engine hooks without calling the problematic kill()
+                            mob.life = 0;
+                            mob.onDie();
                         }
                         catch
                         {
-                            try { mob.onDie(); } catch { }
                         }
                         continue;
                     }

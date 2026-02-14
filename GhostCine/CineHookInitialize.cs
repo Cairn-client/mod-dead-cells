@@ -30,7 +30,7 @@ namespace CineHookInitialize
             entry.Logger.Information("\x1b[32m[[ModEntry.CineHooks] Initializing CineHooks...]\x1b[0m ");
             // Hook__HeroDeath.__constructor__ += Hook__HeroDeath_init;
             // Hook__HeroDeathBase.__constructor__ += Hook_HeroDeathBase_base;
-            // Hook__HeroDeathRespawn.__constructor__ += Hook__HeroDeathRespawn__constructor__;
+            // Hook__HeroDeathRespawn.__constructor__ +=    ;
             // Hook__HeroDeathContinue.__constructor__ += Hook__HeroDeathContinue__constructor__;
             // Hook_Hero.tryToApplyYoloPerk += Hook_Hero_tryToApplyYoloPerk;
         }

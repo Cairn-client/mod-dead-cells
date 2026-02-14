@@ -7,9 +7,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Globalization;
 using DeadCellsMultiplayerMod;
-using HaxeProxy.Runtime;
 using Serilog;
-using dc;
 using Serilog.Core;
 
 public enum NetRole { None, Host, Client }
@@ -292,6 +290,36 @@ public sealed class NetNode : IDisposable
         }
     }
 
+    public readonly struct PlayerDownState
+    {
+        public readonly int UserId;
+        public readonly bool IsDowned;
+        public readonly double X;
+        public readonly double Y;
+        public readonly string LevelId;
+
+        public PlayerDownState(int userId, bool isDowned, double x, double y, string levelId)
+        {
+            UserId = userId;
+            IsDowned = isDowned;
+            X = x;
+            Y = y;
+            LevelId = levelId ?? string.Empty;
+        }
+    }
+
+    public readonly struct PlayerReviveRequest
+    {
+        public readonly int ReviverId;
+        public readonly int TargetId;
+
+        public PlayerReviveRequest(int reviverId, int targetId)
+        {
+            ReviverId = reviverId;
+            TargetId = targetId;
+        }
+    }
+
     private TcpListener? _listener;   // host
     private TcpClient? _client;     // client
     private NetworkStream? _stream;
@@ -317,6 +345,8 @@ public sealed class NetNode : IDisposable
     private readonly List<MobAttack> _pendingMobAttacks = new();
     private readonly List<MobDraw> _pendingMobDraws = new();
     private readonly List<ExitReadyState> _pendingExitReadyStates = new();
+    private readonly List<PlayerDownState> _pendingPlayerDownStates = new();
+    private readonly List<PlayerReviveRequest> _pendingPlayerReviveRequests = new();
     private int _primaryRemoteId;
 
     private readonly IPEndPoint _bindEp;   // host bind
@@ -336,6 +366,11 @@ public sealed class NetNode : IDisposable
     private int _localHpLif;
     private int _localHpBonusLife;
     private int _localHpRecover;
+    private readonly object _hostCacheSync = new();
+    private int? _cachedHostSeed;
+    private int? _cachedHostBossRune;
+    private string? _cachedHostCountersPayload;
+    private string? _cachedHostBlueprintsPayload;
 
     public bool HasRemote
     {
@@ -446,22 +481,31 @@ public sealed class NetNode : IDisposable
                 _log.Information("[NetNode] Host accepted {ep}", connection.RemoteEndPoint);
 
                 await SendLineToClientSafe(connection, "WELCOME\n").ConfigureAwait(false);
-                if (_role == NetRole.Host && GameDataSync.TryGetHostBossRune(out var hostBossRune))
-                {
-                    await SendLineToClientSafe(connection, $"BOSSRUNE|{hostBossRune}\n").ConfigureAwait(false);
-                }
-                if (_role == NetRole.Host && GameMenu.TryGetHostRunSeed(out var hostSeed))
-                {
-                    await SendLineToClientSafe(connection, $"SEED|{hostSeed}\n").ConfigureAwait(false);
-                }
                 if (_role == NetRole.Host)
                 {
-                    var countersPayload = GameDataSync.HostCountersPayload;
-                    if (countersPayload != null)
-                        await SendLineToClientSafe(connection, $"COUNTERS|{countersPayload}\n").ConfigureAwait(false);
-                    var blueprintsPayload = GameDataSync.HostBlueprintsPayload;
-                    if (blueprintsPayload != null)
-                        await SendLineToClientSafe(connection, $"BLUEPRINTS|{blueprintsPayload}\n").ConfigureAwait(false);
+                    int? cachedBossRune;
+                    int? cachedSeed;
+                    string? cachedCountersPayload;
+                    string? cachedBlueprintsPayload;
+                    lock (_hostCacheSync)
+                    {
+                        cachedBossRune = _cachedHostBossRune;
+                        cachedSeed = _cachedHostSeed;
+                        cachedCountersPayload = _cachedHostCountersPayload;
+                        cachedBlueprintsPayload = _cachedHostBlueprintsPayload;
+                    }
+
+                    if (cachedBossRune.HasValue)
+                        await SendLineToClientSafe(connection, $"BOSSRUNE|{cachedBossRune.Value}\n").ConfigureAwait(false);
+
+                    if (cachedSeed.HasValue)
+                        await SendLineToClientSafe(connection, $"SEED|{cachedSeed.Value}\n").ConfigureAwait(false);
+
+                    if (cachedCountersPayload != null)
+                        await SendLineToClientSafe(connection, $"COUNTERS|{cachedCountersPayload}\n").ConfigureAwait(false);
+
+                    if (cachedBlueprintsPayload != null)
+                        await SendLineToClientSafe(connection, $"BLUEPRINTS|{cachedBlueprintsPayload}\n").ConfigureAwait(false);
                 }
 
                 GameMenu.EnqueueMainThread(() =>
@@ -639,16 +683,25 @@ public sealed class NetNode : IDisposable
             {
                 while (reader.TryRead(out var line))
                 {
-                    if (!HandleLine(line, senderId, out var forwardLine))
+                    var lineCopy = line;
+                    GameMenu.EnqueueMainThread(() =>
                     {
-                        try { recvCts.Cancel(); } catch { }
-                        return;
-                    }
+                        try
+                        {
+                            if (!HandleLine(lineCopy, senderId, out var forwardLine))
+                            {
+                                try { recvCts.Cancel(); } catch { }
+                                return;
+                            }
 
-                    if (_role == NetRole.Host && sender != null && forwardLine != null)
-                    {
-                        ForwardLineToOtherClients(sender, forwardLine);
-                    }
+                            if (_role == NetRole.Host && sender != null && forwardLine != null)
+                                ForwardLineToOtherClients(sender, forwardLine);
+                        }
+                        catch (Exception ex)
+                        {
+                            _log.Warning("[NetNode] HandleLine(main-thread) failed: {msg}", ex.Message);
+                        }
+                    });
                 }
             }
         }
@@ -1158,6 +1211,40 @@ public sealed class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("PDOWN|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["PDOWN|".Length..];
+            if (TryParsePlayerDownPayload(payload, senderId, forceSenderId, out var state))
+            {
+                lock (_sync)
+                {
+                    _pendingPlayerDownStates.Add(state);
+                    _hasRemote = true;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = BuildPlayerDownLine(state);
+            }
+            return true;
+        }
+
+        if (line.StartsWith("PREVIVE|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["PREVIVE|".Length..];
+            if (TryParsePlayerRevivePayload(payload, senderId, forceSenderId, out var request))
+            {
+                lock (_sync)
+                {
+                    _pendingPlayerReviveRequests.Add(request);
+                    _hasRemote = true;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = BuildPlayerReviveLine(request);
+            }
+            return true;
+        }
+
         if (line.StartsWith("MOBATK|", StringComparison.OrdinalIgnoreCase))
         {
             if (_role == NetRole.Host)
@@ -1266,6 +1353,8 @@ public sealed class NetNode : IDisposable
             _pendingChatMessages.RemoveAll(m => m.Id == sender.AssignedId);
             _pendingMobHits.RemoveAll(h => h.UserId == sender.AssignedId);
             _pendingExitReadyStates.RemoveAll(s => s.UserId == sender.AssignedId);
+            _pendingPlayerDownStates.RemoveAll(s => s.UserId == sender.AssignedId);
+            _pendingPlayerReviveRequests.RemoveAll(s => s.ReviverId == sender.AssignedId || s.TargetId == sender.AssignedId);
             _hasRemote = hasClients;
         }
 
@@ -1296,6 +1385,8 @@ public sealed class NetNode : IDisposable
             _pendingMobAttacks.Clear();
             _pendingMobDraws.Clear();
             _pendingExitReadyStates.Clear();
+            _pendingPlayerDownStates.Clear();
+            _pendingPlayerReviveRequests.Clear();
         }
         CloseClientConnection();
         GameMenu.EnqueueMainThread(() => GameMenu.NotifyRemoteDisconnected(_role));
@@ -1666,6 +1757,67 @@ public sealed class NetNode : IDisposable
         return true;
     }
 
+    private static bool TryParsePlayerDownPayload(string payload, int? senderId, bool forceSenderId, out PlayerDownState state)
+    {
+        state = default;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        var parts = payload.Split('|');
+        if (parts.Length < 5)
+            return false;
+
+        int parsedUserId;
+        if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out parsedUserId))
+            parsedUserId = senderId ?? 0;
+        if (forceSenderId && senderId.HasValue)
+            parsedUserId = senderId.Value;
+        if (parsedUserId <= 0)
+            return false;
+
+        if (!TryParseBool(parts[1], out var isDowned))
+            return false;
+        if (!double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+            return false;
+        if (!double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+            return false;
+
+        var levelId = parts[4] ?? string.Empty;
+        levelId = levelId.Replace("\r", string.Empty).Replace("\n", string.Empty).Trim();
+        if (levelId.Length == 0)
+            levelId = string.Empty;
+
+        state = new PlayerDownState(parsedUserId, isDowned, x, y, levelId);
+        return true;
+    }
+
+    private static bool TryParsePlayerRevivePayload(string payload, int? senderId, bool forceSenderId, out PlayerReviveRequest request)
+    {
+        request = default;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        var parts = payload.Split('|');
+        if (parts.Length < 2)
+            return false;
+
+        int reviverId;
+        if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out reviverId))
+            reviverId = senderId ?? 0;
+        if (forceSenderId && senderId.HasValue)
+            reviverId = senderId.Value;
+        if (reviverId <= 0)
+            return false;
+
+        if (!int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var targetId))
+            return false;
+        if (targetId <= 0)
+            return false;
+
+        request = new PlayerReviveRequest(reviverId, targetId);
+        return true;
+    }
+
     private static bool TryParsePositionLine(string line, int? senderId, out int remoteId, out double rx, out double ry, out int dir, out bool hasDir)
     {
         remoteId = 0;
@@ -1868,6 +2020,25 @@ public sealed class NetNode : IDisposable
             $"EXITREADY|{state.UserId}|{state.DoorCx}|{state.DoorCy}|{(state.Pressed ? 1 : 0)}|{(state.InsideCircle ? 1 : 0)}|{(state.IsOutOfGame ? 1 : 0)}|{(state.IsOnScreen ? 1 : 0)}\n");
     }
 
+    private static string BuildPlayerDownLine(PlayerDownState state)
+    {
+        var safeLevelId = (state.LevelId ?? string.Empty)
+            .Replace("|", "/", StringComparison.Ordinal)
+            .Replace("\r", string.Empty, StringComparison.Ordinal)
+            .Replace("\n", string.Empty, StringComparison.Ordinal);
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"PDOWN|{state.UserId}|{(state.IsDowned ? 1 : 0)}|{state.X}|{state.Y}|{safeLevelId}\n");
+    }
+
+    private static string BuildPlayerReviveLine(PlayerReviveRequest request)
+    {
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"PREVIVE|{request.ReviverId}|{request.TargetId}\n");
+    }
+
     private static string BuildPosLine(int id, double cx, double cy, int dir)
     {
         return string.Create(
@@ -1973,6 +2144,14 @@ public sealed class NetNode : IDisposable
 
     public void SendSeed(int seed)
     {
+        if (_role == NetRole.Host)
+        {
+            lock (_hostCacheSync)
+            {
+                _cachedHostSeed = seed;
+            }
+        }
+
         if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending seed {Seed}: no connected client", seed);
@@ -1998,26 +2177,42 @@ public sealed class NetNode : IDisposable
 
     public void SendCounters(string countersPayload)
     {
+        var safeCounters = (countersPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
+        if (_role == NetRole.Host)
+        {
+            lock (_hostCacheSync)
+            {
+                _cachedHostCountersPayload = safeCounters;
+            }
+        }
+
         if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending counters sync: no connected client");
             return;
         }
 
-        var safeCounters = (countersPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
         SendRaw($"COUNTERS|{safeCounters}");
         _log.Information("[NetNode] Sent counters sync");
     }
 
     public void SendBlueprints(string blueprintsPayload)
     {
+        var safeBlueprints = (blueprintsPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
+        if (_role == NetRole.Host)
+        {
+            lock (_hostCacheSync)
+            {
+                _cachedHostBlueprintsPayload = safeBlueprints;
+            }
+        }
+
         if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending blueprints sync: no connected client");
             return;
         }
 
-        var safeBlueprints = (blueprintsPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
         SendRaw($"BLUEPRINTS|{safeBlueprints}");
         _log.Information("[NetNode] Sent blueprints sync");
     }
@@ -2040,6 +2235,14 @@ public sealed class NetNode : IDisposable
 
     public void SendBossRune(int bossRune)
     {
+        if (_role == NetRole.Host)
+        {
+            lock (_hostCacheSync)
+            {
+                _cachedHostBossRune = bossRune;
+            }
+        }
+
         if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending boss rune: no connected client");
@@ -2246,6 +2449,30 @@ public sealed class NetNode : IDisposable
 
         SendRaw("DIED");
         _log.Information("[NetNode] Sent hero death");
+    }
+
+    public void SendPlayerDownState(bool isDowned, double x, double y, string? levelId)
+    {
+        if (!HasAnyConnection())
+            return;
+        if (ID <= 0)
+            return;
+
+        var state = new PlayerDownState(ID, isDowned, x, y, levelId ?? string.Empty);
+        var line = BuildPlayerDownLine(state);
+        _ = SendLineSafe(line);
+    }
+
+    public void SendPlayerReviveRequest(int targetId)
+    {
+        if (!HasAnyConnection())
+            return;
+        if (ID <= 0 || targetId <= 0)
+            return;
+
+        var request = new PlayerReviveRequest(ID, targetId);
+        var line = BuildPlayerReviveLine(request);
+        _ = SendLineSafe(line);
     }
 
     public void SendMobStates(IReadOnlyList<MobStateSnapshot> states)
@@ -2528,6 +2755,38 @@ public sealed class NetNode : IDisposable
         }
     }
 
+    public bool TryConsumePlayerDownStates(out List<PlayerDownState> states)
+    {
+        lock (_sync)
+        {
+            if (_pendingPlayerDownStates.Count == 0)
+            {
+                states = new List<PlayerDownState>();
+                return false;
+            }
+
+            states = new List<PlayerDownState>(_pendingPlayerDownStates);
+            _pendingPlayerDownStates.Clear();
+            return states.Count > 0;
+        }
+    }
+
+    public bool TryConsumePlayerReviveRequests(out List<PlayerReviveRequest> requests)
+    {
+        lock (_sync)
+        {
+            if (_pendingPlayerReviveRequests.Count == 0)
+            {
+                requests = new List<PlayerReviveRequest>();
+                return false;
+            }
+
+            requests = new List<PlayerReviveRequest>(_pendingPlayerReviveRequests);
+            _pendingPlayerReviveRequests.Clear();
+            return requests.Count > 0;
+        }
+    }
+
     public bool TryGetRemoteHpSnapshots(out List<RemoteHpSnapshot> snapshot)
     {
         lock (_sync)
@@ -2679,6 +2938,13 @@ public sealed class NetNode : IDisposable
         try { _client?.Close(); } catch { }
         try { _listener?.Stop(); } catch { }
         GameDataSync.Seed = 0;
+        lock (_hostCacheSync)
+        {
+            _cachedHostSeed = null;
+            _cachedHostBossRune = null;
+            _cachedHostCountersPayload = null;
+            _cachedHostBlueprintsPayload = null;
+        }
         lock (_sync)
         {
             _remotes.Clear();
@@ -2691,6 +2957,8 @@ public sealed class NetNode : IDisposable
             _pendingMobAttacks.Clear();
             _pendingMobDraws.Clear();
             _pendingExitReadyStates.Clear();
+            _pendingPlayerDownStates.Clear();
+            _pendingPlayerReviveRequests.Clear();
         }
         _stream = null; _client = null; _listener = null;
         try { _sendLock.Dispose(); } catch { }

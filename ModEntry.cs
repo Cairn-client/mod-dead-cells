@@ -22,6 +22,7 @@ using Hashlink.Virtuals;
 using dc.tool;
 using dc.tool.weap;
 using dc.tool.atk;
+using dc.tool.mainSkills;
 using dc.hxd;
 using System.Timers;
 using HaxeProxy.Runtime;
@@ -96,6 +97,30 @@ namespace DeadCellsMultiplayerMod
 
         public InventItem inventItem;
         private bool _inventorySyncGuard;
+        private bool _localFakeDead;
+        private long _localFakeDeadStartedTicks;
+        private DeadBase? _localDeadCine;
+        private double _localDownedX;
+        private double _localDownedY;
+        private string _localDownedLevelId = string.Empty;
+        private long _nextReviveAttemptTicks;
+        private long _nextDownedStateSendTicks;
+        private const double ReviveUseDistancePx = 48.0;
+        private const int ReviveInteractKey = 69; // E
+        private const int ForceDeathKey = 81; // Q
+        private const double ReviveAttemptCooldownSeconds = 0.2;
+        private const double DownedStateResendSeconds = 0.4;
+
+        private sealed class RemoteDownedState
+        {
+            public int UserId;
+            public double X;
+            public double Y;
+            public string LevelId = string.Empty;
+            public long UpdatedAtTicks;
+        }
+
+        private readonly Dictionary<int, RemoteDownedState> _remoteDowned = new();
 
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
@@ -210,7 +235,11 @@ namespace DeadCellsMultiplayerMod
             Hook__LevelStruct.get += Hook__LevelStruct_get;
             Hook_Boot.update += hook_boot_update;
             Hook_Game.pause += Hook_Game_pause;
+            Hook_Hero.kill += Hook_Hero_kill;
+            // Hook_Hero.onDie += Hook_Hero_onDie;
+            // Hook_Hero.startDeathCine += Hook_Hero_startDeathCine;
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
+            // Hook_Hero.tryToApplyYoloPerk += Hook_Hero_tryToApplyYoloPerk;
             Hook__TitleScreen.__constructor__ += Hook_TitleScreen__constructor__;
             // Hook_Hero.onEnterRoom += 
             Ghost.KingWeaponHooks.Install();
@@ -757,8 +786,56 @@ namespace DeadCellsMultiplayerMod
         private void Hook_Hero_onHeroDie(Hook_Hero.orig_onHeroDie orig, Hero self)
         {
             var net = _net;
-            if (!GameDataSync.ConsumeSuppressDeathBroadcast() && _netRole != NetRole.None)
+            var suppressBroadcast = GameDataSync.ConsumeSuppressDeathBroadcast();
+
+            if (me != null &&
+                ReferenceEquals(self, me) &&
+                _localFakeDead)
+            {
+                // Prevent second onHeroDie pass from falling into vanilla death while local player is already downed.
+                return;
+            }
+
+            if (suppressBroadcast)
+            {
+                orig(self);
+                return;
+            }
+
+            if (_netRole != NetRole.None &&
+                net != null &&
+                me != null &&
+                ReferenceEquals(self, me) &&
+                !_localFakeDead &&
+                HasAliveRemoteTeammate(net))
+            {
+                EnterLocalFakeDeath(self, net);
+                return;
+            }
+
+            if (_netRole != NetRole.None)
                 net?.SendHeroDeath();
+            orig(self);
+        }
+
+        private void Hook_Hero_kill(Hook_Hero.orig_kill orig, Hero self)
+        {
+            var net = _net;
+            if (_netRole != NetRole.None &&
+                net != null &&
+                me != null &&
+                ReferenceEquals(self, me))
+            {
+                if (_localFakeDead)
+                    return;
+
+                if (HasAliveRemoteTeammate(net))
+                {
+                    EnterLocalFakeDeath(self, net);
+                    return;
+                }
+            }
+
             orig(self);
         }
 
@@ -794,7 +871,6 @@ namespace DeadCellsMultiplayerMod
 
         private void hook_boot_update(Hook_Boot.orig_update orig, Boot self, double dt)
         {
-
             orig(self, dt);
             GameMenu.ProcessMainThreadQueue();
             GameMenu.HandleTextInputClipboardShortcuts();
@@ -878,6 +954,7 @@ namespace DeadCellsMultiplayerMod
         {
             kingInitialized = false;
             DeadCellsMultiplayerMod.Mobs.MobsSynchronization.MobsSynchronization.ClearTrackingForLevelChange();
+            ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
             me = self;
             SendLevel(levelId);
             orig(self, oldLevel);
@@ -954,12 +1031,490 @@ namespace DeadCellsMultiplayerMod
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
             if (me == null) return;
-            SendHeroCoords();
+            TryHandleForceDeathHotkey();
+            UpdateFakeDeathFlow(dt);
+            if (!_localFakeDead)
+                SendHeroCoords();
             ReceiveGhostCoords();
             ReceiveGhostWeapons();
             ReceiveGhostAttacks();
             UpdateGhostWeapons();
             UpdateGhostHeads();
+        }
+
+        private void TryHandleForceDeathHotkey()
+        {
+            if (me == null)
+                return;
+
+            try
+            {
+                if (!dc.hxd.Key.Class.isPressed(ForceDeathKey))
+                    return;
+            }
+            catch
+            {
+                return;
+            }
+
+            try
+            {
+                if (!me.isAlive())
+                    return;
+                me.kill();
+            }
+            catch
+            {
+            }
+        }
+
+        private void UpdateFakeDeathFlow(double dt)
+        {
+            var net = _net;
+            if (_netRole == NetRole.None || net == null || me == null)
+            {
+                if (_localFakeDead || _remoteDowned.Count > 0)
+                    ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+                return;
+            }
+
+            ConsumeRemoteDownedStates(net);
+            ConsumeReviveRequests(net);
+            PruneRemoteDownedStates(net);
+
+            if (_localFakeDead)
+            {
+                MaintainLocalFakeDeath(net);
+                return;
+            }
+
+            if (dc.hxd.Key.Class.isPressed(ReviveInteractKey))
+                TrySendReviveRequest(net);
+        }
+
+        private void ConsumeRemoteDownedStates(NetNode net)
+        {
+            if (!net.TryConsumePlayerDownStates(out var states))
+                return;
+
+            var localId = net.id;
+            for (int i = 0; i < states.Count; i++)
+            {
+                var state = states[i];
+                if (state.UserId <= 0 || state.UserId == localId)
+                    continue;
+
+                if (!state.IsDowned)
+                {
+                    _remoteDowned.Remove(state.UserId);
+                    continue;
+                }
+
+                if (!_remoteDowned.TryGetValue(state.UserId, out var existing))
+                {
+                    existing = new RemoteDownedState
+                    {
+                        UserId = state.UserId
+                    };
+                    _remoteDowned[state.UserId] = existing;
+                }
+
+                existing.X = state.X;
+                existing.Y = state.Y;
+                existing.LevelId = state.LevelId ?? string.Empty;
+                existing.UpdatedAtTicks = Stopwatch.GetTimestamp();
+            }
+        }
+
+        private void ConsumeReviveRequests(NetNode net)
+        {
+            if (!_localFakeDead)
+            {
+                if (net.TryConsumePlayerReviveRequests(out _))
+                {
+                    // Intentionally ignored: local player is alive, revive requests target other players.
+                }
+                return;
+            }
+
+            if (!net.TryConsumePlayerReviveRequests(out var requests))
+                return;
+
+            var localId = net.id;
+            for (int i = 0; i < requests.Count; i++)
+            {
+                var req = requests[i];
+                if (req.TargetId != localId)
+                    continue;
+
+                ReviveLocalPlayer(net);
+                return;
+            }
+        }
+
+        private void PruneRemoteDownedStates(NetNode net)
+        {
+            if (_remoteDowned.Count == 0)
+                return;
+
+            var activeIds = new HashSet<int>();
+            var localId = net.id;
+            if (localId > 0)
+                activeIds.Add(localId);
+
+            if (net.TryGetRemoteUserSnapshots(out var users))
+            {
+                for (int i = 0; i < users.Count; i++)
+                {
+                    var id = users[i].Id;
+                    if (id > 0)
+                        activeIds.Add(id);
+                }
+            }
+
+            for (int i = 0; i < clientIds.Length; i++)
+            {
+                var id = clientIds[i];
+                if (id > 0)
+                    activeIds.Add(id);
+            }
+
+            var stale = new List<int>();
+            foreach (var pair in _remoteDowned)
+            {
+                if (!activeIds.Contains(pair.Key))
+                    stale.Add(pair.Key);
+            }
+
+            for (int i = 0; i < stale.Count; i++)
+                _remoteDowned.Remove(stale[i]);
+        }
+
+        private bool HasAliveRemoteTeammate(NetNode net)
+        {
+            var localId = net.id;
+            var activeIds = new HashSet<int>();
+
+            if (net.TryGetRemoteUserSnapshots(out var users))
+            {
+                for (int i = 0; i < users.Count; i++)
+                {
+                    var id = users[i].Id;
+                    if (id > 0 && id != localId)
+                        activeIds.Add(id);
+                }
+            }
+
+            for (int i = 0; i < clientIds.Length; i++)
+            {
+                var id = clientIds[i];
+                if (id > 0 && id != localId)
+                    activeIds.Add(id);
+            }
+
+            if (activeIds.Count == 0)
+            {
+                if (net.IsHost)
+                    return NetNode.ConnectedClientCount > 0;
+                return net.IsAlive;
+            }
+
+            var localLevelId = GetCurrentLevelId();
+            foreach (var id in activeIds)
+            {
+                if (!_remoteDowned.TryGetValue(id, out var downed))
+                    return true;
+
+                // If teammate is tracked as downed on another level, treat them as alive.
+                if (!string.Equals(localLevelId, downed.LevelId, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private void EnterLocalFakeDeath(Hero hero, NetNode net)
+        {
+            if (hero == null)
+                return;
+
+            _localFakeDead = true;
+            _localFakeDeadStartedTicks = Stopwatch.GetTimestamp();
+            _localDownedX = hero.spr?.x ?? 0;
+            _localDownedY = hero.spr?.y ?? 0;
+            _localDownedLevelId = GetCurrentLevelId();
+            _nextDownedStateSendTicks = 0;
+            _nextReviveAttemptTicks = 0;
+
+            try
+            {
+                if (hero.life <= 0)
+                    hero.life = 1;
+            }
+            catch { }
+
+            try { hero.cancelVelocities(); } catch { }
+            try { hero.lockControlsS(10.0); } catch { }
+            try { hero.cancelSkillControlLock(); } catch { }
+            StartLocalDeadCine(hero);
+
+            SendLocalDownedState(net, isDowned: true, force: true);
+        }
+
+        private void MaintainLocalFakeDeath(NetNode net)
+        {
+            if (!_localFakeDead || me == null)
+                return;
+
+            if (!HasAliveRemoteTeammate(net))
+            {
+                var now = Stopwatch.GetTimestamp();
+                var graceTicks = (long)(Stopwatch.Frequency * 1.25);
+                if (_localFakeDeadStartedTicks != 0 &&
+                    now - _localFakeDeadStartedTicks < graceTicks)
+                {
+                    return;
+                }
+
+                // No alive teammates left: continue vanilla death flow.
+                _localFakeDead = false;
+                _localFakeDeadStartedTicks = 0;
+                StopLocalDeadCine();
+                try { me.kill(); } catch { }
+                return;
+            }
+
+            try { me.cancelVelocities(); } catch { }
+            try { me.lockControlsS(0.25); } catch { }
+            try { me.cancelSkillControlLock(); } catch { }
+
+            try
+            {
+                if (me.spr != null)
+                    me.setPosPixel(_localDownedX, _localDownedY);
+            }
+            catch { }
+
+            SendLocalDownedState(net, isDowned: true, force: false);
+        }
+
+        private void ReviveLocalPlayer(NetNode net)
+        {
+            if (me == null)
+                return;
+
+            var hero = me;
+            _localFakeDead = false;
+            _localFakeDeadStartedTicks = 0;
+            _nextDownedStateSendTicks = 0;
+            _nextReviveAttemptTicks = 0;
+            _localDownedLevelId = string.Empty;
+            StopLocalDeadCine();
+
+            try { hero.cancelVelocities(); } catch { }
+            try { hero.cancelSkillControlLock(); } catch { }
+            try { hero.unlockControls(); } catch { }
+
+            try
+            {
+                var currentLife = hero.life;
+                var maxLife = hero.maxLife;
+                var targetLife = System.Math.Max(1, (int)System.Math.Ceiling(maxLife * 0.5));
+                var healAmount = targetLife - currentLife;
+                if (healAmount > 0)
+                    hero.heal(healAmount);
+                if (hero.life < targetLife)
+                    hero.life = targetLife;
+            }
+            catch
+            {
+                try { hero.fullHeal(); } catch { }
+            }
+
+            SendLocalDownedState(net, isDowned: false, force: true);
+        }
+
+        private void TrySendReviveRequest(NetNode net)
+        {
+            if (me == null || _remoteDowned.Count == 0)
+                return;
+
+            var now = Stopwatch.GetTimestamp();
+            if (_nextReviveAttemptTicks != 0 && now < _nextReviveAttemptTicks)
+                return;
+
+            var localLevelId = GetCurrentLevelId();
+            RemoteDownedState? nearest = null;
+            double nearestDistSq = double.MaxValue;
+            var x = me.spr?.x ?? 0;
+            var y = me.spr?.y ?? 0;
+
+            foreach (var state in _remoteDowned.Values)
+            {
+                if (state == null || state.UserId <= 0)
+                    continue;
+                if (!string.IsNullOrEmpty(localLevelId) &&
+                    !string.IsNullOrEmpty(state.LevelId) &&
+                    !string.Equals(state.LevelId, localLevelId, StringComparison.Ordinal))
+                    continue;
+
+                var dx = state.X - x;
+                var dy = state.Y - y;
+                var distSq = dx * dx + dy * dy;
+                if (distSq > ReviveUseDistancePx * ReviveUseDistancePx)
+                    continue;
+
+                if (distSq < nearestDistSq)
+                {
+                    nearestDistSq = distSq;
+                    nearest = state;
+                }
+            }
+
+            if (nearest == null)
+                return;
+
+            if (!TryConsumeOneFlask(me))
+                return;
+
+            net.SendPlayerReviveRequest(nearest.UserId);
+            _remoteDowned.Remove(nearest.UserId);
+            _nextReviveAttemptTicks = now + (long)(Stopwatch.Frequency * ReviveAttemptCooldownSeconds);
+        }
+
+        private bool TryConsumeOneFlask(Hero hero)
+        {
+            if (hero == null)
+                return false;
+
+            try
+            {
+                var manager = hero.mainSkillsManager;
+                if (manager == null)
+                    return false;
+
+                var heal = manager.getMainSkill(Heal.Class) as Heal;
+                if (heal == null)
+                    return false;
+
+                var current = heal.get_healings();
+                if (current <= 0)
+                    return false;
+
+                var next = current - 1;
+                if (next < 0)
+                    next = 0;
+                heal.set_healings(next);
+                heal.setFlaskGlow();
+
+                try
+                {
+                    var max = heal.get_maxHealings();
+                    var hud = dc.ui.HUD.Class.ME;
+                    hud?.setHealings(heal.get_healings(), max);
+                }
+                catch { }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void SendLocalDownedState(NetNode net, bool isDowned, bool force)
+        {
+            if (net == null || net.id <= 0)
+                return;
+
+            var now = Stopwatch.GetTimestamp();
+            var resend = (long)(Stopwatch.Frequency * DownedStateResendSeconds);
+            if (!force && _nextDownedStateSendTicks != 0 && now < _nextDownedStateSendTicks)
+                return;
+
+            var level = isDowned
+                ? (!string.IsNullOrWhiteSpace(_localDownedLevelId) ? _localDownedLevelId : GetCurrentLevelId())
+                : GetCurrentLevelId();
+            var x = isDowned ? _localDownedX : (me?.spr?.x ?? _localDownedX);
+            var y = isDowned ? _localDownedY : (me?.spr?.y ?? _localDownedY);
+
+            net.SendPlayerDownState(isDowned, x, y, level);
+            _nextDownedStateSendTicks = now + resend;
+        }
+
+        private string GetCurrentLevelId()
+        {
+            if (!string.IsNullOrWhiteSpace(levelId))
+                return levelId.Trim();
+
+            return string.Empty;
+        }
+
+        private void StartLocalDeadCine(Hero hero)
+        {
+            if (hero == null)
+                return;
+
+            try
+            {
+                if (_localDeadCine != null && !_localDeadCine.destroyed)
+                    return;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                _localDeadCine = new DeadBase(hero, ModEntry.GetPrimaryClient());
+            }
+            catch
+            {
+                _localDeadCine = null;
+            }
+        }
+
+        private void StopLocalDeadCine()
+        {
+            var cine = _localDeadCine;
+            _localDeadCine = null;
+            if (cine == null)
+                return;
+
+            try
+            {
+                if (!cine.destroyed)
+                    cine.destroy();
+            }
+            catch { }
+
+            try { cine.disposeImmediately(); } catch { }
+        }
+
+        private void ResetFakeDeathState(bool unlockLocalHero, bool sendNetworkUpState)
+        {
+            var wasFakeDead = _localFakeDead;
+            _localFakeDead = false;
+            _localFakeDeadStartedTicks = 0;
+            StopLocalDeadCine();
+            _localDownedX = 0;
+            _localDownedY = 0;
+            _localDownedLevelId = string.Empty;
+            _nextReviveAttemptTicks = 0;
+            _nextDownedStateSendTicks = 0;
+            _remoteDowned.Clear();
+
+            if (unlockLocalHero && me != null)
+            {
+                try { me.cancelSkillControlLock(); } catch { }
+                try { me.unlockControls(); } catch { }
+            }
+
+            if (sendNetworkUpState && wasFakeDead && _net != null && _netRole != NetRole.None)
+            {
+                try { _net.SendPlayerDownState(false, me?.spr?.x ?? 0, me?.spr?.y ?? 0, GetCurrentLevelId()); } catch { }
+            }
         }
 
         private void UpdateGhostHeads()
@@ -1514,6 +2069,7 @@ namespace DeadCellsMultiplayerMod
             try
             {
                 _net?.Dispose();
+                ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
 
                 _net = NetNode.CreateHost(Logger, ep);
                 _netRole = NetRole.Host;
@@ -1539,6 +2095,7 @@ namespace DeadCellsMultiplayerMod
             try
             {
                 _net?.Dispose();
+                ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
 
                 _net = NetNode.CreateClient(Logger, ep);
                 _netRole = NetRole.Client;
@@ -1570,6 +2127,7 @@ namespace DeadCellsMultiplayerMod
                 _net?.Dispose();
             }
             catch { }
+            ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
             _net = null;
             _netRole = NetRole.None;
             GameMenu.NetRef = null;
