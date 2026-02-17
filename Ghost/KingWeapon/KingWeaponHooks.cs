@@ -169,7 +169,7 @@ internal static class KingWeaponHooks
 
     private static void Hook_Entity_onDamage(Hook_Entity.orig_onDamage orig, Entity self, AttackData a)
     {
-        if(ShouldSuppressDamageFromKingWeapon(a))
+        if(ShouldSuppressDamageFromKingWeapon(self, a))
             return;
         orig(self, a);
     }
@@ -717,10 +717,16 @@ internal static class KingWeaponHooks
         return false;
     }
 
-    private static bool ShouldSuppressDamageFromKingWeapon(AttackData? attack)
+    private static bool ShouldSuppressDamageFromKingWeapon(Entity? target, AttackData? attack)
     {
+        if(target is not Mob)
+            return false;
+
         if(attack == null)
             return false;
+
+        if(KingWeaponSupport.IsInKingContext)
+            return true;
 
         Weapon sourceWeapon;
         try
@@ -746,6 +752,19 @@ internal static class KingWeaponHooks
         }
 
         if(sourceItem != null && KingWeaponSupport.TryGetSourceByItem(sourceItem, out var source) && source != null)
+            return true;
+
+        Entity sourceEntity;
+        try
+        {
+            sourceEntity = attack.source;
+        }
+        catch
+        {
+            sourceEntity = null!;
+        }
+
+        if(sourceEntity is KingSkin)
             return true;
 
         return false;

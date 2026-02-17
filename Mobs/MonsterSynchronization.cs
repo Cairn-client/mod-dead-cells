@@ -402,12 +402,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     clientLastReportedMobLife[localIndex] = life;
                     clientLastMobHitReportTick[localIndex] = now;
                 }
-
-                if (life <= 0)
-                    return;
             }
 
             net.SendMobHit(mobSyncId, life, x, y);
+
+            if (IsClient(net) && life <= 0)
+                net.SendMobDie(mobSyncId, x, y);
         }
 
         private static void TrySendImmediateHostMobState(NetNode net, int mobSyncId, Mob mob, double x, double y)
@@ -1687,7 +1687,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                         var dx = GetSyncX(mob) - hero.spr.x;
                         var dy = GetSyncY(mob) - hero.spr.y;
                         var distSq = dx * dx + dy * dy;
-                        if (distSq > MaxCoordinateMatchDistanceSq * 400.0) // ~1900 pixels
+                        if (distSq > MaxCoordinateMatchDistanceSq * 400.0)
                             continue;
                     }
 
@@ -2289,6 +2289,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (hits == null || hits.Count == 0)
                 return;
 
+            var net = GameMenu.NetRef;
+            var isHost = IsHost(net);
+            var pending = new List<(Mob Mob, int TargetLife, int TargetMaxLife, bool ForceDie, int SyncId)>(hits.Count);
+
             lock (Sync)
             {
                 PruneInvalidTrackedMobsLocked();
@@ -2305,15 +2309,56 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     if (targetLife >= prevLife)
                         continue;
 
-                    if (targetLife <= 0 && prevLife > 0)
-                    {
-                        // Death is finalized by explicit MOBDIE to avoid ambiguous coordinate-based kill guesses.
-                        if (mob.life > 1)
-                            mob.life = 1;
-                        continue;
-                    }
+                    var forceDie = targetLife <= 0 && prevLife > 0;
+                    var syncId = -1;
+                    TryGetMobSyncId(mob, out syncId);
+                    pending.Add((mob, targetLife, maxLife, forceDie, syncId));
+                }
+            }
 
-                    mob.life = targetLife;
+            for (int i = 0; i < pending.Count; i++)
+            {
+                var update = pending[i];
+                var mob = update.Mob;
+                if (mob == null)
+                    continue;
+
+                if (update.ForceDie)
+                {
+                    TryWakeMobForForcedSimulation(mob);
+                    if (isHost)
+                    {
+                        try
+                        {
+                            if (!mob.destroyed)
+                            {
+                                mob.life = 0;
+                                mob.onDie();
+                            }
+                            else
+                            {
+                                mob.life = 0;
+                            }
+                        }
+                        catch
+                        {
+                        }
+                    }
+                    else
+                    {
+                        ApplyAuthoritativeLifeState(mob, 0, update.TargetMaxLife);
+                    }
+                }
+                else
+                {
+                    ApplyAuthoritativeLifeState(mob, update.TargetLife, update.TargetMaxLife);
+                }
+
+                if (isHost && net != null && update.SyncId >= 0)
+                {
+                    var sx = GetSyncX(mob);
+                    var sy = GetSyncY(mob);
+                    TrySendImmediateHostMobState(net, update.SyncId, mob, sx, sy);
                 }
             }
         }
