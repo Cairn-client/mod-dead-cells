@@ -9,19 +9,24 @@ namespace DeadCellsMultiplayerMod
     {
         private readonly Hero _templateHero;
         private readonly GhostKing _ghost;
+        private readonly dc.GameCinematic? _previousCine;
         private HeroDeadCorpse? _corpse;
         private bool _hadGhostVisibleState;
         private bool _ghostWasVisible;
+        private bool _cineSuppressed;
         private bool _hasTarget;
         private double _targetX;
         private double _targetY;
         private int _targetDir;
 
-        public RemoteDownedCorpse(Hero templateHero, GhostKing ghost, double x, double y, int dir)
+        public RemoteDownedCorpse(Hero templateHero, GhostKing ghost, double x, double y, int dir, dc.GameCinematic? previousCine)
         {
             _templateHero = templateHero;
             _ghost = ghost;
+            _previousCine = previousCine;
 
+            cancellable = false;
+            SuppressCineEffects();
             CaptureGhostVisibility();
             HideGhost();
             CreateCorpse();
@@ -48,6 +53,7 @@ namespace DeadCellsMultiplayerMod
         public override void update()
         {
             base.update();
+            SuppressCineEffects();
 
             if (_templateHero == null || _templateHero.destroyed || _ghost == null || _ghost.destroyed)
             {
@@ -62,6 +68,7 @@ namespace DeadCellsMultiplayerMod
         public override void onDispose()
         {
             base.onDispose();
+            RestoreCineState();
             DisposeCorpse();
             RestoreGhostVisibility();
         }
@@ -167,6 +174,60 @@ namespace DeadCellsMultiplayerMod
         private static void TryStartLethalFall(HeroDeadCorpse corpse)
         {
             try { corpse.startLethalFall(); } catch { }
+        }
+
+        private void SuppressCineEffects()
+        {
+            RestoreCineState();
+
+            if (_cineSuppressed)
+                return;
+
+            try { disableBars(); } catch { }
+            try { bars = 0.0; } catch { }
+
+            try
+            {
+                var top = topBar;
+                if (top != null)
+                    top.set_visible(false);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var bottom = bottomBar;
+                if (bottom != null)
+                    bottom.set_visible(false);
+            }
+            catch
+            {
+            }
+
+            try { dc.pr.Game.Class.ME?.hud?.show(null); } catch { }
+            _cineSuppressed = true;
+        }
+
+        private void RestoreCineState()
+        {
+            var game = dc.pr.Game.Class.ME;
+            if (game == null)
+                return;
+
+            try
+            {
+                if (_previousCine != null && !_previousCine.destroyed)
+                    game.curCine = _previousCine;
+                else if (ReferenceEquals(game.curCine, this))
+                    game.curCine = null;
+            }
+            catch
+            {
+            }
+
+            try { game.hud?.show(null); } catch { }
         }
 
         private void HideGhost()

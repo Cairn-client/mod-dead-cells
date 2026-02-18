@@ -1277,7 +1277,8 @@ namespace DeadCellsMultiplayerMod
 
             try
             {
-                var created = new RemoteDownedCorpse(me, client, state.X, state.Y, client.dir);
+                var previousCine = dc.pr.Game.Class.ME?.curCine;
+                var created = new RemoteDownedCorpse(me, client, state.X, state.Y, client.dir, previousCine);
                 _remoteDownedCines[state.UserId] = created;
                 return created;
             }
