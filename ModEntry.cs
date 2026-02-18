@@ -122,6 +122,7 @@ namespace DeadCellsMultiplayerMod
         }
 
         private readonly Dictionary<int, RemoteDownedState> _remoteDowned = new();
+        private readonly Dictionary<int, RemoteDownedCorpse> _remoteDownedCines = new();
 
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
@@ -1110,6 +1111,7 @@ namespace DeadCellsMultiplayerMod
                 if (!state.IsDowned)
                 {
                     _remoteDowned.Remove(state.UserId);
+                    DisposeRemoteDownedCine(state.UserId);
                     continue;
                 }
 
@@ -1190,36 +1192,128 @@ namespace DeadCellsMultiplayerMod
             }
 
             for (int i = 0; i < stale.Count; i++)
+            {
+                DisposeRemoteDownedCine(stale[i]);
                 _remoteDowned.Remove(stale[i]);
+            }
         }
 
         private void ApplyRemoteDownedGhostPositions(NetNode net)
         {
-            if (net == null || _remoteDowned.Count == 0)
+            if (net == null)
                 return;
+
+            if (_remoteDowned.Count == 0)
+            {
+                DisposeAllRemoteDownedCines();
+                return;
+            }
 
             var localId = net.id;
             var localLevelId = GetCurrentLevelId();
+            var activeCorpseIds = new HashSet<int>();
             foreach (var state in _remoteDowned.Values)
             {
                 if (state == null || state.UserId <= 0)
                     continue;
                 if (!TryGetClientIndex(localId, state.UserId, out var index))
+                {
+                    DisposeRemoteDownedCine(state.UserId);
                     continue;
+                }
 
                 var client = clients[index];
                 if (client == null)
+                {
+                    DisposeRemoteDownedCine(state.UserId);
                     continue;
+                }
 
                 if (!string.IsNullOrEmpty(localLevelId) &&
                     !string.IsNullOrEmpty(state.LevelId) &&
                     !string.Equals(state.LevelId, localLevelId, StringComparison.Ordinal))
+                {
+                    DisposeRemoteDownedCine(state.UserId);
                     continue;
+                }
 
-                try { client.setPosPixel(state.X, state.Y); } catch { }
+                activeCorpseIds.Add(state.UserId);
+                var cine = EnsureRemoteDownedCine(state, client);
+                if (cine != null)
+                    cine.UpdateTarget(state.X, state.Y, client.dir);
+                else
+                    try { client.setPosPixel(state.X, state.Y); } catch { }
+
                 rLastX[index] = state.X;
                 rLastY[index] = state.Y;
             }
+
+            if (_remoteDownedCines.Count > 0)
+            {
+                var staleCorpseIds = new List<int>();
+                foreach (var pair in _remoteDownedCines)
+                {
+                    if (!activeCorpseIds.Contains(pair.Key))
+                        staleCorpseIds.Add(pair.Key);
+                }
+
+                for (int i = 0; i < staleCorpseIds.Count; i++)
+                    DisposeRemoteDownedCine(staleCorpseIds[i]);
+            }
+        }
+
+        private RemoteDownedCorpse? EnsureRemoteDownedCine(RemoteDownedState state, GhostKing client)
+        {
+            if (state == null || client == null || me == null)
+                return null;
+
+            if (_remoteDownedCines.TryGetValue(state.UserId, out var existing))
+            {
+                if (existing != null && !existing.destroyed)
+                    return existing;
+
+                _remoteDownedCines.Remove(state.UserId);
+            }
+
+            try
+            {
+                var created = new RemoteDownedCorpse(me, client, state.X, state.Y, client.dir);
+                _remoteDownedCines[state.UserId] = created;
+                return created;
+            }
+            catch
+            {
+                _remoteDownedCines.Remove(state.UserId);
+                return null;
+            }
+        }
+
+        private void DisposeRemoteDownedCine(int userId)
+        {
+            if (!_remoteDownedCines.TryGetValue(userId, out var cine) || cine == null)
+                return;
+
+            _remoteDownedCines.Remove(userId);
+            try
+            {
+                if (!cine.destroyed)
+                    cine.destroy();
+            }
+            catch
+            {
+            }
+
+            try { cine.disposeImmediately(); } catch { }
+        }
+
+        private void DisposeAllRemoteDownedCines()
+        {
+            if (_remoteDownedCines.Count == 0)
+                return;
+
+            var ids = new List<int>(_remoteDownedCines.Keys);
+            for (int i = 0; i < ids.Count; i++)
+                DisposeRemoteDownedCine(ids[i]);
         }
 
         private bool HasAliveRemoteTeammate(NetNode net)
@@ -1543,6 +1637,7 @@ namespace DeadCellsMultiplayerMod
             _nextReviveAttemptTicks = 0;
             _nextDownedStateSendTicks = 0;
             _remoteDowned.Clear();
+            DisposeAllRemoteDownedCines();
 
             if (unlockLocalHero && me != null)
             {
@@ -1742,6 +1837,12 @@ namespace DeadCellsMultiplayerMod
                     {
                         drawX = downed.X;
                         drawY = downed.Y;
+                        if (_remoteDownedCines.TryGetValue(remote.Id, out var downedCine) &&
+                            downedCine != null &&
+                            !downedCine.destroyed)
+                        {
+                            downedCine.UpdateTarget(drawX, drawY, remote.Dir);
+                        }
                     }
                 }
 

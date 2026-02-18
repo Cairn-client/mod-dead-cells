@@ -1,0 +1,214 @@
+using System;
+using dc.en;
+using DeadCellsMultiplayerMod.Ghost.GhostBase;
+using ModCore.Utilities;
+
+namespace DeadCellsMultiplayerMod
+{
+    public sealed class RemoteDownedCorpse : dc.GameCinematic
+    {
+        private readonly Hero _templateHero;
+        private readonly GhostKing _ghost;
+        private HeroDeadCorpse? _corpse;
+        private bool _hadGhostVisibleState;
+        private bool _ghostWasVisible;
+        private bool _hasTarget;
+        private double _targetX;
+        private double _targetY;
+        private int _targetDir;
+
+        public RemoteDownedCorpse(Hero templateHero, GhostKing ghost, double x, double y, int dir)
+        {
+            _templateHero = templateHero;
+            _ghost = ghost;
+
+            CaptureGhostVisibility();
+            HideGhost();
+            CreateCorpse();
+            UpdateTarget(x, y, dir);
+        }
+
+        public void UpdateTarget(double x, double y, int dir)
+        {
+            var normalizedDir = dir >= 0 ? 1 : -1;
+            var changed = !_hasTarget ||
+                          Math.Abs(_targetX - x) > 0.001 ||
+                          Math.Abs(_targetY - y) > 0.001 ||
+                          _targetDir != normalizedDir;
+
+            _targetX = x;
+            _targetY = y;
+            _targetDir = normalizedDir;
+            _hasTarget = true;
+
+            if (changed)
+                ApplyTargetToCorpse(forceStartFall: true);
+        }
+
+        public override void update()
+        {
+            base.update();
+
+            if (_templateHero == null || _templateHero.destroyed || _ghost == null || _ghost.destroyed)
+            {
+                destroy();
+                return;
+            }
+
+            HideGhost();
+            EnsureCorpse();
+        }
+
+        public override void onDispose()
+        {
+            base.onDispose();
+            DisposeCorpse();
+            RestoreGhostVisibility();
+        }
+
+        private void EnsureCorpse()
+        {
+            var corpse = _corpse;
+            if (corpse == null || corpse.destroyed)
+            {
+                CreateCorpse();
+                return;
+            }
+
+            try
+            {
+                if (!corpse.hasGravity)
+                    TryStartLethalFall(corpse);
+            }
+            catch
+            {
+            }
+        }
+
+        private void CreateCorpse()
+        {
+            DisposeCorpse();
+
+            try
+            {
+                var corpse = CreateCorpseWithoutDrops();
+                if (corpse == null)
+                    return;
+
+                _corpse = corpse;
+                ApplyTargetToCorpse(forceStartFall: true);
+            }
+            catch
+            {
+                _corpse = null;
+            }
+        }
+
+        private HeroDeadCorpse? CreateCorpseWithoutDrops()
+        {
+            var hero = _templateHero;
+            if (hero == null)
+                return null;
+
+            var originalCells = 0;
+            var capturedCells = false;
+            var originalBlueprints = hero.blueprints;
+            try
+            {
+                originalCells = hero.cells;
+                capturedCells = true;
+                hero.cells = 0;
+                hero.blueprints = (dc.hl.types.ArrayObj)ArrayUtils.CreateDyn().array;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var corpse = new HeroDeadCorpse(this, hero);
+                corpse.init();
+                corpse.cells = 0;
+                return corpse;
+            }
+            finally
+            {
+                try
+                {
+                    if (capturedCells)
+                        hero.cells = originalCells;
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    hero.blueprints = originalBlueprints;
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private void ApplyTargetToCorpse(bool forceStartFall)
+        {
+            var corpse = _corpse;
+            if (corpse == null || corpse.destroyed || !_hasTarget)
+                return;
+
+            try { corpse.dir = _targetDir; } catch { }
+            try { corpse.setPosPixel(_targetX, _targetY); } catch { }
+            if (forceStartFall)
+                TryStartLethalFall(corpse);
+        }
+
+        private static void TryStartLethalFall(HeroDeadCorpse corpse)
+        {
+            try { corpse.startLethalFall(); } catch { }
+        }
+
+        private void HideGhost()
+        {
+            try { _ghost.visible = false; } catch { }
+        }
+
+        private void CaptureGhostVisibility()
+        {
+            if (_hadGhostVisibleState)
+                return;
+
+            try { _ghostWasVisible = _ghost.visible; }
+            catch { _ghostWasVisible = true; }
+            _hadGhostVisibleState = true;
+        }
+
+        private void RestoreGhostVisibility()
+        {
+            if (!_hadGhostVisibleState || _ghost == null || _ghost.destroyed)
+                return;
+
+            try { _ghost.visible = _ghostWasVisible; } catch { }
+        }
+
+        private void DisposeCorpse()
+        {
+            var corpse = _corpse;
+            _corpse = null;
+            if (corpse == null)
+                return;
+
+            try
+            {
+                if (!corpse.destroyed)
+                    corpse.destroy();
+            }
+            catch
+            {
+            }
+
+            try { corpse.dispose(); } catch { }
+        }
+    }
+}
