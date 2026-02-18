@@ -1083,6 +1083,7 @@ namespace DeadCellsMultiplayerMod
             ConsumeRemoteDownedStates(net);
             ConsumeReviveRequests(net);
             PruneRemoteDownedStates(net);
+            ApplyRemoteDownedGhostPositions(net);
 
             if (_localFakeDead)
             {
@@ -1192,6 +1193,35 @@ namespace DeadCellsMultiplayerMod
                 _remoteDowned.Remove(stale[i]);
         }
 
+        private void ApplyRemoteDownedGhostPositions(NetNode net)
+        {
+            if (net == null || _remoteDowned.Count == 0)
+                return;
+
+            var localId = net.id;
+            var localLevelId = GetCurrentLevelId();
+            foreach (var state in _remoteDowned.Values)
+            {
+                if (state == null || state.UserId <= 0)
+                    continue;
+                if (!TryGetClientIndex(localId, state.UserId, out var index))
+                    continue;
+
+                var client = clients[index];
+                if (client == null)
+                    continue;
+
+                if (!string.IsNullOrEmpty(localLevelId) &&
+                    !string.IsNullOrEmpty(state.LevelId) &&
+                    !string.Equals(state.LevelId, localLevelId, StringComparison.Ordinal))
+                    continue;
+
+                try { client.setPosPixel(state.X, state.Y); } catch { }
+                rLastX[index] = state.X;
+                rLastY[index] = state.Y;
+            }
+        }
+
         private bool HasAliveRemoteTeammate(NetNode net)
         {
             var localId = net.id;
@@ -1289,6 +1319,13 @@ namespace DeadCellsMultiplayerMod
             try { me.cancelVelocities(); } catch { }
             try { me.lockControlsS(0.25); } catch { }
             try { me.cancelSkillControlLock(); } catch { }
+
+            var cine = _localDeadCine;
+            if (cine != null && cine.TryGetCorpsePixelPosition(out var corpseX, out var corpseY))
+            {
+                _localDownedX = corpseX;
+                _localDownedY = corpseY;
+            }
 
             try
             {
@@ -1688,13 +1725,30 @@ namespace DeadCellsMultiplayerMod
                     continue;
 
                 var client = clients[index];
+                if (client == null)
+                    continue;
 
                 remotePlayerId = remote.Id;
                 clientIds[index] = remote.Id;
-                client.setPosPixel(remote.X, remote.Y - 0.2d);
+
+                var drawX = remote.X;
+                var drawY = remote.Y - 0.2d;
+                if (_remoteDowned.TryGetValue(remote.Id, out var downed))
+                {
+                    var localLevelId = GetCurrentLevelId();
+                    if (string.IsNullOrEmpty(localLevelId) ||
+                        string.IsNullOrEmpty(downed.LevelId) ||
+                        string.Equals(localLevelId, downed.LevelId, StringComparison.Ordinal))
+                    {
+                        drawX = downed.X;
+                        drawY = downed.Y;
+                    }
+                }
+
+                client.setPosPixel(drawX, drawY);
                 client.dir = remote.Dir;
-                rLastX[index] = remote.X;
-                rLastY[index] = remote.Y;
+                rLastX[index] = drawX;
+                rLastY[index] = drawY;
 
                 var newLabel = BuildRemoteLabel(remote.Id, remote.Username);
                 if (!string.Equals(clientLabels[index], newLabel, StringComparison.Ordinal))
