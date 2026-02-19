@@ -22,6 +22,9 @@ namespace DeadCellsMultiplayerMod
 {
     public class GhostHero
     {
+        private const double NickScaleWindowed = 0.8;
+        private const double NickScaleFullscreen = 0.5;
+
         private readonly dc.pr.Game _game;
         private readonly Hero _me;
         private static ILogger? _log;
@@ -180,14 +183,13 @@ namespace DeadCellsMultiplayerMod
             }
             _Assets _Assets = Assets.Class;
             dc.h2d.Text text_h2d = _Assets.makeText(text.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), null, entity.spr);
-            var uiScale = UiScale.GetResolutionScale();
-            var scale = 0.8 * uiScale;
+            var targetScale = GetNicknameScale();
             text_h2d.y -= 80;
             text_h2d.x -= 2.5 * text.Length;
             text_h2d.font.size = 12;
             text_h2d.alpha = 0.8;
-            text_h2d.scaleX = scale;
-            text_h2d.scaleY = scale;
+            text_h2d.scaleX = targetScale;
+            text_h2d.scaleY = targetScale;
             text_h2d.textColor = 0;
             _labels[entity] = text_h2d;
         }
@@ -195,6 +197,7 @@ namespace DeadCellsMultiplayerMod
         public void UpdateLabels()
         {
             if (_labels.Count == 0) return;
+            var targetScale = GetNicknameScale();
             List<Entity>? toRemove = null;
             foreach (var pair in _labels)
             {
@@ -210,9 +213,6 @@ namespace DeadCellsMultiplayerMod
 
                 var textValue = label.text?.ToString() ?? string.Empty;
                 int len = textValue.Length;
-                var uiScale = UiScale.GetResolutionScale();
-                var targetScale = 0.8 * uiScale;
-                if(targetScale <= 0.6) targetScale = 0.6;
                 var targetX = -2.5 * len;
                 var targetY = -80;
                 if (entity.dir < 0)
@@ -234,6 +234,37 @@ namespace DeadCellsMultiplayerMod
             {
                 _labels.Remove(toRemove[i]);
             }
+        }
+
+        private static double GetNicknameScale()
+        {
+            try
+            {
+                var win = dc.hxd.Window.Class.getInstance();
+                if (win != null)
+                {
+                    var sdlWin = win.window;
+                    if (sdlWin != null)
+                    {
+                        var displayMode = sdlWin.displayMode;
+                        if (displayMode == 1 || displayMode == 2)
+                            return NickScaleFullscreen;
+                        if (displayMode == 0)
+                            return NickScaleWindowed;
+                    }
+
+                    var mode = win.fullScreenMode;
+                    if (mode == 1 || mode == 2)
+                        return NickScaleFullscreen;
+                    if (mode == 0)
+                        return NickScaleWindowed;
+                }
+            }
+            catch
+            {
+            }
+
+            return NickScaleWindowed;
         }
 
     }
