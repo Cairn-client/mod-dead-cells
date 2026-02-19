@@ -1051,11 +1051,12 @@ namespace DeadCellsMultiplayerMod
         {
             kingInitialized = false;
             DeadCellsMultiplayerMod.Mobs.MobsSynchronization.MobsSynchronization.ClearTrackingForLevelChange();
-            ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+            ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false, clearRemoteDownedTracking: false, clearDownedAnnouncements: false);
             me = self;
             try { me._targetable = true; } catch { }
             SendLevel(levelId);
             orig(self, oldLevel);
+            EnsureHeroVisibilityAfterRoomChange(me);
             if (_netRole == NetRole.None) return;
             var net = _net;
             var localId = net?.id ?? 0;
@@ -1103,6 +1104,7 @@ namespace DeadCellsMultiplayerMod
             me = self;
             try { me._targetable = true; } catch { }
             orig(self, lvl, cx, cy);
+            EnsureHeroVisibilityAfterRoomChange(me);
             SendEquippedWeapons(self.inventory);
         }
 
@@ -1174,6 +1176,8 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             var localId = net.id;
+            if (localId <= 0)
+                return;
             for (int i = 0; i < states.Count; i++)
             {
                 var state = states[i];
@@ -1948,7 +1952,11 @@ namespace DeadCellsMultiplayerMod
             try { cine.disposeImmediately(); } catch { }
         }
 
-        private void ResetFakeDeathState(bool unlockLocalHero, bool sendNetworkUpState)
+        private void ResetFakeDeathState(
+            bool unlockLocalHero,
+            bool sendNetworkUpState,
+            bool clearRemoteDownedTracking = true,
+            bool clearDownedAnnouncements = true)
         {
             var wasFakeDead = _localFakeDead;
             _localFakeDead = false;
@@ -1966,8 +1974,10 @@ namespace DeadCellsMultiplayerMod
             _postReviveLockY = 0;
             ResetReviveHold();
             ClearReviveHints();
-            _remoteDowned.Clear();
-            _downedAnnouncements.Clear();
+            if (clearRemoteDownedTracking)
+                _remoteDowned.Clear();
+            if (clearDownedAnnouncements)
+                _downedAnnouncements.Clear();
             DisposeAllRemoteDownedCines();
             for (int i = 0; i < clients.Length; i++)
             {
@@ -1988,6 +1998,38 @@ namespace DeadCellsMultiplayerMod
             if (sendNetworkUpState && wasFakeDead && _net != null && _netRole != NetRole.None)
             {
                 try { _net.SendPlayerDownState(false, me?.spr?.x ?? 0, me?.spr?.y ?? 0, GetCurrentLevelId()); } catch { }
+            }
+        }
+
+        private static void EnsureHeroVisibilityAfterRoomChange(Hero? hero)
+        {
+            if (hero == null)
+                return;
+
+            try
+            {
+                if (ModEntry.IsLocalPlayerDowned())
+                    return;
+            }
+            catch
+            {
+            }
+
+            try { hero.visible = true; } catch { }
+            try
+            {
+                var head = hero.heroHead;
+                if (head == null)
+                    return;
+
+                try { head.customHeadSpr?.set_visible(true); } catch { }
+                try { head.customBackSpr?.set_visible(true); } catch { }
+                try { head.headNormalSb?.set_visible(true); } catch { }
+                try { head.headAddSb?.set_visible(true); } catch { }
+                try { head.eye?.set_visible(true); } catch { }
+            }
+            catch
+            {
             }
         }
 

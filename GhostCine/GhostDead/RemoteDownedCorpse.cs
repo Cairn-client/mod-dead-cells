@@ -110,6 +110,7 @@ namespace DeadCellsMultiplayerMod
 
             HideGhost();
             EnsureCorpse();
+            EnsureTemplateHeroVisible();
             EnsureViewportTracksTemplateHero(immediate: false);
         }
 
