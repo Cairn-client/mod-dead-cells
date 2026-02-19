@@ -277,6 +277,8 @@ namespace DeadCellsMultiplayerMod
 
             EnqueueMainThread(() =>
             {
+                ModEntry.ResetDownedPlayersForRestart();
+
                 var game = ModEntry.Instance?.game;
                 if (game?.user == null)
                 {
@@ -285,9 +287,22 @@ namespace DeadCellsMultiplayerMod
                 }
 
                 _log?.Information("[NetMod] Host restarting run ({Reason})", reason);
+                try
+                {
+                    var main = dc.Main.Class.ME;
+                    if (main != null)
+                    {
+                        main.launchGame(GameDataSync._launch, null, 0.8);
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log?.Warning("[NetMod] Host launchGame restart failed, fallback to direct newGame: {Message}", ex.Message);
+                }
+
                 game.destroy();
                 game.disposeImmediately();
-
                 game.user.newGame(GameDataSync.Seed, GameDataSync._isTwitch, GameDataSync._isCustom, GameDataSync._mode, GameDataSync._launch);
             });
         }
@@ -296,6 +311,8 @@ namespace DeadCellsMultiplayerMod
         {
             EnqueueMainThread(() =>
             {
+                ModEntry.ResetDownedPlayersForRestart();
+
                 var game = ModEntry.Instance?.game;
                 if (game?.user == null)
                 {

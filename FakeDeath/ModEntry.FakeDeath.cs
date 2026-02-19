@@ -3,14 +3,21 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using dc.en;
 using dc.tool.mainSkills;
+using dc.ui;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using HaxeProxy.Runtime;
+using ModCore.Utilities;
 
 namespace DeadCellsMultiplayerMod
 {
     public partial class ModEntry
     {
+        private bool _allDownedGameOverShown;
+        private bool _allDownedRestartQueued;
+        private long _allDownedRestartAtTicks;
+        private const double AllDownedGameOverDelaySeconds = 0.2;
+
         private void Hook_Hero_onHeroDie(Hook_Hero.orig_onHeroDie orig, Hero self)
         {
             var net = _net;
@@ -26,7 +33,14 @@ namespace DeadCellsMultiplayerMod
 
             if (suppressBroadcast)
             {
-                orig(self);
+                if (_netRole != NetRole.None &&
+                    net != null &&
+                    me != null &&
+                    ReferenceEquals(self, me) &&
+                    !_localFakeDead)
+                {
+                    EnterLocalFakeDeath(self, net);
+                }
                 return;
             }
 
@@ -34,15 +48,12 @@ namespace DeadCellsMultiplayerMod
                 net != null &&
                 me != null &&
                 ReferenceEquals(self, me) &&
-                !_localFakeDead &&
-                HasAliveRemoteTeammate(net))
+                !_localFakeDead)
             {
                 EnterLocalFakeDeath(self, net);
                 return;
             }
 
-            if (_netRole != NetRole.None)
-                net?.SendHeroDeath();
             orig(self);
         }
 
@@ -57,7 +68,7 @@ namespace DeadCellsMultiplayerMod
                 if (_localFakeDead)
                     return;
 
-                if (HasAliveRemoteTeammate(net))
+                if (ShouldEnterFakeDeathFromEarlyDeathHook(self, net))
                 {
                     EnterLocalFakeDeath(self, net);
                     return;
@@ -78,7 +89,7 @@ namespace DeadCellsMultiplayerMod
                 if (_localFakeDead)
                     return;
 
-                if (HasAliveRemoteTeammate(net))
+                if (ShouldEnterFakeDeathFromEarlyDeathHook(self, net))
                 {
                     EnterLocalFakeDeath(self, net);
                     return;
@@ -88,12 +99,65 @@ namespace DeadCellsMultiplayerMod
             orig(self);
         }
 
+        private bool ShouldEnterFakeDeathFromEarlyDeathHook(Hero self, NetNode net)
+        {
+            if (self == null || net == null)
+                return false;
+            if (_localFakeDead)
+                return false;
+            if (me == null || !ReferenceEquals(self, me))
+                return false;
+
+            // Guard against spawn/initialization lifecycle where kill/onDie may fire transiently.
+            try
+            {
+                if (self._level == null || self.spr == null)
+                    return false;
+                if (self.maxLife <= 0)
+                    return false;
+                if (self.life > 0)
+                    return false;
+            }
+            catch
+            {
+                return false;
+            }
+
+            return true;
+        }
+
         private void Hook_Hero_startDeathCine(Hook_Hero.orig_startDeathCine orig, Hero self)
         {
             if (me != null && ReferenceEquals(self, me) && _localFakeDead)
                 return;
 
             orig(self);
+        }
+
+        private void TryRecoverMissedFakeDeathFromLife()
+        {
+            var net = _net;
+            var hero = me;
+            if (_netRole == NetRole.None || net == null || hero == null)
+                return;
+            if (_localFakeDead)
+                return;
+
+            try
+            {
+                if (hero.destroyed || hero._level == null || hero.spr == null)
+                    return;
+                if (hero.maxLife <= 0)
+                    return;
+                if (hero.life > 0)
+                    return;
+            }
+            catch
+            {
+                return;
+            }
+
+            EnterLocalFakeDeath(hero, net);
         }
 
         private void UpdateFakeDeathFlow(double dt)
@@ -346,7 +410,10 @@ namespace DeadCellsMultiplayerMod
                 activeCorpseIds.Add(state.UserId);
                 var cine = EnsureRemoteDownedCine(state, client);
                 if (cine != null)
-                    cine.UpdateTarget(state.X, state.Y, client.dir);
+                {
+                    try { cine.UpdateTarget(state.X, state.Y, client.dir); }
+                    catch { DisposeRemoteDownedCine(state.UserId); }
+                }
 
                 try { client._targetable = false; } catch { }
                 try { client.setPosPixel(state.X, state.Y - DownedGhostBodyYOffsetPx); } catch { }
@@ -376,7 +443,7 @@ namespace DeadCellsMultiplayerMod
 
             if (_remoteDownedCines.TryGetValue(state.UserId, out var existing))
             {
-                if (existing != null && !existing.destroyed)
+                if (existing != null)
                     return existing;
 
                 _remoteDownedCines.Remove(state.UserId);
@@ -402,15 +469,7 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             _remoteDownedCines.Remove(userId);
-            try
-            {
-                if (!cine.destroyed)
-                    cine.destroy();
-            }
-            catch
-            {
-            }
-
+            try { cine.destroy(); } catch { }
             try { cine.disposeImmediately(); } catch { }
         }
 
@@ -448,6 +507,9 @@ namespace DeadCellsMultiplayerMod
 
             if (activeIds.Count == 0)
             {
+                if (_remoteDowned.Count > 0)
+                    return false;
+
                 if (net.IsHost)
                     return NetNode.ConnectedClientCount > 0;
                 return net.IsAlive;
@@ -472,6 +534,7 @@ namespace DeadCellsMultiplayerMod
             if (hero == null)
                 return;
 
+            ResetAllDownedGameOverState();
             _localFakeDead = true;
             _localFakeDeadStartedTicks = Stopwatch.GetTimestamp();
             _localDownedX = hero.spr?.x ?? 0;
@@ -504,6 +567,18 @@ namespace DeadCellsMultiplayerMod
             if (!_localFakeDead || me == null)
                 return;
 
+            try
+            {
+                if (me.life <= 0)
+                    me.life = 1;
+            }
+            catch
+            {
+            }
+
+            if (_localDeadCine == null)
+                StartLocalDeadCine(me);
+
             if (!HasAliveRemoteTeammate(net))
             {
                 var now = Stopwatch.GetTimestamp();
@@ -514,13 +589,12 @@ namespace DeadCellsMultiplayerMod
                     return;
                 }
 
-                // No alive teammates left: continue vanilla death flow.
-                _localFakeDead = false;
-                _localFakeDeadStartedTicks = 0;
-                StopLocalDeadCine();
-                try { me.kill(); } catch { }
+                HandleAllPlayersDowned(net);
                 return;
             }
+
+            if (_allDownedGameOverShown || _allDownedRestartQueued)
+                ResetAllDownedGameOverState();
 
             try { me.cancelVelocities(); } catch { }
             try { me.lockControlsS(0.25); } catch { }
@@ -592,6 +666,7 @@ namespace DeadCellsMultiplayerMod
             if (me == null)
                 return;
 
+            ResetAllDownedGameOverState();
             var hero = me;
             _localFakeDead = false;
             _localFakeDeadStartedTicks = 0;
@@ -772,13 +847,19 @@ namespace DeadCellsMultiplayerMod
             foreach (var pair in _remoteDownedCines)
             {
                 var cine = pair.Value;
-                if (cine == null || cine.destroyed)
+                if (cine == null)
                     continue;
 
-                if (pair.Key == userId)
-                    cine.SetInteractionLabel(ReviveHintText);
-                else
-                    cine.SetInteractionLabel(null);
+                try
+                {
+                    if (pair.Key == userId)
+                        cine.SetInteractionLabel(ReviveHintText);
+                    else
+                        cine.SetInteractionLabel(null);
+                }
+                catch
+                {
+                }
             }
         }
 
@@ -789,9 +870,9 @@ namespace DeadCellsMultiplayerMod
 
             foreach (var cine in _remoteDownedCines.Values)
             {
-                if (cine == null || cine.destroyed)
+                if (cine == null)
                     continue;
-                cine.SetInteractionLabel(null);
+                try { cine.SetInteractionLabel(null); } catch { }
             }
         }
 
@@ -869,14 +950,8 @@ namespace DeadCellsMultiplayerMod
             if (hero == null)
                 return;
 
-            try
-            {
-                if (_localDeadCine != null && !_localDeadCine.destroyed)
-                    return;
-            }
-            catch
-            {
-            }
+            if (_localDeadCine != null)
+                return;
 
             try
             {
@@ -895,13 +970,7 @@ namespace DeadCellsMultiplayerMod
             if (cine == null)
                 return;
 
-            try
-            {
-                if (!cine.destroyed)
-                    cine.destroy();
-            }
-            catch { }
-
+            try { cine.destroy(); } catch { }
             try { cine.disposeImmediately(); } catch { }
         }
 
@@ -911,6 +980,7 @@ namespace DeadCellsMultiplayerMod
             bool clearRemoteDownedTracking = true,
             bool clearDownedAnnouncements = true)
         {
+            ResetAllDownedGameOverState();
             var wasFakeDead = _localFakeDead;
             _localFakeDead = false;
             _localFakeDeadStartedTicks = 0;
@@ -954,6 +1024,97 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
+        private void HandleAllPlayersDowned(NetNode net)
+        {
+            if (me == null || net == null)
+                return;
+
+            try
+            {
+                if (me.life <= 0)
+                    me.life = 1;
+            }
+            catch
+            {
+            }
+
+            if (_localDeadCine == null)
+                StartLocalDeadCine(me);
+
+            var now = Stopwatch.GetTimestamp();
+            if (!_allDownedGameOverShown)
+            {
+                ShowAllDownedGameOverLogo();
+                _allDownedGameOverShown = true;
+                _allDownedRestartAtTicks = now + (long)(Stopwatch.Frequency * AllDownedGameOverDelaySeconds);
+            }
+
+            try { me.cancelVelocities(); } catch { }
+            try { me.lockControlsS(0.25); } catch { }
+            try { me.cancelSkillControlLock(); } catch { }
+            try { me._targetable = false; } catch { }
+
+            var cine = _localDeadCine;
+            if (cine != null && cine.TryGetCorpsePixelPosition(out var corpseX, out var corpseY))
+            {
+                _localDownedX = corpseX;
+                _localDownedY = corpseY;
+                _localHeldX = _localDownedX;
+                _localHeldY = _localDownedY;
+            }
+            SnapHeroToDownedPosition(me, _localHeldX, _localHeldY, clampToGround: false);
+            SendLocalDownedState(net, isDowned: true, force: false);
+
+            if (_allDownedRestartQueued || _netRole != NetRole.Host)
+                return;
+
+            if (_allDownedRestartAtTicks != 0 && now < _allDownedRestartAtTicks)
+                return;
+
+            _allDownedRestartQueued = true;
+            GameMenu.QueueHostRestartFromDeath("all_players_downed");
+        }
+
+        private void ShowAllDownedGameOverLogo()
+        {
+            try
+            {
+                if (dc.ui.Console.Class.ME != null &&
+                    dc.ui.Console.Class.ME.flags.exists(dc.ui.Console.Class.HIDE_UI))
+                {
+                    return;
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var existing = GameOver.Class.ME;
+                if (existing != null)
+                    return;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                _ = new GameOver("Game Over".AsHaxeString(), true, null);
+            }
+            catch
+            {
+            }
+        }
+
+        private void ResetAllDownedGameOverState()
+        {
+            _allDownedGameOverShown = false;
+            _allDownedRestartQueued = false;
+            _allDownedRestartAtTicks = 0;
+        }
+
         private static void EnsureHeroVisibilityAfterRoomChange(Hero? hero)
         {
             if (hero == null)
@@ -980,6 +1141,21 @@ namespace DeadCellsMultiplayerMod
                 try { head.headNormalSb?.set_visible(true); } catch { }
                 try { head.headAddSb?.set_visible(true); } catch { }
                 try { head.eye?.set_visible(true); } catch { }
+            }
+            catch
+            {
+            }
+        }
+
+        internal static void ResetDownedPlayersForRestart()
+        {
+            var instance = Instance;
+            if (instance == null)
+                return;
+
+            try
+            {
+                instance.ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
             }
             catch
             {

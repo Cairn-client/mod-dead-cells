@@ -633,6 +633,7 @@ namespace DeadCellsMultiplayerMod
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
             if (me == null) return;
+            TryRecoverMissedFakeDeathFromLife();
             if (!_localFakeDead)
                 SendHeroCoords();
             ReceiveGhostCoords();
