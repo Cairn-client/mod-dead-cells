@@ -34,11 +34,12 @@ namespace DeadCellsMultiplayerMod
             HideGhost();
             CreateCorpse();
             UpdateTarget(x, y, dir);
+            EnsureViewportTracksTemplateHero(immediate: true);
         }
 
         public void UpdateTarget(double x, double y, int dir)
         {
-            var normalizedDir = dir >= 0 ? 1 : -1;
+            var normalizedDir = ResolveTargetDir(dir);
             var changed = !_hasTarget ||
                           Math.Abs(_targetX - x) > 0.001 ||
                           Math.Abs(_targetY - y) > 0.001 ||
@@ -51,6 +52,28 @@ namespace DeadCellsMultiplayerMod
 
             if (changed)
                 ApplyTargetToCorpse(forceStartFall: true);
+        }
+
+        private int ResolveTargetDir(int dir)
+        {
+            if (dir > 0)
+                return 1;
+            if (dir < 0)
+                return -1;
+
+            if (_hasTarget && _targetDir != 0)
+                return _targetDir;
+
+            try
+            {
+                if (_ghost != null && !_ghost.destroyed)
+                    return _ghost.dir < 0 ? -1 : 1;
+            }
+            catch
+            {
+            }
+
+            return 1;
         }
 
         public override void update()
@@ -66,6 +89,7 @@ namespace DeadCellsMultiplayerMod
 
             HideGhost();
             EnsureCorpse();
+            EnsureViewportTracksTemplateHero(immediate: false);
         }
 
         public override void onDispose()
@@ -74,6 +98,7 @@ namespace DeadCellsMultiplayerMod
             RestoreCineState();
             DisposeCorpse();
             RestoreGhostVisibility();
+            EnsureViewportTracksTemplateHero(immediate: true);
         }
 
         private void EnsureCorpse()
@@ -281,6 +306,26 @@ namespace DeadCellsMultiplayerMod
         private void HideGhost()
         {
             try { _ghost.visible = false; } catch { }
+        }
+
+        private void EnsureViewportTracksTemplateHero(bool immediate)
+        {
+            var hero = _templateHero;
+            if (hero == null || hero.destroyed)
+                return;
+
+            try
+            {
+                var viewport = hero._level?.viewport;
+                if (viewport == null)
+                    return;
+
+                if (!ReferenceEquals(viewport.tracked, hero))
+                    viewport.track(hero, immediate);
+            }
+            catch
+            {
+            }
         }
 
         private void CaptureGhostVisibility()

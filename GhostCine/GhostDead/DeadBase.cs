@@ -1,3 +1,4 @@
+using System;
 using dc.en;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 
@@ -19,6 +20,7 @@ namespace DeadCellsMultiplayerMod
             CaptureHeroVisibility();
             HideHero();
             CreateCorpse();
+            EnsureViewportTracksHero(immediate: true);
         }
 
         public override void update()
@@ -38,6 +40,7 @@ namespace DeadCellsMultiplayerMod
             HideHero();
             EnsureCorpse();
             EnsureCorpseFalling();
+            EnsureViewportTracksHero(immediate: false);
         }
 
         public override void onDispose()
@@ -45,6 +48,7 @@ namespace DeadCellsMultiplayerMod
             base.onDispose();
             DisposeCorpse();
             RestoreHeroVisibility();
+            EnsureViewportTracksHero(immediate: true);
         }
 
         private void EnsureCorpse()
@@ -100,18 +104,103 @@ namespace DeadCellsMultiplayerMod
             if (corpse == null || corpse.destroyed)
                 return false;
 
+            try
+            {
+                // Use physics-driven target coordinates so hero follows corpse reliably
+                // even when sprite position is temporarily unavailable or delayed.
+                x = corpse.get_targetSprPosX();
+                y = corpse.get_targetSprPosY();
+                return true;
+            }
+            catch
+            {
+            }
+
             var sprite = corpse.spr;
-            if (sprite == null)
+            if (sprite != null)
+            {
+                x = sprite.x;
+                y = sprite.y;
+                return true;
+            }
+
+            try
+            {
+                x = (corpse.cx + corpse.xr) * 24.0;
+                y = (corpse.cy + corpse.yr) * 24.0;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public bool IsCorpseInLethalFall()
+        {
+            var corpse = _corpse;
+            if (corpse == null || corpse.destroyed || !_lethalFallStarted)
                 return false;
 
-            x = sprite.x;
-            y = sprite.y;
+            if (IsCorpseStabilized(corpse))
+                return false;
+
+            try
+            {
+                var group = corpse.spr?.groupName?.ToString();
+                if (!string.IsNullOrEmpty(group) &&
+                    group.IndexOf("lethalFall", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
             return true;
+        }
+
+        private static bool IsCorpseStabilized(HeroDeadCorpse corpse)
+        {
+            try
+            {
+                var group = corpse.spr?.groupName?.ToString();
+                if (!string.IsNullOrEmpty(group) &&
+                    group.IndexOf("lethalSlam", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
         }
 
         private void HideHero()
         {
             try { _hero.visible = false; } catch { }
+        }
+
+        private void EnsureViewportTracksHero(bool immediate)
+        {
+            if (_hero == null || _hero.destroyed)
+                return;
+
+            try
+            {
+                var viewport = _hero._level?.viewport;
+                if (viewport == null)
+                    return;
+
+                if (!ReferenceEquals(viewport.tracked, _hero))
+                    viewport.track(_hero, immediate);
+            }
+            catch
+            {
+            }
         }
 
         private void CaptureHeroVisibility()

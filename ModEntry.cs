@@ -103,15 +103,22 @@ namespace DeadCellsMultiplayerMod
         private DeadBase? _localDeadCine;
         private double _localDownedX;
         private double _localDownedY;
+        private double _localHeldX;
+        private double _localHeldY;
         private string _localDownedLevelId = string.Empty;
         private long _nextReviveAttemptTicks;
         private long _nextDownedStateSendTicks;
+        private long _postReviveLockUntilTicks;
+        private double _postReviveLockX;
+        private double _postReviveLockY;
         private const double ReviveUseDistancePx = 48.0;
         private const int ReviveInteractKey = 69; // E
         private const int ForceDeathKey = 81; // Q
         private const double ReviveAttemptCooldownSeconds = 0.2;
         private const double DownedStateResendSeconds = 0.4;
         private const double DownedGhostBodyYOffsetPx = 40.0;
+        private const double LocalReviveBodyYOffsetPx = 0.5;
+        private const double PostRevivePositionLockSeconds = 0.0;
 
         private sealed class RemoteDownedState
         {
@@ -240,8 +247,8 @@ namespace DeadCellsMultiplayerMod
             Hook_Boot.update += hook_boot_update;
             Hook_Game.pause += Hook_Game_pause;
             Hook_Hero.kill += Hook_Hero_kill;
-            // Hook_Hero.onDie += Hook_Hero_onDie;
-            // Hook_Hero.startDeathCine += Hook_Hero_startDeathCine;
+            Hook_Hero.onDie += Hook_Hero_onDie;
+            Hook_Hero.startDeathCine += Hook_Hero_startDeathCine;
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
             // Hook_Hero.tryToApplyYoloPerk += Hook_Hero_tryToApplyYoloPerk;
             Hook__TitleScreen.__constructor__ += Hook_TitleScreen__constructor__;
@@ -843,6 +850,35 @@ namespace DeadCellsMultiplayerMod
             orig(self);
         }
 
+        private void Hook_Hero_onDie(Hook_Hero.orig_onDie orig, Hero self)
+        {
+            var net = _net;
+            if (_netRole != NetRole.None &&
+                net != null &&
+                me != null &&
+                ReferenceEquals(self, me))
+            {
+                if (_localFakeDead)
+                    return;
+
+                if (HasAliveRemoteTeammate(net))
+                {
+                    EnterLocalFakeDeath(self, net);
+                    return;
+                }
+            }
+
+            orig(self);
+        }
+
+        private void Hook_Hero_startDeathCine(Hook_Hero.orig_startDeathCine orig, Hero self)
+        {
+            if (me != null && ReferenceEquals(self, me) && _localFakeDead)
+                return;
+
+            orig(self);
+        }
+
 
         private void Hook_Game_pause(Hook_Game.orig_pause orig, dc.pr.Game self)
         {
@@ -1036,10 +1072,11 @@ namespace DeadCellsMultiplayerMod
         {
             if (me == null) return;
             TryHandleForceDeathHotkey();
-            UpdateFakeDeathFlow(dt);
             if (!_localFakeDead)
                 SendHeroCoords();
             ReceiveGhostCoords();
+            UpdateFakeDeathFlow(dt);
+            MaintainPostRevivePositionLock();
             ReceiveGhostWeapons();
             ReceiveGhostAttacks();
             UpdateGhostWeapons();
@@ -1370,9 +1407,12 @@ namespace DeadCellsMultiplayerMod
             _localFakeDeadStartedTicks = Stopwatch.GetTimestamp();
             _localDownedX = hero.spr?.x ?? 0;
             _localDownedY = hero.spr?.y ?? 0;
+            _localHeldX = _localDownedX;
+            _localHeldY = _localDownedY;
             _localDownedLevelId = GetCurrentLevelId();
             _nextDownedStateSendTicks = 0;
             _nextReviveAttemptTicks = 0;
+            _postReviveLockUntilTicks = 0;
 
             try
             {
@@ -1421,16 +1461,59 @@ namespace DeadCellsMultiplayerMod
             {
                 _localDownedX = corpseX;
                 _localDownedY = corpseY;
+                _localHeldX = _localDownedX;
+                _localHeldY = _localDownedY;
             }
 
+            SnapHeroToDownedPosition(me, _localHeldX, _localHeldY, clampToGround: false);
+            SendLocalDownedState(net, isDowned: true, force: false);
+        }
+
+        private void MaintainPostRevivePositionLock()
+        {
+            if (_localFakeDead || me == null)
+                return;
+            if (_postReviveLockUntilTicks == 0)
+                return;
+
+            var now = Stopwatch.GetTimestamp();
+            if (now >= _postReviveLockUntilTicks)
+            {
+                _postReviveLockUntilTicks = 0;
+                return;
+            }
+
+            SnapHeroToDownedPosition(me, _postReviveLockX, _postReviveLockY);
+        }
+
+        private static void SnapHeroToDownedPosition(Hero hero, double x, double y, bool clampToGround = true)
+        {
+            if (hero == null)
+                return;
+
+            try { hero.setPosPixel(x, y); } catch { }
+
+            if (!clampToGround)
+                return;
+
+            // Keep hero on/above ground in case target position is slightly below tiles.
             try
             {
-                if (me.spr != null)
-                    me.setPosPixel(_localDownedX, _localDownedY);
-            }
-            catch { }
+                var map = hero._level?.map;
+                if (map == null)
+                    return;
 
-            SendLocalDownedState(net, isDowned: true, force: false);
+                var cx = hero.cx;
+                var cy = hero.cy;
+                var xr = hero.xr;
+                var yr = hero.yr;
+                var groundYr = map.getGroundYr(cx, cy, Ref<double>.From(ref xr), Ref<double>.From(ref yr));
+                if (double.IsFinite(groundYr) && hero.yr > groundYr)
+                    hero.setPosCase(cx, cy, xr, groundYr);
+            }
+            catch
+            {
+            }
         }
 
         private void ReviveLocalPlayer(NetNode net)
@@ -1445,6 +1528,23 @@ namespace DeadCellsMultiplayerMod
             _nextReviveAttemptTicks = 0;
             _localDownedLevelId = string.Empty;
             StopLocalDeadCine();
+
+            var reviveX = _localDownedX;
+            var reviveY = _localDownedY - LocalReviveBodyYOffsetPx;
+            SnapHeroToDownedPosition(hero, reviveX, reviveY);
+            try
+            {
+                _postReviveLockX = hero.get_targetSprPosX();
+                _postReviveLockY = hero.get_targetSprPosY();
+            }
+            catch
+            {
+                _postReviveLockX = reviveX;
+                _postReviveLockY = reviveY;
+            }
+            _postReviveLockUntilTicks = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * PostRevivePositionLockSeconds);
+            _localHeldX = _postReviveLockX;
+            _localHeldY = _postReviveLockY;
 
             try { hero.cancelVelocities(); } catch { }
             try { hero.cancelSkillControlLock(); } catch { }
@@ -1635,9 +1735,14 @@ namespace DeadCellsMultiplayerMod
             StopLocalDeadCine();
             _localDownedX = 0;
             _localDownedY = 0;
+            _localHeldX = 0;
+            _localHeldY = 0;
             _localDownedLevelId = string.Empty;
             _nextReviveAttemptTicks = 0;
             _nextDownedStateSendTicks = 0;
+            _postReviveLockUntilTicks = 0;
+            _postReviveLockX = 0;
+            _postReviveLockY = 0;
             _remoteDowned.Clear();
             DisposeAllRemoteDownedCines();
 
