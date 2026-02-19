@@ -166,6 +166,12 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             scarf?.push(0.0, Ref<bool>.Null);
         }
 
+        public override void disposeGfx()
+        {
+            scarf.dispose();
+            base.disposeGfx();
+        }
+
         public override void postUpdate()
         {
             base.postUpdate();
