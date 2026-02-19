@@ -71,6 +71,18 @@ internal static class SyncMobIdRegistry
         }
     }
 
+    public static bool TryGetExistingSyncId(Mob? mob, out int syncId)
+    {
+        syncId = 0;
+        if (!IsUsableMob(mob))
+            return false;
+
+        lock (Sync)
+        {
+            return mob != null && MobToId.TryGetValue(mob, out syncId);
+        }
+    }
+
     public static bool TryGetMobBySyncId(int syncId, out Mob? mob)
     {
         mob = null;
