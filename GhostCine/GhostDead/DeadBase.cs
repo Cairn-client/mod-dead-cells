@@ -7,6 +7,7 @@ namespace DeadCellsMultiplayerMod
     {
         private readonly Hero _hero;
         private HeroDeadCorpse? _corpse;
+        private bool _lethalFallStarted;
         private bool _hadHeroVisibleState;
         private bool _heroWasVisible;
 
@@ -62,7 +63,8 @@ namespace DeadCellsMultiplayerMod
                 var corpse = new HeroDeadCorpse(this, _hero);
                 corpse.init();
                 _corpse = corpse;
-                TryStartLethalFall(corpse);
+                _lethalFallStarted = false;
+                EnsureLethalFallStarted();
             }
             catch
             {
@@ -76,18 +78,16 @@ namespace DeadCellsMultiplayerMod
             if (corpse == null || corpse.destroyed)
                 return;
 
-            try
-            {
-                if (!corpse.hasGravity)
-                    TryStartLethalFall(corpse);
-            }
-            catch
-            {
-            }
+            EnsureLethalFallStarted();
         }
 
-        private static void TryStartLethalFall(HeroDeadCorpse corpse)
+        private void EnsureLethalFallStarted()
         {
+            var corpse = _corpse;
+            if (corpse == null || corpse.destroyed || _lethalFallStarted)
+                return;
+
+            _lethalFallStarted = true;
             try { corpse.startLethalFall(); } catch { }
         }
 
@@ -136,6 +136,7 @@ namespace DeadCellsMultiplayerMod
         {
             var corpse = _corpse;
             _corpse = null;
+            _lethalFallStarted = false;
             if (corpse == null)
                 return;
 

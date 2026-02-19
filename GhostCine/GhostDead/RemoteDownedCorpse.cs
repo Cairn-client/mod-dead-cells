@@ -14,6 +14,7 @@ namespace DeadCellsMultiplayerMod
         private bool _hadGhostVisibleState;
         private bool _ghostWasVisible;
         private bool _cineSuppressed;
+        private bool _lethalFallStarted;
         private bool _hasTarget;
         private double _targetX;
         private double _targetY;
@@ -82,14 +83,7 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
-            try
-            {
-                if (!corpse.hasGravity)
-                    TryStartLethalFall(corpse);
-            }
-            catch
-            {
-            }
+            EnsureLethalFallStarted();
         }
 
         private void CreateCorpse()
@@ -103,6 +97,7 @@ namespace DeadCellsMultiplayerMod
                     return;
 
                 _corpse = corpse;
+                _lethalFallStarted = false;
                 ApplyTargetToCorpse(forceStartFall: true);
             }
             catch
@@ -166,13 +161,21 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             try { corpse.dir = _targetDir; } catch { }
-            try { corpse.setPosPixel(_targetX, _targetY); } catch { }
+            if (!_lethalFallStarted)
+            {
+                try { corpse.setPosPixel(_targetX, _targetY); } catch { }
+            }
             if (forceStartFall)
-                TryStartLethalFall(corpse);
+                EnsureLethalFallStarted();
         }
 
-        private static void TryStartLethalFall(HeroDeadCorpse corpse)
+        private void EnsureLethalFallStarted()
         {
+            var corpse = _corpse;
+            if (corpse == null || corpse.destroyed || _lethalFallStarted)
+                return;
+
+            _lethalFallStarted = true;
             try { corpse.startLethalFall(); } catch { }
         }
 
@@ -257,6 +260,7 @@ namespace DeadCellsMultiplayerMod
         {
             var corpse = _corpse;
             _corpse = null;
+            _lethalFallStarted = false;
             if (corpse == null)
                 return;
 
