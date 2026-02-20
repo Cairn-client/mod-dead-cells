@@ -37,6 +37,7 @@ internal static class KingWeaponHooks
         Hook_Hero.unlockControls += Hook_Hero_unlockControls;
         Hook_Hero.addKillCount += Hook_Hero_addKillCount;
         Hook_Hero.onMobDeath += Hook_Hero_onMobDeath;
+        Hook_Hero.onOwnAttackDealt += Hook_Hero_onOwnAttackDealt;
         Hook_Viewport.bumpDir += Hook_Viewport_bumpDir;
 
         Hook_Entity.recoil += Hook_Entity_recoil;
@@ -163,6 +164,23 @@ internal static class KingWeaponHooks
         if(ShouldSuppressLocalHeroKillProgress(self))
             return;
         orig(self, old);
+    }
+
+    private static void Hook_Hero_onOwnAttackDealt(Hook_Hero.orig_onOwnAttackDealt orig, Hero self, AttackData atk, Entity target)
+    {
+        var isKingWeaponAttack = IsKingWeaponAttack(atk);
+
+        if(isKingWeaponAttack && target is Mob mob)
+            TrackKingWeaponMobHit(mob);
+
+        var localHero = ModEntry.me;
+        if(isKingWeaponAttack && localHero != null && IsSameEntity(self, localHero))
+            return;
+
+        if(ShouldSuppressLocalHeroKillProgress(self))
+            return;
+
+        orig(self, atk, target);
     }
 
     private static void Hook_Viewport_bumpDir(Hook_Viewport.orig_bumpDir orig, Viewport self, int dir, double? pow)
@@ -856,6 +874,9 @@ internal static class KingWeaponHooks
         if(sourceWeapon != null && KingWeaponSupport.IsKingWeapon(sourceWeapon))
             return true;
 
+        if(sourceWeapon is KingWeapon)
+            return true;
+
         InventItem sourceItem;
         try
         {
@@ -904,6 +925,9 @@ internal static class KingWeaponHooks
         }
 
         if(sourceWeapon != null && KingWeaponSupport.IsKingWeapon(sourceWeapon))
+            return true;
+
+        if(sourceWeapon is KingWeapon)
             return true;
 
         InventItem sourceItem;
@@ -970,28 +994,15 @@ internal static class KingWeaponHooks
             PruneRecentKingWeaponMobHitsLocked(now, maxAgeTicks);
 
             var uid = GetEntityUid(mob);
-            if(uid > 0 && _recentKingWeaponMobUidHits.Remove(uid))
-            {
-                var signatureByUid = BuildMobHitSignature(mob);
-                if(!string.IsNullOrWhiteSpace(signatureByUid))
-                    _recentKingWeaponMobSignatureHits.Remove(signatureByUid);
+            if(uid > 0 && _recentKingWeaponMobUidHits.ContainsKey(uid))
                 return true;
-            }
 
             var refKey = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(mob);
             if(_recentKingWeaponMobRefHits.ContainsKey(refKey))
-            {
-                _recentKingWeaponMobRefHits.Remove(refKey);
-
-                var signature = BuildMobHitSignature(mob);
-                if(!string.IsNullOrWhiteSpace(signature))
-                    _recentKingWeaponMobSignatureHits.Remove(signature);
-
                 return true;
-            }
 
             var key = BuildMobHitSignature(mob);
-            if(!string.IsNullOrWhiteSpace(key) && _recentKingWeaponMobSignatureHits.Remove(key))
+            if(!string.IsNullOrWhiteSpace(key) && _recentKingWeaponMobSignatureHits.ContainsKey(key))
                 return true;
         }
 
