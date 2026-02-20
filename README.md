@@ -77,7 +77,7 @@ If you are using the **Steam version** of the game:
 
 ---
 
-### 🔹 Non-Steam version
+### 🔹 Non-Steam version(DCCM doesn't support non-steam play now)
 
 If you are using a **non-Steam version** of Dead Cells:
 
@@ -123,8 +123,8 @@ On the first launch, required configuration files will be generated automaticall
 - [x] Synchronize new game world data  
 - [x] Add player ghost animations  
 - [x] Improve ghost animation quality  
-- [ ] Synchronize level generation  
-- [ ] Synchronize enemies  
+- [x] Synchronize level generation  
+- [x] Synchronize enemies  
 - [ ] Synchronize bosses  
 - [ ] Implement death handling for ghost player  
 

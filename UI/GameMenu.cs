@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Net;
 using System.Reflection;
 using System.IO;
@@ -18,6 +19,7 @@ using Microsoft.Win32;
 using Serilog.Core;
 using dc.cine;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
+using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using ModCore.Modules;
 
 
@@ -54,6 +56,10 @@ namespace DeadCellsMultiplayerMod
         private static bool _mainMenuButtonAdded;
         private static bool _suppressAutoButton;
         private static bool _worldExitHandled;
+        private static bool _hostDisconnectCountdownActive;
+        private static DateTime _hostDisconnectCountdownUntil = DateTime.MinValue;
+        private static int _lastHostDisconnectCountdown = -1;
+        private const int HostDisconnectCountdownSeconds = 5;
         private static bool _seedArrived;
         private static string _username = "guest";
         private static string _remoteUsername = "guest";
@@ -74,6 +80,8 @@ namespace DeadCellsMultiplayerMod
         private const int KeyRCtrl = 163;
         private const int KeyC = 67;
         private const int KeyV = 86;
+        private const int KeySpace = 32;
+        private const int KeyEsc = 27;
         // Win32 clipboard helpers for text input shortcuts.
         private const uint CfUnicodeText = 13;
         private const uint GmemMoveable = 0x0002;
@@ -134,6 +142,9 @@ namespace DeadCellsMultiplayerMod
                 _clientConnecting = false;
                 _deathRestartCooldownUntil = DateTime.MinValue;
                 _cachedLevelDescSync = null;
+                _hostDisconnectCountdownActive = false;
+                _hostDisconnectCountdownUntil = DateTime.MinValue;
+                _lastHostDisconnectCountdown = -1;
             }
 
             InitializeMenuUiHooks();
@@ -170,9 +181,25 @@ namespace DeadCellsMultiplayerMod
 
         public static void SetRole(NetRole role)
         {
+            var previous = _role;
             lock (Sync)
             {
                 _role = role;
+            }
+            if (previous == NetRole.Client && role != NetRole.Client)
+            {
+                EnqueueMainThread(() =>
+                {
+                    try
+                    {
+                        var main = dc.Main.Class.ME;
+                        if (main?.user != null)
+                            GameDataSync.RestoreOriginalUserState(main.user, true);
+                    }
+                    catch
+                    {
+                    }
+                });
             }
         }
 
@@ -204,18 +231,25 @@ namespace DeadCellsMultiplayerMod
 
         public static void ReceiveHostRunSeed(int seed)
         {
-            bool shouldRestart = false;
             int? previousSeed = null;
+            bool restartClientWorldNow = false;
             lock (Sync)
             {
                 previousSeed = _remoteSeed;
                 _remoteSeed = seed;
                 if (_role == NetRole.Client)
                 {
+                    var firstSeedForClient = !previousSeed.HasValue;
+                    var seedChanged = previousSeed.HasValue && previousSeed.Value != seed;
                     if (_inActualRun)
                     {
-                        if (previousSeed.HasValue && previousSeed.Value != seed)
-                            shouldRestart = true;
+                        if (firstSeedForClient || seedChanged)
+                        {
+                            _inActualRun = false;
+                            _pendingAutoStart = false;
+                            _autoStartTriggered = false;
+                            restartClientWorldNow = true;
+                        }
                     }
                     else
                     {
@@ -224,27 +258,9 @@ namespace DeadCellsMultiplayerMod
                     }
                 }
             }
-            if (shouldRestart)
-                QueueClientNewGame(seed);
             _log?.Information("[NetMod] Client received host seed {Seed}", seed);
-        }
-
-        private static void QueueClientNewGame(int seed)
-        {
-            EnqueueMainThread(() =>
-            {
-                var game = ModEntry.Instance?.game;
-                if (game?.user == null)
-                {
-                    _log?.Warning("[NetMod] Skipping new game for seed {Seed}: game not ready", seed);
-                    return;
-                }
-
-                _log?.Information("[NetMod] Client restarting run for new seed {Seed}", seed);
-                game.destroy();
-                game.disposeImmediately();
-                game.user.newGame(seed, GameDataSync._isTwitch, GameDataSync._isCustom, GameDataSync._mode, GameDataSync._launch);
-            });
+            if (restartClientWorldNow)
+                QueueClientRestartFromHostSeed(seed, "host_restart");
         }
 
         internal static void QueueHostRestartFromDeath(string reason)
@@ -261,6 +277,8 @@ namespace DeadCellsMultiplayerMod
 
             EnqueueMainThread(() =>
             {
+                ModEntry.ResetDownedPlayersForRestart();
+
                 var game = ModEntry.Instance?.game;
                 if (game?.user == null)
                 {
@@ -269,10 +287,63 @@ namespace DeadCellsMultiplayerMod
                 }
 
                 _log?.Information("[NetMod] Host restarting run ({Reason})", reason);
+                try
+                {
+                    var main = dc.Main.Class.ME;
+                    if (main != null)
+                    {
+                        main.launchGame(GameDataSync._launch, null, 0.8);
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log?.Warning("[NetMod] Host launchGame restart failed, fallback to direct newGame: {Message}", ex.Message);
+                }
+
                 game.destroy();
                 game.disposeImmediately();
-
                 game.user.newGame(GameDataSync.Seed, GameDataSync._isTwitch, GameDataSync._isCustom, GameDataSync._mode, GameDataSync._launch);
+            });
+        }
+
+        private static void QueueClientRestartFromHostSeed(int seed, string reason)
+        {
+            EnqueueMainThread(() =>
+            {
+                ModEntry.ResetDownedPlayersForRestart();
+
+                var game = ModEntry.Instance?.game;
+                if (game?.user == null)
+                {
+                    _log?.Warning("[NetMod] Skipping client restart ({Reason}): game not ready", reason);
+                    lock (Sync)
+                    {
+                        _seedArrived = true;
+                        _pendingAutoStart = true;
+                        _autoStartTriggered = false;
+                    }
+                    return;
+                }
+
+                _log?.Information("[NetMod] Client restarting run from host seed {Seed} ({Reason})", seed, reason);
+                try
+                {
+                    var main = dc.Main.Class.ME;
+                    if (main != null)
+                    {
+                        main.launchGame(GameDataSync._launch, null, 0.8);
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log?.Warning("[NetMod] Client launchGame restart failed, fallback to direct newGame: {Message}", ex.Message);
+                }
+
+                game.destroy();
+                game.disposeImmediately();
+                game.user.newGame(seed, GameDataSync._isTwitch, GameDataSync._isCustom, GameDataSync._mode, GameDataSync._launch);
             });
         }
 
@@ -311,11 +382,20 @@ namespace DeadCellsMultiplayerMod
         public static void ReceiveRemoteUsername(string username)
         {
             var cleaned = CleanUsername(username);
+            string previous;
             lock (Sync)
             {
+                previous = _remoteUsername;
                 _remoteUsername = cleaned;
             }
             _log?.Information("[NetMod] Received remote username {Username}", cleaned);
+            if (_role == NetRole.Host &&
+                !string.Equals(previous, cleaned, StringComparison.Ordinal))
+            {
+                var userForMsg = cleaned;
+                EnqueueMainThread(() =>
+                    MultiplayerUI.PushSystemMessage(FormatLocalized("{0} connected to the server.", userForMsg)));
+            }
         }
 
         private static void SendCachedGeneratePayload()
@@ -359,6 +439,7 @@ namespace DeadCellsMultiplayerMod
 
         public static void TickMenu(double dt)
         {
+            UpdateHostDisconnectCountdown();
             if (DateTime.UtcNow < _autoStartRetryAt)
                 return;
 
@@ -464,11 +545,24 @@ namespace DeadCellsMultiplayerMod
 
         private static void MainMenuHook(Hook_TitleScreen.orig_mainMenu orig, TitleScreen self)
         {
+            TryDisconnectWhenReturningToMainMenu();
             StoreTitleScreen(self);
             _mainMenuButtonAdded = false;
             orig(self);
 
             EnsureMainMenuMultiplayerButton(self);
+        }
+
+        private static void TryDisconnectWhenReturningToMainMenu()
+        {
+            if (_role == NetRole.None)
+                return;
+
+            if (!_inActualRun)
+                return;
+
+            _log?.Information("[NetMod] Main menu opened during run; stopping network");
+            StopNetworkFromMenu();
         }
 
         private static virtual_cb_help_inter_isEnable_t_<bool> AddMenuHook(
@@ -480,6 +574,7 @@ namespace DeadCellsMultiplayerMod
             bool? isEnable,
             Ref<int> color)
         {
+            cb = WrapQuitCallbackIfNeeded(str, cb);
             var ret = orig(self, str, cb, help, isEnable, color);
 
             try
@@ -507,6 +602,69 @@ namespace DeadCellsMultiplayerMod
             }
 
             return ret;
+        }
+
+        private static HlAction WrapQuitCallbackIfNeeded(dc.String label, HlAction callback)
+        {
+            if (callback == null)
+                return callback;
+
+            if (_role == NetRole.None)
+                return callback;
+
+            var text = label?.ToString() ?? string.Empty;
+            if (!IsQuitMenuLabel(text))
+                return callback;
+
+            return new HlAction(() =>
+            {
+                try
+                {
+                    StopNetworkFromMenu();
+                }
+                catch (Exception ex)
+                {
+                    _log?.Warning("[NetMod] Quit cleanup failed: {Message}", ex.Message);
+                }
+
+                try
+                {
+                    callback();
+                }
+                catch (Exception ex)
+                {
+                    _log?.Warning("[NetMod] Quit callback failed: {Message}", ex.Message);
+                }
+            });
+        }
+
+        private static bool IsQuitMenuLabel(string label)
+        {
+            if (string.IsNullOrWhiteSpace(label))
+                return false;
+
+            var text = label.Trim();
+            if (text.IndexOf("quit", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (text.IndexOf("exit", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (text.IndexOf("выйт", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (text.IndexOf("выход", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+
+            try
+            {
+                var localizedQuit = GetText.Instance.GetString("Quitter le jeu");
+                if (!string.IsNullOrWhiteSpace(localizedQuit) &&
+                    string.Equals(text, localizedQuit, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            catch
+            {
+            }
+
+            return false;
         }
 
         private static void ShowMultiplayerMenu(TitleScreen screen)
@@ -782,9 +940,42 @@ namespace DeadCellsMultiplayerMod
         {
             try
             {
-                GetTitleScreen()?.mainMenu();
+                var boot = dc.Boot.Class?.ME;
+                if (boot != null)
+                {
+                    boot.returnToMainMenu();
+                    return;
+                }
             }
-            catch { _log.Debug("Cant mainMenu"); }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod] Boot.returnToMainMenu failed: {Message}", ex.Message);
+            }
+
+            try
+            {
+                var titleScreen = GetTitleScreen();
+                if (titleScreen != null)
+                {
+                    titleScreen.mainMenu();
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod] TitleScreen.mainMenu failed: {Message}", ex.Message);
+            }
+
+            try
+            {
+                var main = dc.Main.Class?.ME;
+                if (main != null)
+                    _ = main.onExit();
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod] Main.onExit fallback failed: {Message}", ex.Message);
+            }
         }
 
         private static void ShowHostStatusMenu(TitleScreen screen)
@@ -901,11 +1092,16 @@ namespace DeadCellsMultiplayerMod
 
         private static void StopNetworkFromMenu()
         {
+            ResetHostDisconnectCountdown();
             try
             {
                 ModEntry.Instance?.StopNetworkFromMenu();
             }
             catch { }
+            lock (Sync)
+            {
+                _inActualRun = false;
+            }
         }
 
         private static void EditUsername(TitleScreen screen)
@@ -922,6 +1118,7 @@ namespace DeadCellsMultiplayerMod
 
         public static void NotifyRemoteConnected(NetRole role)
         {
+            ResetHostDisconnectCountdown();
             SendUsernameToRemote();
 
             if (role == NetRole.Host)
@@ -982,6 +1179,8 @@ namespace DeadCellsMultiplayerMod
         {
             if (role == NetRole.Host)
             {
+                var disconnectedName = string.IsNullOrWhiteSpace(_remoteUsername) ? Localize("Guest") : _remoteUsername.Trim();
+                MultiplayerUI.PushSystemMessage(FormatLocalized("{0} disconnected from the server.", disconnectedName));
                 _remoteUsername = "guest";
                 _localReady = false;
                 _genArrived = false;
@@ -994,6 +1193,7 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
+            var wasInRun = _inActualRun;
             SetRole(NetRole.None);
             NetRef = null;
             _waitingForHost = false;
@@ -1004,6 +1204,9 @@ namespace DeadCellsMultiplayerMod
             _remoteUsername = "guest";
             _localReady = false;
             _genArrived = false;
+            MultiplayerUI.PushSystemMessage(Localize("Host disconnected from server."));
+            if (wasInRun)
+                StartHostDisconnectCountdown();
         }
 
         private static void SendUsernameToRemote()
@@ -1050,6 +1253,61 @@ namespace DeadCellsMultiplayerMod
             CacheLevelDescSync(null);
             _genArrived = false;
             _seedArrived = false;
+        }
+
+        private static void StartHostDisconnectCountdown()
+        {
+            _hostDisconnectCountdownActive = true;
+            _hostDisconnectCountdownUntil = DateTime.UtcNow.AddSeconds(HostDisconnectCountdownSeconds);
+            _lastHostDisconnectCountdown = HostDisconnectCountdownSeconds;
+            MultiplayerUI.PushSystemMessage(FormatLocalized("Back to menu in {0}...", HostDisconnectCountdownSeconds));
+        }
+
+        private static void ResetHostDisconnectCountdown()
+        {
+            _hostDisconnectCountdownActive = false;
+            _hostDisconnectCountdownUntil = DateTime.MinValue;
+            _lastHostDisconnectCountdown = -1;
+        }
+
+        private static void UpdateHostDisconnectCountdown()
+        {
+            if (!_hostDisconnectCountdownActive)
+                return;
+
+            var remaining = (int)Math.Ceiling((_hostDisconnectCountdownUntil - DateTime.UtcNow).TotalSeconds);
+            if (remaining < 0)
+                remaining = 0;
+
+            if (remaining != _lastHostDisconnectCountdown)
+            {
+                _lastHostDisconnectCountdown = remaining;
+                MultiplayerUI.PushSystemMessage(FormatLocalized("Back to menu in {0}...", remaining));
+            }
+
+            if (remaining > 0)
+                return;
+
+            _hostDisconnectCountdownActive = false;
+            ForceExitToMainMenu();
+        }
+
+        private static string Localize(string message)
+        {
+            return GetText.Instance.GetString(message);
+        }
+
+        private static string FormatLocalized(string format, params object[] args)
+        {
+            var localizedFormat = Localize(format);
+            try
+            {
+                return string.Format(CultureInfo.InvariantCulture, localizedFormat, args);
+            }
+            catch
+            {
+                return string.Format(CultureInfo.InvariantCulture, format, args);
+            }
         }
 
         public static void ReceiveGeneratePayload(string json)
@@ -1425,6 +1683,32 @@ namespace DeadCellsMultiplayerMod
             if (_activeTextInputNoSpaces)
                 RemoveSpacesFromTextInput(textInput);
 
+            if (dc.hxd.Key.Class.isPressed(KeyEsc))
+            {
+                try
+                {
+                    textInput.cancel();
+                }
+                finally
+                {
+                    ClearActiveTextInput();
+                }
+                return;
+            }
+
+            if (dc.hxd.Key.Class.isPressed(KeySpace))
+            {
+                try
+                {
+                    textInput.validate();
+                }
+                finally
+                {
+                    ClearActiveTextInput();
+                }
+                return;
+            }
+
             if (!IsCtrlDown())
                 return;
 
@@ -1687,11 +1971,12 @@ namespace DeadCellsMultiplayerMod
                 ClearActiveTextInput();
                 if (noSpaces && initial.Contains(' ', StringComparison.Ordinal))
                     initial = RemoveSpaces(initial);
+                var initialText = initial ?? string.Empty;
                 var input = new TextInput(
                     screen,
                     MakeHLString(title),
-                    MakeHLString(initial ?? string.Empty),
-                    MakeHLString(GetText.Instance.GetString("OK")),
+                    MakeHLString(initialText),
+                    MakeHLString(initialText),
                     new HlAction<dc.String>(s =>
                     {
                         var text = s?.ToString() ?? string.Empty;
@@ -1706,8 +1991,8 @@ namespace DeadCellsMultiplayerMod
                             ClearActiveTextInput();
                         }
                     }),
+                    MakeHLString(GetText.Instance.GetString("OK")),
                     MakeHLString(GetText.Instance.GetString("Cancel")),
-                    MakeHLString(string.Empty),
                     (dc.hxd.res.Sound?)null);
                 RegisterActiveTextInput(input, noSpaces);
             }

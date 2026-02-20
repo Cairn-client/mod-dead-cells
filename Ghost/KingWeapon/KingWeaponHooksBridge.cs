@@ -1,0 +1,209 @@
+using System;
+using System.Diagnostics;
+using dc.tool;
+using dc.tool.weap;
+
+namespace DeadCellsMultiplayerMod;
+
+public partial class ModEntry
+{
+    private const double LocalAttackRepeatBlockSeconds = 0.06;
+    private const double LocalShieldPulseSeconds = 0.08;
+    private long _lastLocalAttackSendTicks;
+    private string _lastLocalAttackKey = string.Empty;
+    private long _lastLocalShieldPulseTicks;
+
+    internal InventItem NotifyInventoryAddFromKingWeaponHooks(Hook_Inventory.orig_add orig, Inventory self, InventItem i)
+    {
+        if(_inventorySyncGuard)
+            return orig(self, i);
+
+        if(me != null && ReferenceEquals(self, me.inventory))
+            inventItem = i;
+
+        var result = orig(self, i);
+
+        if(_netRole != NetRole.None && IsLocalInventory(self))
+            SendEquippedWeapons(self);
+
+        return result;
+    }
+
+    internal bool NotifyInventoryEquipFromKingWeaponHooks(Hook_Inventory.orig_equip orig, Inventory self, InventItem i)
+    {
+        var result = orig(self, i);
+        if(_inventorySyncGuard)
+            return result;
+        if(!IsLocalInventory(self))
+            return result;
+        SendEquippedWeapons(self);
+        return result;
+    }
+
+    internal void NotifyInventorySwapWeaponsFromKingWeaponHooks(Hook_Inventory.orig_swapWeapons orig, Inventory self)
+    {
+        orig(self);
+        if(_inventorySyncGuard)
+            return;
+        if(!IsLocalInventory(self))
+            return;
+        SendEquippedWeapons(self);
+    }
+
+    internal void NotifyInventoryReplaceFromKingWeaponHooks(Hook_Inventory.orig_replace orig, Inventory self, InventItem by, InventItem oldPos)
+    {
+        orig(self, by, oldPos);
+        if(_inventorySyncGuard)
+            return;
+        if(!IsLocalInventory(self))
+            return;
+        SendEquippedWeapons(self);
+    }
+
+    internal void NotifyLocalWeaponPrepareFromKingWeaponHooks(Weapon self)
+    {
+        if(_netRole == NetRole.None || self == null || me == null)
+            return;
+
+        if(!ReferenceEquals(self.owner, me))
+            return;
+
+        var item = self.item;
+        if(item == null || !TryGetWeaponKindId(item, out var kindId) || string.IsNullOrWhiteSpace(kindId))
+            return;
+
+        var isShield = IsShieldWeaponKind(kindId!);
+
+        var slot = ResolveWeaponSlotForSend(me.inventory, item, kindId!);
+        if(slot < 0)
+            slot = 0;
+
+        var now = Stopwatch.GetTimestamp();
+        var attackKey = $"{kindId}|{slot}|{item.permanentId}";
+        if(!isShield)
+        {
+            var minRepeatTicks = (long)(Stopwatch.Frequency * LocalAttackRepeatBlockSeconds);
+            if(_lastLocalAttackSendTicks != 0 &&
+               now - _lastLocalAttackSendTicks < minRepeatTicks &&
+               string.Equals(_lastLocalAttackKey, attackKey, StringComparison.Ordinal))
+                return;
+
+            _lastLocalAttackSendTicks = now;
+            _lastLocalAttackKey = attackKey;
+        }
+        else
+        {
+            _lastLocalShieldPulseTicks = now;
+        }
+
+        var ammo = GetWeaponAmmoForSync(item);
+        _net?.SendAttack(kindId!, slot, item.permanentId, ammo);
+        _suppressHeroAnimUntilTicks = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * 0.18);
+    }
+
+    internal void NotifyLocalShieldHoldingPulseFromKingWeaponHooks(BaseShield self, double ratio)
+    {
+        if(_netRole == NetRole.None || self == null || me == null)
+            return;
+
+        if(!ReferenceEquals(self.owner, me))
+            return;
+
+        var item = self.item;
+        if(item == null || !TryGetWeaponKindId(item, out var kindId) || string.IsNullOrWhiteSpace(kindId))
+            return;
+        if(!IsShieldWeaponKind(kindId!))
+            return;
+
+        var now = Stopwatch.GetTimestamp();
+        var pulseTicks = (long)(Stopwatch.Frequency * LocalShieldPulseSeconds);
+        if(_lastLocalShieldPulseTicks != 0 && now - _lastLocalShieldPulseTicks < pulseTicks)
+            return;
+
+        var slot = ResolveWeaponSlotForSend(me.inventory, item, kindId!);
+        if(slot < 0)
+            slot = 0;
+
+        var ammo = GetWeaponAmmoForSync(item);
+        _net?.SendAttack(kindId!, slot, item.permanentId, ammo);
+        _lastLocalShieldPulseTicks = now;
+    }
+
+    internal void NotifyLocalBowShotFromKingWeaponHooks(BaseBow self)
+    {
+        if(_netRole == NetRole.None || self == null || me == null)
+            return;
+        if(!ReferenceEquals(self.owner, me))
+            return;
+
+        NotifyLocalAmmoChangedFromKingWeaponHooks(self.item);
+    }
+
+    internal void NotifyLocalAmmoChangedFromKingWeaponHooks(InventItem? item)
+    {
+        if(_netRole == NetRole.None || item == null || me == null)
+            return;
+
+        if(!TryGetWeaponKindId(item, out var kindId) || string.IsNullOrWhiteSpace(kindId))
+            return;
+
+        var inv = me.inventory;
+        if(inv == null)
+            return;
+
+        var slot = ResolveWeaponSlotForSend(inv, item, kindId!);
+        if(slot < 0)
+        {
+            SendEquippedWeapons(inv);
+            return;
+        }
+
+        var ammo = GetWeaponAmmoForSync(item);
+        _net?.SendInventoryWeapon(kindId!, slot, item.permanentId, ammo);
+    }
+
+    private static bool IsShieldWeaponKind(string kindId)
+    {
+        return kindId.IndexOf("shield", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               kindId.IndexOf("parry", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private int ResolveWeaponSlotForSend(Inventory? inv, InventItem item, string kindId)
+    {
+        if(inv == null)
+            return -1;
+
+        var slot = GetWeaponSlot(inv, item);
+        if(slot >= 0)
+            return slot;
+
+        var w0 = inv.getEquippedWeaponOn(0);
+        if(IsSameWeaponIdentity(w0, item, kindId))
+            return 0;
+
+        var w1 = inv.getEquippedWeaponOn(1);
+        if(IsSameWeaponIdentity(w1, item, kindId))
+            return 1;
+
+        return slot;
+    }
+
+    private static bool IsSameWeaponIdentity(InventItem? candidate, InventItem item, string kindId)
+    {
+        if(candidate == null || item == null)
+            return false;
+
+        if(ReferenceEquals(candidate, item))
+            return true;
+
+        if(item.permanentId != 0 && candidate.permanentId == item.permanentId)
+            return true;
+
+        if(TryGetWeaponKindId(candidate, out var candidateKind) &&
+           !string.IsNullOrWhiteSpace(candidateKind) &&
+           string.Equals(candidateKind, kindId, StringComparison.Ordinal))
+            return true;
+
+        return false;
+    }
+}

@@ -2,8 +2,10 @@
 using ModCore.Events.Interfaces.Game;
 using ModCore.Events.Interfaces.Game.Hero;
 using ModCore.Mods;
+using System.Diagnostics;
 using System.Net;
 using dc.en;
+using dc.en.inter;
 using dc.pr;
 using ModCore.Utilities;
 using ModCore.Modules;
@@ -12,11 +14,16 @@ using dc.hl.types;
 using dc;
 using dc.shader;
 using dc.libs.heaps.slib;
+using Rand = dc.libs.Rand;
 using dc.h3d.mat;
 using dc.ui.hud;
 using dc.h2d;
+using dc.hxbit;
 using Hashlink.Virtuals;
 using dc.tool;
+using dc.tool.weap;
+using dc.tool.atk;
+using dc.tool.mainSkills;
 using dc.hxd;
 using System.Timers;
 using HaxeProxy.Runtime;
@@ -32,10 +39,12 @@ using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using DeadCellsMultiplayerMod.MultiplayerModUI;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Minimap;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
+using DeadCellsMultiplayerMod.MultiplayerModUI.LevelExit;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
 using DeadCellsMultiplayerMod.Tools.ModLang;
 using DeadCellsMultiplayerMod.KingHead;
 using dc.steam.ugc;
+using DeadCellsMultiplayerMod.Mobs.Levelinit;
 
 
 namespace DeadCellsMultiplayerMod
@@ -50,6 +59,7 @@ namespace DeadCellsMultiplayerMod
     {
         public static ModEntry? Instance { get; private set; }
         private bool _ready;
+        private static bool s_hooksInstalled;
 
         private NetRole _netRole = NetRole.None;
         public static NetNode? _net;
@@ -60,6 +70,8 @@ namespace DeadCellsMultiplayerMod
         public static Kinghead?[] clientHeads = new Kinghead?[NetNode.MaxClientSlots];
         public static string?[] clientLabels = new string?[NetNode.MaxClientSlots];
         public static int[] clientIds = new int[NetNode.MaxClientSlots];
+        public static string?[] clientSkins = new string?[NetNode.MaxClientSlots];
+        public static string?[] clientHeadSkins = new string?[NetNode.MaxClientSlots];
         public static Hero me = null;
         public static GhostHero _ghost = null;
 
@@ -70,6 +82,9 @@ namespace DeadCellsMultiplayerMod
         private bool? _lastAnimGSent;
         private double _animResendElapsed;
         private double? _lastAnimPlayRatio;
+        private long _suppressHeroAnimUntilTicks;
+        private string? _lastSentHeroSkin;
+        private string? _lastSentHeroHeadSkin;
 
         public static MiniMap miniMap;
 
@@ -84,6 +99,60 @@ namespace DeadCellsMultiplayerMod
 
         public string lastHeadAnim;
         public static ArrayDyn customHeads;
+
+        public InventItem inventItem;
+        private bool _inventorySyncGuard;
+        private bool _localFakeDead;
+        private long _localFakeDeadStartedTicks;
+        private DeadBase? _localDeadCine;
+        private double _localDownedX;
+        private double _localDownedY;
+        private double _localHeldX;
+        private double _localHeldY;
+        private string _localDownedLevelId = string.Empty;
+        private long _nextReviveAttemptTicks;
+        private long _nextDownedStateSendTicks;
+        private long _postReviveLockUntilTicks;
+        private double _postReviveLockX;
+        private double _postReviveLockY;
+        private int _reviveHoldTargetId;
+        private long _reviveHoldStartedTicks;
+        private const double ReviveUseDistancePx = 48.0;
+        private const int ReviveInteractKey = 82; // R
+        private const double ReviveAttemptCooldownSeconds = 0.2;
+        private const double ReviveHoldSeconds = 0.7;
+        private const double DownedStateResendSeconds = 0.4;
+        private const double DownedGhostBodyYOffsetPx = 40.0;
+        private const double LocalReviveBodyYOffsetPx = 0.5;
+        private const double PostRevivePositionLockSeconds = 0.0;
+        private const string ReviveHintText = "Hold R to restore";
+        private string _lastDoorMarkerLevelId = string.Empty;
+        private int _lastDoorMarkerToken = int.MinValue;
+        private string _localLastDoorMarkerLevelId = string.Empty;
+        private int _localLastDoorMarkerToken = int.MinValue;
+
+        private sealed class RemoteDownedState
+        {
+            public int UserId;
+            public double X;
+            public double Y;
+            public string LevelId = string.Empty;
+            public long UpdatedAtTicks;
+        }
+
+        private sealed class RemoteDoorMarkerState
+        {
+            public int MarkerToken;
+            public string LevelId = string.Empty;
+        }
+
+        private readonly Dictionary<int, RemoteDownedState> _remoteDowned = new();
+        private readonly Dictionary<int, RemoteDownedCorpse> _remoteDownedCines = new();
+        private readonly HashSet<int> _downedAnnouncements = new();
+        private readonly Dictionary<int, RemoteDoorMarkerState> _remoteLastDoorMarkers = new();
+        private readonly Dictionary<int, RemoteDoorMarkerState> _remotePendingDoorMarkers = new();
+        private readonly Dictionary<int, long> _pendingClientDisposeTicks = new();
+        private const double ClientDisposeTransitionSeconds = 0.28;
 
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
@@ -109,17 +178,68 @@ namespace DeadCellsMultiplayerMod
             if (instance == null)
                 return;
 
-            instance.remoteHeadSkin = string.IsNullOrWhiteSpace(skin)
-                ? "BaseFlame"
-                : skin.Replace("|", "/").Trim();
+            instance.remoteHeadSkin = NormalizeHeadSkin(skin);
         }
 
         public static string GetClientLabel(int slotIndex)
         {
             if (slotIndex < 0 || slotIndex >= clientLabels.Length)
-                return GameMenu.RemoteUsername;
+                return string.Empty;
 
-            return clientLabels[slotIndex] ?? GameMenu.RemoteUsername;
+            return clientLabels[slotIndex] ?? string.Empty;
+        }
+
+        internal static bool IsLocalPlayerDowned()
+        {
+            return Instance != null && Instance._localFakeDead;
+        }
+
+        internal static bool IsRemotePlayerDowned(int userId)
+        {
+            var instance = Instance;
+            if (instance == null || userId <= 0)
+                return false;
+
+            if (!instance._remoteDowned.TryGetValue(userId, out var state) || state == null)
+                return false;
+
+            var localLevelId = instance.GetCurrentLevelId();
+            if (!string.IsNullOrEmpty(localLevelId) &&
+                !string.IsNullOrEmpty(state.LevelId) &&
+                !string.Equals(localLevelId, state.LevelId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        internal static bool IsEntityDownedForCombat(Entity? entity)
+        {
+            if (entity == null)
+                return false;
+
+            var localHero = me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+            if (localHero != null && ReferenceEquals(entity, localHero))
+                return IsLocalPlayerDowned();
+
+            var net = _net;
+            var localId = net?.id ?? 0;
+            for (int i = 0; i < clients.Length; i++)
+            {
+                var client = clients[i];
+                if (client == null || !ReferenceEquals(entity, client))
+                    continue;
+
+                var remoteId = clientIds[i];
+                if (remoteId <= 0)
+                    return false;
+                if (localId > 0 && remoteId == localId)
+                    return IsLocalPlayerDowned();
+                return IsRemotePlayerDowned(remoteId);
+            }
+
+            return false;
         }
 
         internal static GhostKing? GetPrimaryClient()
@@ -147,6 +267,8 @@ namespace DeadCellsMultiplayerMod
                 clients[i] = null!;
                 clientLabels[i] = null;
                 clientIds[i] = 0;
+                clientSkins[i] = null;
+                clientHeadSkins[i] = null;
                 rLastX[i] = 0;
                 rLastY[i] = 0;
             }
@@ -175,8 +297,10 @@ namespace DeadCellsMultiplayerMod
             MultiplayerModLang modLang = new MultiplayerModLang(this);
             CineHooks CineHooks = new CineHooks();
             MultiplayerUI MultiplayerUI = new MultiplayerUI(this, 0);
+            Levelinit levelinit = new Levelinit(info);
             MobsSynchronization mobs = new MobsSynchronization(this);
             Minimapreveal minimapreveal = new Minimapreveal();
+            LevelExitSync levelExitSync = new LevelExitSync(this);
             ConnectionUI.Initialize(this);
             GameMenu.Initialize(Logger);
             EventSystem.BroadcastEvent<IOnAdvancedModuleInitializing, ModEntry>(this);
@@ -184,20 +308,241 @@ namespace DeadCellsMultiplayerMod
 
         void IOnAdvancedModuleInitializing.OnAdvancedModuleInitializing(ModEntry entry)
         {
+            if (s_hooksInstalled)
+                return;
+
+            s_hooksInstalled = true;
             entry.Logger.Information("\x1b[32m[[ModEntry] Mod Initializing Hooks...]\x1b[0m ");
             Hook_Game.init += Hook_gameinit;
             Hook_Hero.wakeup += hook_hero_wakeup;
             Hook_Hero.onLevelChanged += hook_level_changed;
             Hook_User.newGame += GameDataSync.user_hook_new_game;
-            Hook_LevelGen.generate += GameDataSync.hook_generate;
+            Hook_User.prepareSave += Hook_User_prepareSave;
+            Hook_User.serialize += Hook_User_serialize;
+            Hook_User.unserialize += Hook_User_unserialize;
             Hook_AnimManager.play += Hook_AnimManager_play;
             Hook_MiniMap.track += Hook_MiniMap_track;
             Hook__LevelStruct.get += Hook__LevelStruct_get;
             Hook_Boot.update += hook_boot_update;
             Hook_Game.pause += Hook_Game_pause;
+            Hook_Hero.kill += Hook_Hero_kill;
+            Hook_Hero.onDie += Hook_Hero_onDie;
+            Hook_Hero.startDeathCine += Hook_Hero_startDeathCine;
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
+            Hook_ZDoor.onActivate += Hook_ZDoor_onActivate;
+            Hook_Hero.applySkin += Hook_Hero_applySkin;
+            Hook_HeroHead.initCustomHead += Hook_HeroHead_initCustomHead;
+            // Hook_Hero.tryToApplyYoloPerk += Hook_Hero_tryToApplyYoloPerk;
             Hook__TitleScreen.__constructor__ += Hook_TitleScreen__constructor__;
+            // Hook_Hero.onEnterRoom += 
+            Ghost.KingWeaponHooks.Install();
         }
+
+
+        private void Hook_Hero_applySkin(Hook_Hero.orig_applySkin orig, Hero self, dc.String skinId)
+        {
+            orig(self, skinId);
+            if (_netRole == NetRole.None)
+                return;
+
+            var net = _net;
+            if (net == null || !net.IsAlive || me == null || self == null || !ReferenceEquals(self, me))
+                return;
+
+            try
+            {
+                var rawSkin = dc.Main.Class.ME?.user?.heroSkin?.ToString();
+                if (string.IsNullOrWhiteSpace(rawSkin))
+                {
+                    try { rawSkin = self.getSkinInfo()?.consoleCmdId?.ToString(); } catch { }
+                }
+
+                var skin = NormalizeBodySkin(rawSkin);
+
+                if (string.Equals(_lastSentHeroSkin, skin, StringComparison.Ordinal))
+                    return;
+
+                net.SendHeroSkin(skin);
+                _lastSentHeroSkin = skin;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning("[NetMod] Failed to send skin from applySkin hook: {msg}", ex.Message);
+            }
+        }
+
+        private void Hook_HeroHead_initCustomHead(Hook_HeroHead.orig_initCustomHead orig, HeroHead self)
+        {
+            orig(self);
+            if (_netRole == NetRole.None)
+                return;
+
+            var net = _net;
+            if (net == null || !net.IsAlive || me == null || self == null)
+                return;
+
+            HeroHead? localHead = null;
+            try { localHead = me.heroHead; } catch { }
+            if (localHead == null || !ReferenceEquals(self, localHead))
+                return;
+
+            try
+            {
+                var skin = NormalizeHeadSkin(dc.Main.Class.ME?.user?.heroHeadSkin?.ToString());
+                if (string.Equals(_lastSentHeroHeadSkin, skin, StringComparison.Ordinal))
+                    return;
+
+                net.SendHeroHeadSkin(skin);
+                _lastSentHeroHeadSkin = skin;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning("[NetMod] Failed to send head skin from initCustomHead hook: {msg}", ex.Message);
+            }
+        }
+
+        private void Hook_ZDoor_onActivate(Hook_ZDoor.orig_onActivate orig, ZDoor self, Hero lp, bool mob)
+        {
+            var shouldRefresh = false;
+            if (_netRole != NetRole.None &&
+                _net != null &&
+                me != null &&
+                lp != null &&
+                ReferenceEquals(lp, me) &&
+                self != null)
+            {
+                try
+                {
+                    shouldRefresh = SendDoorMarkerFromActivation(self);
+                }
+                catch
+                {
+                }
+            }
+
+            orig(self, lp, mob);
+
+            if (shouldRefresh)
+            {
+                try { ReceiveGhostCoords(); } catch { }
+            }
+        }
+
+        private void Hook_Hero_lockControlFromSkill(Hook_Hero.orig_lockControlFromSkill orig, Hero self, double sec)
+        {
+            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
+                return;
+            orig(self, sec);
+        }
+
+        private void Hook_Hero_unlockControls(Hook_Hero.orig_unlockControls orig, Hero self)
+        {
+            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
+                return;
+            orig(self);
+        }
+
+        private bool Hook_User_prepareSave(Hook_User.orig_prepareSave orig, User self)
+        {
+            if (_netRole == NetRole.Client)
+            {
+                var swapped = GameDataSync.SwapToOriginalUserData(self);
+                try
+                {
+                    return orig(self);
+                }
+                finally
+                {
+                    if (swapped)
+                        GameDataSync.RestoreRemoteUserData(self);
+                }
+            }
+
+
+            return orig(self);
+        }
+
+        private void Hook_User_serialize(Hook_User.orig_serialize orig, User self, dc.hxbit.Serializer __ctx)
+        {
+            if (_netRole == NetRole.Client)
+            {
+                var swapped = GameDataSync.SwapToOriginalUserData(self);
+                try
+                {
+                    orig(self, __ctx);
+                }
+                finally
+                {
+                    if (swapped)
+                        GameDataSync.RestoreRemoteUserData(self);
+                }
+                return;
+            }
+
+            orig(self, __ctx);
+        }
+
+        private void Hook_User_unserialize(Hook_User.orig_unserialize orig, User self, dc.hxbit.Serializer v)
+        {
+            orig(self, v);
+            if (_netRole == NetRole.Client)
+                GameDataSync.CaptureOriginalUserData(self);
+        }
+
+        private void Hook_Viewport_bumpDir(Hook_Viewport.orig_bumpDir orig, Viewport self, int dir, double? pow)
+        {
+            if(Ghost.KingWeaponSupport.IsInKingContext)
+                return;
+            orig(self, dir, pow);
+        }
+
+        private void Hook_Entity_recoil(Hook_Entity.orig_recoil orig, Entity self, double dx)
+        {
+            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
+                return;
+            orig(self, dx);
+        }
+
+        private void Hook_Entity_bump(Hook_Entity.orig_bump orig, Entity self, double dy, double ignoreResist, bool? dx)
+        {
+            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
+                return;
+            orig(self, dy, ignoreResist, dx);
+        }
+
+        private void Hook_Entity_bumpAwayFrom(Hook_Entity.orig_bumpAwayFrom orig, Entity self, Entity e, double? pow, bool? ignoreResist)
+        {
+            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
+                return;
+            orig(self, e, pow, ignoreResist);
+        }
+
+        private void Hook_Entity_cancelVelocities(Hook_Entity.orig_cancelVelocities orig, Entity self)
+        {
+            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
+                return;
+            orig(self);
+        }
+
+        private void Hook_Entity_setAffectS(Hook_Entity.orig_setAffectS orig, Entity self, int id, double sec, Ref<double> ignoreResist, bool? allowResist)
+        {
+            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
+                return;
+            orig(self, id, sec, ignoreResist, allowResist);
+        }
+
+        private void Hook_Entity_removeAllAffects(Hook_Entity.orig_removeAllAffects orig, Entity self, int list)
+        {
+            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
+                return;
+            orig(self, list);
+        }
+
+        private void Hook_Hero_onLevelChanged()
+        {
+
+        }
+
 
         private void Hook_TitleScreen__constructor__(Hook__TitleScreen.orig___constructor__ orig, TitleScreen playMusic, bool? titleLib)
         {
@@ -207,17 +552,6 @@ namespace DeadCellsMultiplayerMod
             connectionUI.root.set_visible(false);
 
         }
-
-        private void Hook_Hero_onHeroDie(Hook_Hero.orig_onHeroDie orig, Hero self)
-        {
-            var net = _net;
-            if (_netRole == NetRole.Client)
-                net?.SendHeroDeath();
-            else if (_netRole == NetRole.Host)
-                GameMenu.QueueHostRestartFromDeath("host died");
-            orig(self);
-        }
-
 
         private void Hook_Game_pause(Hook_Game.orig_pause orig, dc.pr.Game self)
         {
@@ -245,16 +579,15 @@ namespace DeadCellsMultiplayerMod
             for (int i = 0; i < count; i++)
             {
                 var mobs = extraMobs.array[i];
-                // Logger.Information($"[DEBUG|MOB] mobs at index {i}: {mobs}");
             }
         }
 
         private void hook_boot_update(Hook_Boot.orig_update orig, Boot self, double dt)
         {
-
             orig(self, dt);
             GameMenu.ProcessMainThreadQueue();
             GameMenu.HandleTextInputClipboardShortcuts();
+            _ghost?.UpdateLabels();
         }
 
 
@@ -262,10 +595,18 @@ namespace DeadCellsMultiplayerMod
         private LevelStruct Hook__LevelStruct_get(Hook__LevelStruct.orig_get orig,
         User user,
         virtual_baseLootLevel_biome_bonusTripleScrollAfterBC_cellBonus_dlc_doubleUps_eliteRoomChance_eliteWanderChance_flagsProps_group_icon_id_index_loreDescriptions_mapDepth_minGold_mobDensity_mobs_name_nextLevels_parallax_props_quarterUpsBC3_quarterUpsBC4_specificLoots_specificSubBiome_transitionTo_tripleUps_worldDepth_ l,
-        dc.libs.Rand rng)
+        Rand rng)
         {
             levelId = l.id.ToString();
             SendLevel(levelId);
+            var net = _net;
+            if (_netRole == NetRole.Host)
+                GameDataSync.SendLevelSeed(levelId, rng, net);
+            else if (_netRole == NetRole.Client)
+            {
+                GameDataSync.TryApplyRemoteSerializerSync();
+                GameDataSync.TryApplyRemoteLevelSeed(levelId, rng);
+            }
             return orig(user, l, rng);
         }
 
@@ -279,10 +620,19 @@ namespace DeadCellsMultiplayerMod
 
         private AnimManager Hook_AnimManager_play(Hook_AnimManager.orig_play orig, AnimManager self, dc.String plays, int? queueAnim, bool? g)
         {
+            if(plays == null)
+                return orig(self, plays, queueAnim, g);
+
             var play = plays.ToString();
+            if(string.IsNullOrWhiteSpace(play))
+                return orig(self, plays, queueAnim, g);
+
             if (me != null && me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
             {
-                SendHeroAnim(play, queueAnim, g, force: true);
+                if (!DeadCellsMultiplayerMod.Ghost.KingWeaponSupport.IsInKingContext &&
+                    Stopwatch.GetTimestamp() >= _suppressHeroAnimUntilTicks &&
+                    !IsAttackAnim(play))
+                    SendHeroAnim(play, queueAnim, g, force: true);
             }
             if(me != null && me.heroHead.customHeadSpr != null && ReferenceEquals(self, me.heroHead.customHeadSpr._animManager))
             {
@@ -292,12 +642,37 @@ namespace DeadCellsMultiplayerMod
             return orig(self, plays, queueAnim, g);
         }
 
+
+        private static bool IsAttackAnim(string anim)
+        {
+            if (string.IsNullOrWhiteSpace(anim)) return false;
+            var a = anim.Trim();
+            if (a.StartsWith("w_", StringComparison.OrdinalIgnoreCase)) return true;
+            if (a.StartsWith("attack", StringComparison.OrdinalIgnoreCase)) return true;
+            if (a.StartsWith("atk", StringComparison.OrdinalIgnoreCase)) return true;
+            if (a.IndexOf("shoot", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("charge", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("hold", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("bow", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("crossbow", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("xbow", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("shield", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("block", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("parry", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("whip", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            return false;
+        }
+
         public void hook_level_changed(Hook_Hero.orig_onLevelChanged orig, Hero self, Level oldLevel)
         {
             kingInitialized = false;
+            DeadCellsMultiplayerMod.Mobs.MobsSynchronization.MobsSynchronization.ClearTrackingForLevelChange();
+            ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false, clearRemoteDownedTracking: false, clearDownedAnnouncements: false);
             me = self;
+            try { me._targetable = true; } catch { }
             SendLevel(levelId);
             orig(self, oldLevel);
+            EnsureHeroVisibilityAfterRoomChange(me);
             if (_netRole == NetRole.None) return;
             var net = _net;
             var localId = net?.id ?? 0;
@@ -307,40 +682,22 @@ namespace DeadCellsMultiplayerMod
 
             for (int i = 0; i < clients.Length; i++)
             {
-                var client = clients[i];
-                if (client != null)
-                {
-                    client.destroy();
-                    client.dispose();
-                    client.disposeGfx();
-                }
-                var head = clientHeads[i];
-                if (head != null)
-                {
-                    head.dispose();
-                    clientHeads[i] = null;
-                }
-                clients[i] = _ghost.CreateGhostKing(me._level);
-
-                bool fromUI = false;
-                var newHead = new Kinghead(me, clients[i], me._level, Logger);
-                newHead.init(me._level, null, Ref<bool>.From(ref fromUI));
-
-                clientHeads[i] = newHead;
-                clients[i].head = newHead;
-
+                DisposeClientSlot(i, clearIdentity: false);
                 rLastX[i] = 0;
                 rLastY[i] = 0;
-                clientLabels[i] = null;
-                clientIds[i] = 0;
             }
+
+            ReceiveGhostCoords();
         }
 
 
         public void hook_hero_wakeup(Hook_Hero.orig_wakeup orig, Hero self, Level lvl, int cx, int cy)
         {
             me = self;
+            try { me._targetable = true; } catch { }
             orig(self, lvl, cx, cy);
+            EnsureHeroVisibilityAfterRoomChange(me);
+            SendEquippedWeapons(self.inventory);
         }
 
 
@@ -367,10 +724,16 @@ namespace DeadCellsMultiplayerMod
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
             if (me == null) return;
-            SendHeroCoords();
+            TryRecoverMissedFakeDeathFromLife();
+            if (!_localFakeDead)
+                SendHeroCoords();
             ReceiveGhostCoords();
+            UpdateFakeDeathFlow(dt);
+            MaintainPostRevivePositionLock();
+            ReceiveGhostWeapons();
+            ReceiveGhostAttacks();
+            UpdateGhostWeapons();
             UpdateGhostHeads();
-
         }
 
         private void UpdateGhostHeads()
@@ -404,6 +767,131 @@ namespace DeadCellsMultiplayerMod
             net.LevelSend(senderId, lvl);
         }
 
+        private void SendRoomTarget(string? targetLevelId, int targetRoomId, bool force)
+        {
+            if (_netRole == NetRole.None)
+                return;
+
+            var net = _net;
+            if (net == null || net.id <= 0)
+                return;
+            if (targetRoomId < 0)
+                return;
+
+            var effectiveLevelId = string.IsNullOrWhiteSpace(targetLevelId)
+                ? GetCurrentLevelId()
+                : targetLevelId.Trim();
+            if (string.IsNullOrWhiteSpace(effectiveLevelId))
+                return;
+
+            if (!force &&
+                string.Equals(_lastDoorMarkerLevelId, effectiveLevelId, StringComparison.Ordinal) &&
+                _lastDoorMarkerToken == targetRoomId)
+            {
+                return;
+            }
+
+            net.SendRoomTarget(effectiveLevelId, targetRoomId);
+            _lastDoorMarkerLevelId = effectiveLevelId;
+            _lastDoorMarkerToken = targetRoomId;
+        }
+
+        private bool SendDoorMarkerFromActivation(ZDoor self)
+        {
+            if (self == null)
+                return false;
+
+            var targetLevelId = self.destMap?.id?.ToString();
+            if (string.IsNullOrWhiteSpace(targetLevelId))
+                targetLevelId = GetCurrentLevelId();
+            if (string.IsNullOrWhiteSpace(targetLevelId))
+                return false;
+
+            var sourceLevelId = GetCurrentLevelId();
+            if (string.IsNullOrWhiteSpace(sourceLevelId))
+            {
+                try { sourceLevelId = me?._level?.map?.id?.ToString() ?? string.Empty; }
+                catch { sourceLevelId = string.Empty; }
+            }
+
+            var linkId = -1;
+            var doorCx = -1;
+            var doorCy = -1;
+            try { linkId = self.linkId; } catch { }
+            try { doorCx = self.cx; } catch { }
+            try { doorCy = self.cy; } catch { }
+
+            var marker = ComputeDoorMarkerToken(sourceLevelId, targetLevelId, linkId, doorCx, doorCy);
+            if (marker < 0)
+                return false;
+
+            SendRoomTarget(targetLevelId, marker, force: true);
+            RegisterLocalDoorMarker(targetLevelId, marker);
+            return true;
+        }
+
+        private static int ComputeDoorMarkerToken(string? sourceLevelId, string? targetLevelId, int linkId, int doorCx, int doorCy)
+        {
+            var src = string.IsNullOrWhiteSpace(sourceLevelId) ? "?" : sourceLevelId.Trim();
+            var dst = string.IsNullOrWhiteSpace(targetLevelId) ? "?" : targetLevelId.Trim();
+            var key = string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{src}>{dst}|{linkId}|{doorCx}|{doorCy}");
+
+            unchecked
+            {
+                uint hash = 2166136261;
+                for (int i = 0; i < key.Length; i++)
+                {
+                    hash ^= key[i];
+                    hash *= 16777619;
+                }
+
+                var positive = (int)(hash & 0x7FFFFFFF);
+                return positive == 0 ? 1 : positive;
+            }
+        }
+
+        private void RegisterLocalDoorMarker(string? levelId, int markerToken)
+        {
+            if (markerToken < 0)
+                return;
+
+            _localLastDoorMarkerLevelId = string.IsNullOrWhiteSpace(levelId)
+                ? string.Empty
+                : levelId.Trim();
+            _localLastDoorMarkerToken = markerToken;
+
+            var knownRemoteIds = new HashSet<int>();
+            for (int i = 0; i < clientIds.Length; i++)
+            {
+                var remoteId = clientIds[i];
+                if (remoteId > 0)
+                    knownRemoteIds.Add(remoteId);
+            }
+
+            foreach (var remoteId in _remoteLastDoorMarkers.Keys)
+                knownRemoteIds.Add(remoteId);
+
+            foreach (var remoteId in knownRemoteIds)
+            {
+                if (_remoteLastDoorMarkers.TryGetValue(remoteId, out var state) &&
+                    state != null &&
+                    state.MarkerToken == markerToken &&
+                    string.Equals(state.LevelId, _localLastDoorMarkerLevelId, StringComparison.Ordinal))
+                {
+                    _remotePendingDoorMarkers.Remove(remoteId);
+                    continue;
+                }
+
+                // Local crossed a door and this remote hasn't confirmed the same door marker yet.
+                _remotePendingDoorMarkers[remoteId] = new RemoteDoorMarkerState
+                {
+                    MarkerToken = markerToken,
+                    LevelId = _localLastDoorMarkerLevelId
+                };
+            }
+        }
 
         double last_x, last_y;
         int lastDir;
@@ -438,6 +926,151 @@ namespace DeadCellsMultiplayerMod
             return true;
         }
 
+        internal static void SetClientSkin(int remoteId, string? skin)
+        {
+            var instance = Instance;
+            if (instance == null)
+                return;
+
+            var net = _net;
+            var localId = net?.id ?? 0;
+            if (!TryGetClientIndex(localId, remoteId, out var index))
+                return;
+
+            var cleaned = NormalizeBodySkin(skin);
+            var prev = clientSkins[index];
+            clientSkins[index] = cleaned;
+
+            var client = clients[index];
+            if (client != null)
+            {
+                if (!string.Equals(prev, cleaned, StringComparison.Ordinal))
+                {
+                    if (!instance.RecreateClientKing(index))
+                        client.ApplyRemoteSkin(cleaned);
+                }
+                else if (client.spr == null)
+                {
+                    client.ApplyRemoteSkin(cleaned);
+                }
+            }
+        }
+
+        internal static void SetClientHeadSkin(int remoteId, string? skin)
+        {
+            var instance = Instance;
+            if (instance == null)
+                return;
+
+            var net = _net;
+            var localId = net?.id ?? 0;
+            if (!TryGetClientIndex(localId, remoteId, out var index))
+                return;
+
+            var cleaned = NormalizeHeadSkin(skin);
+            var prev = clientHeadSkins[index];
+            clientHeadSkins[index] = cleaned;
+
+            var client = clients[index];
+            if (client != null)
+                client.RemoteHeadSkinId = cleaned;
+
+            if (!string.Equals(prev, cleaned, StringComparison.Ordinal) || client?.head == null)
+                instance.RecreateClientHead(index);
+        }
+
+        private static string NormalizeHeadSkin(string? skin)
+        {
+            return string.IsNullOrWhiteSpace(skin)
+                ? "BaseFlame"
+                : skin.Replace("|", "/").Trim();
+        }
+
+        private static string NormalizeBodySkin(string? skin)
+        {
+            return string.IsNullOrWhiteSpace(skin)
+                ? "PrisonerDefault"
+                : skin.Replace("|", "/").Trim();
+        }
+
+        private bool RecreateClientKing(int slot)
+        {
+            if (slot < 0 || slot >= clients.Length)
+                return false;
+
+            var existing = clients[slot];
+            if (existing == null)
+                return false;
+
+            var x = rLastX[slot];
+            var y = rLastY[slot];
+            var dir = 1;
+            var targetable = true;
+            try
+            {
+                if (existing.spr != null)
+                {
+                    x = existing.spr.x;
+                    y = existing.spr.y;
+                }
+            }
+            catch
+            {
+            }
+
+            try { dir = existing.dir; } catch { }
+            try { targetable = existing._targetable; } catch { }
+
+            DisposeClientSlot(slot, clearIdentity: false);
+            var recreated = EnsureClientKingSlot(slot);
+            if (recreated == null)
+                return false;
+
+            try { recreated.setPosPixel(x, y); } catch { }
+            try { recreated.dir = dir; } catch { }
+            try { recreated._targetable = targetable; } catch { }
+            rLastX[slot] = x;
+            rLastY[slot] = y;
+            return true;
+        }
+
+        private void RecreateClientHead(int slot)
+        {
+            if (slot < 0 || slot >= clients.Length)
+                return;
+
+            var client = clients[slot];
+            if (client == null || me == null || me._level == null)
+                return;
+
+            var existing = clientHeads[slot];
+            if (existing != null)
+            {
+                existing.dispose();
+                clientHeads[slot] = null;
+            }
+
+            var desiredHead = NormalizeHeadSkin(client.RemoteHeadSkinId);
+            var previousGlobalHead = remoteHeadSkin;
+            remoteHeadSkin = desiredHead;
+            try
+            {
+                bool fromUI = false;
+                var newHead = new Kinghead(me, client, me._level, Logger);
+                newHead.init(me._level, null, Ref<bool>.From(ref fromUI));
+                clientHeads[slot] = newHead;
+                client.head = newHead;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning("[NetMod] Failed to recreate client head slot {slot}: {msg}", slot, ex.Message);
+            }
+            finally
+            {
+                remoteHeadSkin = previousGlobalHead;
+            }
+        }
+
         private void ReceiveGhostCoords()
         {
             var net = _net;
@@ -448,19 +1081,69 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             var localId = net.id;
+            var localLevelId = GetCurrentLevelId();
+            if (string.IsNullOrWhiteSpace(localLevelId))
+            {
+                try { localLevelId = me._level?.map?.id?.ToString() ?? string.Empty; }
+                catch { localLevelId = string.Empty; }
+            }
+
             foreach (var remote in remotes)
             {
                 if (!TryGetClientIndex(localId, remote.Id, out var index))
                     continue;
 
-                var client = clients[index];
-
                 remotePlayerId = remote.Id;
                 clientIds[index] = remote.Id;
-                client.setPosPixel(remote.X, remote.Y - 0.2d);
+                ProcessRemoteDoorMarker(remote);
+                if (!ShouldKeepRemoteKingVisibleInRoom(remote, localLevelId))
+                {
+                    QueueClientDisposeWithTransition(index);
+                    continue;
+                }
+
+                CancelPendingClientDispose(index);
+
+                var client = EnsureClientKingSlot(index);
+                if (client == null)
+                    continue;
+
+                var drawX = remote.X;
+                var drawY = remote.Y - 0.2d;
+                var useDownedOffset = false;
+                if (_remoteDowned.TryGetValue(remote.Id, out var downed))
+                {
+                    var currentLevelId = GetCurrentLevelId();
+                    if (string.IsNullOrEmpty(currentLevelId) ||
+                        string.IsNullOrEmpty(downed.LevelId) ||
+                        string.Equals(currentLevelId, downed.LevelId, StringComparison.Ordinal))
+                    {
+                        drawX = downed.X;
+                        drawY = downed.Y;
+                        useDownedOffset = true;
+                        if (_remoteDownedCines.TryGetValue(remote.Id, out var downedCine) &&
+                            downedCine != null &&
+                            !downedCine.destroyed)
+                        {
+                            downedCine.UpdateTarget(drawX, drawY, remote.Dir);
+                        }
+                    }
+                }
+
+                if (useDownedOffset)
+                {
+                    drawY -= DownedGhostBodyYOffsetPx;
+                    try { client._targetable = false; } catch { }
+                }
+                else
+                {
+                    try { client._targetable = true; } catch { }
+                }
+
+                client.setPosPixel(drawX, drawY);
                 client.dir = remote.Dir;
-                rLastX[index] = remote.X;
-                rLastY[index] = remote.Y;
+                rLastX[index] = drawX;
+                rLastY[index] = drawY;
 
                 var newLabel = BuildRemoteLabel(remote.Id, remote.Username);
                 if (!string.Equals(clientLabels[index], newLabel, StringComparison.Ordinal))
@@ -476,17 +1159,299 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
+        private bool ShouldKeepRemoteKingVisibleInRoom(NetNode.RemoteSnapshot remote, string localLevelId)
+        {
+            if (string.IsNullOrWhiteSpace(localLevelId))
+                return true;
+
+            if (!string.IsNullOrWhiteSpace(localLevelId) &&
+                !string.IsNullOrWhiteSpace(remote.LevelId) &&
+                !string.Equals(remote.LevelId, localLevelId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (_remotePendingDoorMarkers.TryGetValue(remote.Id, out var pending) &&
+                pending != null)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private void ProcessRemoteDoorMarker(NetNode.RemoteSnapshot remote)
+        {
+            if (!remote.HasRoom ||
+                !remote.RoomId.HasValue ||
+                remote.RoomId.Value < 0 ||
+                string.IsNullOrWhiteSpace(remote.RoomLevelId))
+            {
+                return;
+            }
+
+            var markerToken = remote.RoomId.Value;
+            var markerLevelId = remote.RoomLevelId.Trim();
+            if (string.IsNullOrWhiteSpace(markerLevelId))
+                return;
+
+            if (_remoteLastDoorMarkers.TryGetValue(remote.Id, out var last) &&
+                last != null &&
+                last.MarkerToken == markerToken &&
+                string.Equals(last.LevelId, markerLevelId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _remoteLastDoorMarkers[remote.Id] = new RemoteDoorMarkerState
+            {
+                MarkerToken = markerToken,
+                LevelId = markerLevelId
+            };
+
+            if (IsLocalDoorMarkerMatch(markerLevelId, markerToken))
+            {
+                _remotePendingDoorMarkers.Remove(remote.Id);
+                return;
+            }
+
+            _remotePendingDoorMarkers[remote.Id] = new RemoteDoorMarkerState
+            {
+                MarkerToken = markerToken,
+                LevelId = markerLevelId
+            };
+        }
+
+        private bool IsLocalDoorMarkerMatch(string markerLevelId, int markerToken)
+        {
+            if (markerToken < 0 || string.IsNullOrWhiteSpace(markerLevelId))
+                return false;
+            if (_localLastDoorMarkerToken != markerToken)
+                return false;
+            if (!string.Equals(_localLastDoorMarkerLevelId, markerLevelId, StringComparison.Ordinal))
+                return false;
+            return true;
+        }
+
+        private void QueueClientDisposeWithTransition(int slot)
+        {
+            if (slot < 0 || slot >= clients.Length)
+                return;
+
+            var client = clients[slot];
+            if (client == null)
+            {
+                DisposeClientSlot(slot, clearIdentity: false);
+                return;
+            }
+
+            if (!_pendingClientDisposeTicks.TryGetValue(slot, out var startedAtTicks))
+            {
+                _pendingClientDisposeTicks[slot] = Stopwatch.GetTimestamp();
+                try { client.spr?._animManager?.play("walkOut".AsHaxeString(), null, null); } catch { }
+                return;
+            }
+
+            var elapsed = Stopwatch.GetElapsedTime(startedAtTicks).TotalSeconds;
+            if (elapsed < ClientDisposeTransitionSeconds)
+                return;
+
+            DisposeClientSlot(slot, clearIdentity: false);
+        }
+
+        private void CancelPendingClientDispose(int slot)
+        {
+            _pendingClientDisposeTicks.Remove(slot);
+        }
+
+        private GhostKing? EnsureClientKingSlot(int slot)
+        {
+            if (slot < 0 || slot >= clients.Length)
+                return null;
+
+            var existing = clients[slot];
+            if (existing != null)
+                return existing;
+
+            if (_ghost == null || me == null || me._level == null)
+                return null;
+
+            var created = _ghost.CreateGhostKing(me._level);
+            clients[slot] = created;
+
+            var knownSkin = clientSkins[slot];
+            if (!string.IsNullOrWhiteSpace(knownSkin))
+                created.ApplyRemoteSkin(knownSkin);
+
+            var knownHead = clientHeadSkins[slot];
+            created.RemoteHeadSkinId = NormalizeHeadSkin(
+                !string.IsNullOrWhiteSpace(knownHead) ? knownHead : remoteHeadSkin
+            );
+            RecreateClientHead(slot);
+
+            if (!string.IsNullOrWhiteSpace(clientLabels[slot]))
+                _ghost.SetLabel(created, clientLabels[slot]);
+
+            return created;
+        }
+
+        private void DisposeClientSlot(int slot, bool clearIdentity)
+        {
+            if (slot < 0 || slot >= clients.Length)
+                return;
+
+            _pendingClientDisposeTicks.Remove(slot);
+
+            var previousRemoteId = clientIds[slot];
+
+            var head = clientHeads[slot];
+            if (head != null)
+            {
+                try { head.dispose(); } catch { }
+                clientHeads[slot] = null;
+            }
+
+            var client = clients[slot];
+            if (client != null)
+            {
+                try { client.destroy(); } catch { }
+                try { client.dispose(); } catch { }
+                try { client.disposeGfx(); } catch { }
+            }
+            clients[slot] = null!;
+
+            if (!clearIdentity)
+                return;
+
+            if (previousRemoteId > 0)
+            {
+                _remoteLastDoorMarkers.Remove(previousRemoteId);
+                _remotePendingDoorMarkers.Remove(previousRemoteId);
+            }
+
+            clientIds[slot] = 0;
+            clientLabels[slot] = null;
+            rLastX[slot] = 0;
+            rLastY[slot] = 0;
+        }
+
+        private void ReceiveGhostWeapons()
+        {
+            var net = _net;
+            if (net == null || me == null) return;
+
+            if (!net.TryConsumeRemoteWeaponSnapshots(out var updates))
+                return;
+
+            foreach (var update in updates)
+            {
+                ApplyRemoteWeaponUpdate(update.Id, update.Kind, update.Slot, update.PermanentId, update.Ammo);
+            }
+        }
+
+        private void ReceiveGhostAttacks()
+        {
+            var net = _net;
+            if (net == null || me == null) return;
+
+            if (!net.TryConsumeRemoteAttacks(out var attacks))
+                return;
+
+            var localId = net.id;
+            foreach (var attack in attacks)
+            {
+                ApplyRemoteWeaponUpdate(attack.Id, attack.Kind, attack.Slot, attack.PermanentId, attack.Ammo);
+                if (!TryGetClientIndex(localId, attack.Id, out var index))
+                    continue;
+
+                var client = clients[index];
+                if (client?.kingWeaponsManager == null) continue;
+                client.kingWeaponsManager.queueAttack(attack.Slot);
+            }
+        }
+
+        private void UpdateGhostWeapons()
+        {
+            for (int i = 0; i < clients.Length; i++)
+            {
+                var client = clients[i];
+                if (client?.kingWeaponsManager == null) continue;
+                client.kingWeaponsManager.update();
+            }
+        }
+
         private void PlayGhostAnim(GhostKing client, string anim, int? queueAnim, bool? g)
         {
             if (client?.spr?._animManager == null) return;
             if (string.IsNullOrWhiteSpace(anim)) return;
+
+            var shieldActive = client.kingWeaponsManager != null && client.kingWeaponsManager.IsShieldActive;
+            if (shieldActive && ShouldLoopRemoteAnim(anim))
+            {
+                return;
+            }
+
+            if (anim.IndexOf("hold", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                anim.IndexOf("shield", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                anim.IndexOf("parry", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                anim.IndexOf("block", StringComparison.OrdinalIgnoreCase) >= 0)
+                return;
+
             var animManager = client.spr._animManager;
-            animManager.play(anim.AsHaxeString(), queueAnim, g).loop(null);
+            try
+            {
+                var current = client.spr.groupName;
+                if(current != null && string.Equals(current.ToString(), anim, StringComparison.Ordinal))
+                    return;
+            }
+            catch
+            {
+            }
+
+            if (ShouldLoopRemoteAnim(anim))
+            {
+                if (!shieldActive)
+                {
+                    try { client.removeAllAffects(96); } catch { }
+                    try { client.removeAllAffects(98); } catch { }
+                    try { client.removeAllAffects(99); } catch { }
+                }
+
+                animManager.play(anim.AsHaxeString(), queueAnim, g).loop(null);
+                return;
+            }
+
+            animManager.play(anim.AsHaxeString(), queueAnim, g);
+        }
+
+        private static bool ShouldLoopRemoteAnim(string anim)
+        {
+            if(string.IsNullOrWhiteSpace(anim)) return false;
+            var a = anim.Trim();
+
+            // Don't ever force-loop weapon/hold-ish states; those should be driven by weapon replication.
+            if(IsAttackAnim(a)) return false;
+            if(a.IndexOf("guard", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if(a.IndexOf("defend", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+
+            // Loop only locomotion/idles to avoid getting stuck in "hold/parry" forever.
+            if (a.StartsWith("idle", StringComparison.OrdinalIgnoreCase)) return true;
+            if (a.StartsWith("run", StringComparison.OrdinalIgnoreCase)) return true;
+            if (a.StartsWith("walk", StringComparison.OrdinalIgnoreCase)) return true;
+            if (a.IndexOf("move", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("jump", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("fall", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("land", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("climb", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("ladder", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("crouch", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+            return false;
         }
 
         private void PlayGhostHeadAnim(GhostKing client, string anim)
         {
-            if (client.head == null || client.head.customHeadSpr._animManager == null) return;
+            if (client == null || client?.head == null || client?.head?.customHeadSpr._animManager == null) return;
             if (string.IsNullOrWhiteSpace(anim)) return;
             var animManager = client.head.customHeadSpr._animManager;
             animManager.play(anim.AsHaxeString(), null, null).loop(null);
@@ -521,6 +1486,205 @@ namespace DeadCellsMultiplayerMod
             net.SendHeadAnim(anim);
         }
 
+        private void SendEquippedWeapons(Inventory inv)
+        {
+            if (_netRole == NetRole.None || inv == null) return;
+            var w0 = inv.getEquippedWeaponOn(0);
+            if (w0 != null)
+                SendInventoryWeapon(w0, 0);
+            var w1 = inv.getEquippedWeaponOn(1);
+            if (w1 != null)
+                SendInventoryWeapon(w1, 1);
+        }
+
+        private void SendInventoryWeapon(InventItem item, int slot)
+        {
+            if (_netRole == NetRole.None) return;
+            if (item == null) return;
+            if (!TryGetWeaponKindId(item, out var kindId)) return;
+            var net = _net;
+            if (net == null || string.IsNullOrWhiteSpace(kindId)) return;
+            net.SendInventoryWeapon(kindId!, slot, item.permanentId, GetWeaponAmmoForSync(item));
+        }
+
+        private static bool TryGetWeaponKindId(InventItem item, out string? kindId)
+        {
+            kindId = null;
+            if (item == null) return false;
+            var kind = item.kind;
+            if (kind is InventItemKind.Weapon w)
+            {
+                kindId = w.Param0?.ToString();
+                return !string.IsNullOrWhiteSpace(kindId);
+            }
+            return false;
+        }
+
+        private static int? GetWeaponAmmoForSync(InventItem? item)
+        {
+            if(item == null)
+                return null;
+
+            try
+            {
+                var maxAmmo = item.getMaxAmmo();
+                if(maxAmmo <= 0)
+                    return null;
+
+                var ammo = item.ammo;
+                if(ammo < 0) ammo = 0;
+                if(ammo > maxAmmo) ammo = maxAmmo;
+                return ammo;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static int GetWeaponSlot(Inventory inv, InventItem item)
+        {
+            if (inv == null || item == null) return -1;
+            var id = item.permanentId;
+            var w0 = inv.getEquippedWeaponOn(0);
+            if (w0 != null && w0.permanentId == id) return 0;
+            var w1 = inv.getEquippedWeaponOn(1);
+            if (w1 != null && w1.permanentId == id) return 1;
+            return item.posID;
+        }
+
+        private bool IsLocalInventory(Inventory self)
+        {
+            return me != null && self != null && ReferenceEquals(self, me.inventory);
+        }
+
+        private void ApplyRemoteWeaponUpdate(int remoteId, string? kindId, int slot, int permanentId, int? ammo = null)
+        {
+            if (string.IsNullOrWhiteSpace(kindId)) return;
+            var net = _net;
+            var localId = net?.id ?? 0;
+            if (!TryGetClientIndex(localId, remoteId, out var index))
+                return;
+
+            var client = clients[index];
+            if (client?.inventory == null) return;
+
+            var cleaned = kindId.Replace("|", "/").Trim();
+            if (cleaned.Length == 0) return;
+
+            var inv = client.inventory;
+            var existing = permanentId != 0 ? inv.getByPermanentId(permanentId) : null;
+            var currentSlotItem = slot >= 0 ? inv.getEquippedWeaponOn(slot) : null;
+
+            if(existing == null && permanentId == 0)
+            {
+                if(IsWeaponKindMatch(currentSlotItem, cleaned))
+                    existing = currentSlotItem;
+                else
+                {
+                    var w0 = inv.getEquippedWeaponOn(0);
+                    if(IsWeaponKindMatch(w0, cleaned))
+                        existing = w0;
+                    else
+                    {
+                        var w1 = inv.getEquippedWeaponOn(1);
+                        if(IsWeaponKindMatch(w1, cleaned))
+                            existing = w1;
+                    }
+                }
+            }
+
+            if (existing == null)
+            {
+                var newItem = new InventItem(new InventItemKind.Weapon(cleaned.AsHaxeString()));
+                if (permanentId != 0)
+                    newItem.permanentId = permanentId;
+                if (slot >= 0)
+                    newItem.posID = slot;
+                _inventorySyncGuard = true;
+                try
+                {
+                    if(currentSlotItem != null)
+                        currentSlotItem.posID = -1;
+                    inv.add(newItem);
+                }
+                finally
+                {
+                    _inventorySyncGuard = false;
+                }
+                existing = newItem;
+            }
+            else if(currentSlotItem != null &&
+                    !ReferenceEquals(currentSlotItem, existing) &&
+                    (currentSlotItem.permanentId == 0 ||
+                     existing.permanentId == 0 ||
+                     currentSlotItem.permanentId != existing.permanentId))
+            {
+                currentSlotItem.posID = -1;
+            }
+
+            if (slot >= 0)
+                existing.posID = slot;
+
+            _inventorySyncGuard = true;
+            try
+            {
+                inv.equip(existing);
+                ApplyRemoteWeaponAmmo(existing, ammo);
+            }
+            finally
+            {
+                _inventorySyncGuard = false;
+            }
+        }
+
+        private static void ApplyRemoteWeaponAmmo(InventItem item, int? ammo)
+        {
+            if(item == null || !ammo.HasValue)
+                return;
+
+            try
+            {
+                var maxAmmo = item.getMaxAmmo();
+                if(maxAmmo <= 0)
+                    return;
+
+                var value = ammo.Value;
+                if(value < 0) value = 0;
+                if(value > maxAmmo) value = maxAmmo;
+                item.ammo = value;
+            }
+            catch
+            {
+            }
+        }
+
+        private static bool IsWeaponKindMatch(InventItem? item, string expectedKindId)
+        {
+            if(item == null || string.IsNullOrWhiteSpace(expectedKindId))
+                return false;
+            if(!TryGetWeaponKindId(item, out var itemKindId) || string.IsNullOrWhiteSpace(itemKindId))
+                return false;
+            return string.Equals(itemKindId, expectedKindId, StringComparison.Ordinal);
+        }
+
+        private void ResetLocalSkinSendCache()
+        {
+            _lastSentHeroSkin = null;
+            _lastSentHeroHeadSkin = null;
+        }
+
+        private void ResetDoorMarkerState()
+        {
+            _lastDoorMarkerLevelId = string.Empty;
+            _lastDoorMarkerToken = int.MinValue;
+            _localLastDoorMarkerLevelId = string.Empty;
+            _localLastDoorMarkerToken = int.MinValue;
+            _remoteLastDoorMarkers.Clear();
+            _remotePendingDoorMarkers.Clear();
+            _pendingClientDisposeTicks.Clear();
+        }
+
 
         private IPEndPoint BuildEndpoint(string ipText, int port)
         {
@@ -549,6 +1713,9 @@ namespace DeadCellsMultiplayerMod
             try
             {
                 _net?.Dispose();
+                ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+                ResetLocalSkinSendCache();
+                ResetDoorMarkerState();
 
                 _net = NetNode.CreateHost(Logger, ep);
                 _netRole = NetRole.Host;
@@ -574,6 +1741,9 @@ namespace DeadCellsMultiplayerMod
             try
             {
                 _net?.Dispose();
+                ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+                ResetLocalSkinSendCache();
+                ResetDoorMarkerState();
 
                 _net = NetNode.CreateClient(Logger, ep);
                 _netRole = NetRole.Client;
@@ -594,15 +1764,25 @@ namespace DeadCellsMultiplayerMod
 
         public void StopNetworkFromMenu()
         {
+            var roleBeforeStop = _netRole;
             try
             {
+                if (roleBeforeStop == NetRole.Client)
+                    Logger.Information("[NetMod] Disconnecting client from host...");
+                else if (roleBeforeStop == NetRole.Host)
+                    Logger.Information("[NetMod] Disposing host server...");
+
                 _net?.Dispose();
             }
             catch { }
+            ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+            ResetLocalSkinSendCache();
+            ResetDoorMarkerState();
             _net = null;
             _netRole = NetRole.None;
             GameMenu.NetRef = null;
             GameMenu.SetRole(_netRole);
+            ConnectionUI.NotifyConnectionsChanged();
         }
 
 

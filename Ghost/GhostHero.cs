@@ -15,12 +15,16 @@ using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using DeadCellsMultiplayerMod.MultiplayerModUI;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using dc.tool;
+using DeadCellsMultiplayerMod.Tools;
 
 
 namespace DeadCellsMultiplayerMod
 {
     public class GhostHero
     {
+        private const double NickScaleWindowed = 0.8;
+        private const double NickScaleFullscreen = 0.5;
+
         private readonly dc.pr.Game _game;
         private readonly Hero _me;
         private static ILogger? _log;
@@ -73,13 +77,6 @@ namespace DeadCellsMultiplayerMod
             king.canBeActivated(_me);
             king.needsLongPress = true;
             king.hasEntityTouchChecks = true;
-            // king.activeSkillsManager = new KingActiveSkillsManager(_me, king, level);
-            // king.activeSkillsManager.init();
-            // king.activeWeapon = king.activeSkillsManager.GiveRandomWeaponFromHero();
-            // if (king.activeWeapon != null)
-            // {
-                // king.activeWeaponImpl = new Weapon(_me, king.activeWeapon);
-            // }
 
 
             bool sics = false;
@@ -186,17 +183,88 @@ namespace DeadCellsMultiplayerMod
             }
             _Assets _Assets = Assets.Class;
             dc.h2d.Text text_h2d = _Assets.makeText(text.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), null, entity.spr);
+            var targetScale = GetNicknameScale();
             text_h2d.y -= 80;
             text_h2d.x -= 2.5 * text.Length;
-            text_h2d.font.size = 9;
+            text_h2d.font.size = 12;
             text_h2d.alpha = 0.8;
-            var win = dc.hxd.Window.Class.getInstance();
-            double screenWidth = win.get_width();
-            var scale = screenWidth <= 1920? 0.6d : 0.4d;
-            text_h2d.scaleX = scale;
-            text_h2d.scaleY = scale;
+            text_h2d.scaleX = targetScale;
+            text_h2d.scaleY = targetScale;
             text_h2d.textColor = 0;
             _labels[entity] = text_h2d;
+        }
+
+        public void UpdateLabels()
+        {
+            if (_labels.Count == 0) return;
+            var targetScale = GetNicknameScale();
+            List<Entity>? toRemove = null;
+            foreach (var pair in _labels)
+            {
+                var entity = pair.Key;
+                var label = pair.Value;
+                if (entity == null || label == null || entity.spr == null || label.parent == null)
+                {
+                    toRemove ??= new List<Entity>();
+                    if (entity != null)
+                        toRemove.Add(entity);
+                    continue;
+                }
+
+                var textValue = label.text?.ToString() ?? string.Empty;
+                int len = textValue.Length;
+                var targetX = -2.5 * len;
+                var targetY = -80;
+                if (entity.dir < 0)
+                {
+                    label.scaleX = -targetScale;
+                    label.x = -targetX;
+                }
+                else
+                {
+                    label.scaleX = targetScale;
+                    label.x = targetX;
+                }
+                label.scaleY = targetScale;
+                label.y = targetY;
+            }
+
+            if (toRemove == null) return;
+            for (int i = 0; i < toRemove.Count; i++)
+            {
+                _labels.Remove(toRemove[i]);
+            }
+        }
+
+        private static double GetNicknameScale()
+        {
+            try
+            {
+                var win = dc.hxd.Window.Class.getInstance();
+                if (win != null)
+                {
+                    var sdlWin = win.window;
+                    if (sdlWin != null)
+                    {
+                        var displayMode = sdlWin.displayMode;
+                        if (displayMode == 1 || displayMode == 2)
+                            return NickScaleFullscreen;
+                        if (displayMode == 0)
+                            return NickScaleWindowed;
+                    }
+
+                    var mode = win.fullScreenMode;
+                    if (mode == 1 || mode == 2)
+                        return NickScaleFullscreen;
+                    if (mode == 0)
+                        return NickScaleWindowed;
+                }
+            }
+            catch
+            {
+            }
+
+            return NickScaleWindowed;
         }
 
     }

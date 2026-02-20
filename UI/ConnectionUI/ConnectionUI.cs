@@ -16,6 +16,7 @@ using dc.hxd.res;
 using dc.haxe.ds;
 using dc.achievements;
 using ModCore.Modules;
+using DeadCellsMultiplayerMod.Tools;
 
 namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 {
@@ -208,6 +209,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             var win = dc.hxd.Window.Class.getInstance();
             double screenWidth = win.get_width();
             double screenHeight = win.get_height();
+            var uiScale = UiScale.GetResolutionScale();
 
 
             this.rootFlow.set_minWidth((int)(screenWidth * 0.4)); //宽度 40%
@@ -236,6 +238,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
 
             double posX = screenWidth - flowW - base.get_pixelScale.Invoke() * 200.0; // 离右边 20 像素
+            posX = screenWidth - flowW - base.get_pixelScale.Invoke() * 200.0 * uiScale;
             double posY = (screenHeight - flowH) / 1.35;
             this.rootFlow.x = posX;
             this.rootFlow.y = posY;
@@ -256,6 +259,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         {
             this.MainTitleflow = new Flow(null);
             this.MainTitleflow.isVertical = true;
+            var uiScale = UiScale.GetResolutionScale();
 
             FlowAlign flowAlign = this.MainTitleflow.set_horizontalAlign(new FlowAlign.Middle());
             flowAlign = this.MainTitleflow.set_verticalAlign(new FlowAlign.Top());
@@ -274,8 +278,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 null
             );
 
-            title.scaleX = 0.6;
-            title.scaleY = 0.6;
+            title.scaleX = 0.6 * uiScale;
+            title.scaleY = 0.6 * uiScale;
 
             this.MainTitleflow.addChild(title);
 
@@ -293,8 +297,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 false,
                 null
             );
-            subtitle.scaleX = 0.5;
-            subtitle.scaleY = 0.5;
+            subtitle.scaleX = 0.5 * uiScale;
+            subtitle.scaleY = 0.5 * uiScale;
 
 
             Flow subtitleWrapper = new Flow(null);
@@ -307,7 +311,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             Flow playersListWrapper = new Flow(null);
             playersListWrapper.isVertical = true;
             playersListWrapper.set_horizontalAlign(new FlowAlign.Middle());
-            playersListWrapper.set_verticalSpacing(4);
+            playersListWrapper.set_verticalSpacing((int)(4 * uiScale));
 
             this.MainTitleflow.addChild(playersListWrapper);
             updateConnections();
@@ -330,6 +334,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             if (this.MainTitleflow == null)
                 return;
 
+            var uiScale = UiScale.GetResolutionScale();
             for (int i = 0; i < this.connectionLabels.Count; i++)
             {
                 var label = this.connectionLabels[i];
@@ -353,8 +358,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 false,
                 null
             );
-                player2.scaleX = 0.5;
-                player2.scaleY = 0.5;
+                player2.scaleX = 0.5 * uiScale;
+                player2.scaleY = 0.5 * uiScale;
                 this.MainTitleflow.addChild(player2);
                 this.connectionLabels.Add(player2);
             }
