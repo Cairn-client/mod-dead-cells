@@ -17,6 +17,7 @@ namespace DeadCellsMultiplayerMod.Ghost;
 internal static class KingWeaponHooks
 {
     private static bool _installed;
+    private static readonly Dictionary<int, long> _recentKingWeaponMobUidHits = new();
     private static readonly Dictionary<int, long> _recentKingWeaponMobRefHits = new();
     private static readonly Dictionary<string, long> _recentKingWeaponMobSignatureHits = new(StringComparer.Ordinal);
     private const double RecentKingWeaponMobHitSeconds = 3.0;
@@ -768,7 +769,7 @@ internal static class KingWeaponHooks
 
         try
         {
-            return ReferenceEquals(self.owner, localHero);
+            return IsSameEntity(self.owner, localHero);
         }
         catch
         {
@@ -782,7 +783,7 @@ internal static class KingWeaponHooks
             return false;
 
         var localHero = ModEntry.me;
-        if(localHero == null || !ReferenceEquals(self, localHero))
+        if(localHero == null || !IsSameEntity(self, localHero))
             return false;
 
         if(KingWeaponSupport.IsInKingContext)
@@ -815,7 +816,7 @@ internal static class KingWeaponHooks
             return false;
 
         var localHero = ModEntry.me;
-        if(localHero == null || !ReferenceEquals(self, localHero))
+        if(localHero == null || !IsSameEntity(self, localHero))
             return false;
 
         if(KingWeaponSupport.IsInKingContext)
@@ -943,6 +944,10 @@ internal static class KingWeaponHooks
         {
             PruneRecentKingWeaponMobHitsLocked(now, maxAgeTicks);
 
+            var uid = GetEntityUid(mob);
+            if(uid > 0)
+                _recentKingWeaponMobUidHits[uid] = now;
+
             var refKey = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(mob);
             _recentKingWeaponMobRefHits[refKey] = now;
 
@@ -963,6 +968,15 @@ internal static class KingWeaponHooks
         lock(_recentKingWeaponMobRefHits)
         {
             PruneRecentKingWeaponMobHitsLocked(now, maxAgeTicks);
+
+            var uid = GetEntityUid(mob);
+            if(uid > 0 && _recentKingWeaponMobUidHits.Remove(uid))
+            {
+                var signatureByUid = BuildMobHitSignature(mob);
+                if(!string.IsNullOrWhiteSpace(signatureByUid))
+                    _recentKingWeaponMobSignatureHits.Remove(signatureByUid);
+                return true;
+            }
 
             var refKey = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(mob);
             if(_recentKingWeaponMobRefHits.ContainsKey(refKey))
@@ -986,6 +1000,19 @@ internal static class KingWeaponHooks
 
     private static void PruneRecentKingWeaponMobHitsLocked(long now, long maxAgeTicks)
     {
+        if(_recentKingWeaponMobUidHits.Count > 0)
+        {
+            var staleUid = new List<int>();
+            foreach(var pair in _recentKingWeaponMobUidHits)
+            {
+                if(now - pair.Value > maxAgeTicks)
+                    staleUid.Add(pair.Key);
+            }
+
+            for(int i = 0; i < staleUid.Count; i++)
+                _recentKingWeaponMobUidHits.Remove(staleUid[i]);
+        }
+
         if(_recentKingWeaponMobRefHits.Count > 0)
         {
             var staleRef = new List<int>();
@@ -1031,6 +1058,37 @@ internal static class KingWeaponHooks
         {
             return string.Empty;
         }
+    }
+
+    private static int GetEntityUid(Entity? entity)
+    {
+        if(entity == null)
+            return -1;
+
+        try
+        {
+            return entity.__uid;
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    private static bool IsSameEntity(Entity? a, Entity? b)
+    {
+        if(a == null || b == null)
+            return false;
+
+        if(ReferenceEquals(a, b))
+            return true;
+
+        var uidA = GetEntityUid(a);
+        var uidB = GetEntityUid(b);
+        if(uidA > 0 && uidB > 0)
+            return uidA == uidB;
+
+        return false;
     }
 
     private static void TryCleanupReturnedAmmo(Ammo? ammo)

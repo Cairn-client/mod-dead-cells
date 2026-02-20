@@ -151,6 +151,8 @@ namespace DeadCellsMultiplayerMod
         private readonly HashSet<int> _downedAnnouncements = new();
         private readonly Dictionary<int, RemoteDoorMarkerState> _remoteLastDoorMarkers = new();
         private readonly Dictionary<int, RemoteDoorMarkerState> _remotePendingDoorMarkers = new();
+        private readonly Dictionary<int, long> _pendingClientDisposeTicks = new();
+        private const double ClientDisposeTransitionSeconds = 0.28;
 
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
@@ -1096,9 +1098,11 @@ namespace DeadCellsMultiplayerMod
                 ProcessRemoteDoorMarker(remote);
                 if (!ShouldKeepRemoteKingVisibleInRoom(remote, localLevelId))
                 {
-                    DisposeClientSlot(index, clearIdentity: false);
+                    QueueClientDisposeWithTransition(index);
                     continue;
                 }
+
+                CancelPendingClientDispose(index);
 
                 var client = EnsureClientKingSlot(index);
                 if (client == null)
@@ -1229,6 +1233,37 @@ namespace DeadCellsMultiplayerMod
             return true;
         }
 
+        private void QueueClientDisposeWithTransition(int slot)
+        {
+            if (slot < 0 || slot >= clients.Length)
+                return;
+
+            var client = clients[slot];
+            if (client == null)
+            {
+                DisposeClientSlot(slot, clearIdentity: false);
+                return;
+            }
+
+            if (!_pendingClientDisposeTicks.TryGetValue(slot, out var startedAtTicks))
+            {
+                _pendingClientDisposeTicks[slot] = Stopwatch.GetTimestamp();
+                try { client.spr?._animManager?.play("walkOut".AsHaxeString(), null, null); } catch { }
+                return;
+            }
+
+            var elapsed = Stopwatch.GetElapsedTime(startedAtTicks).TotalSeconds;
+            if (elapsed < ClientDisposeTransitionSeconds)
+                return;
+
+            DisposeClientSlot(slot, clearIdentity: false);
+        }
+
+        private void CancelPendingClientDispose(int slot)
+        {
+            _pendingClientDisposeTicks.Remove(slot);
+        }
+
         private GhostKing? EnsureClientKingSlot(int slot)
         {
             if (slot < 0 || slot >= clients.Length)
@@ -1264,6 +1299,8 @@ namespace DeadCellsMultiplayerMod
         {
             if (slot < 0 || slot >= clients.Length)
                 return;
+
+            _pendingClientDisposeTicks.Remove(slot);
 
             var previousRemoteId = clientIds[slot];
 
@@ -1645,6 +1682,7 @@ namespace DeadCellsMultiplayerMod
             _localLastDoorMarkerToken = int.MinValue;
             _remoteLastDoorMarkers.Clear();
             _remotePendingDoorMarkers.Clear();
+            _pendingClientDisposeTicks.Clear();
         }
 
 
