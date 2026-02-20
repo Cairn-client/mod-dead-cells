@@ -40,7 +40,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<int, long> clientLastMobHitReportTick = new();
         private static readonly Dictionary<int, string> hostMobTypeBySyncId = new();
         private static readonly List<Entity> hostDetectedTargets = new();
-        private static readonly Random hostTargetRandom = new();
         private static int suppressMobDieSendDepth;
 
         private static Level? currentLevel;
@@ -55,13 +54,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private const double ClientMobDrawSendRateHz = 60.0;
         private const double HostStateSendRateHz = 60.0;
-        private const double ClientInterpolationAlpha = 0.5;
+        private const double ClientInterpolationAlpha = 0.7;
         private const double ClientAiLockSeconds = 0.3;
         private const double ClientAttackUnlockSeconds = 2.2;
         private const double HostContactAttackSendCooldownSeconds = 0.3;
         private const double ClientMobHitReportMinIntervalSeconds = 0.05;
         private const double ClientAnimSpeedEpsilon = 0.05;
         private static readonly bool ClientSyncVerticalPosition = false;
+        private const double ClientTurnSnapDeltaPx = 2.0;
         private const double PixelsPerCase = 24.0;
         private const double MaxCoordinateMatchDistance = 96.0;
         private const double MaxCoordinateMatchDistanceSq = MaxCoordinateMatchDistance * MaxCoordinateMatchDistance;
@@ -514,13 +514,19 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             orig(self, a);
 
             var net = GameMenu.NetRef;
-            if (!IsHost(net))
-                return;
-
             var ownerMob = self?.owner as Mob;
             var skillId = self?.id?.ToString() ?? string.Empty;
 
             if (ownerMob == null || string.IsNullOrWhiteSpace(skillId))
+                return;
+
+            if (IsClient(net))
+            {
+                RegisterClientQueuedOldSkillMarker(ownerMob, skillId);
+                return;
+            }
+
+            if (!IsHost(net))
                 return;
 
             TrySendHostMobAttack(ownerMob, OldSkillExecutePacketPrefix + skillId, false, null);
@@ -589,6 +595,19 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var x = GetSyncX(mob);
             var y = GetSyncY(mob);
             var dir = NormalizeDir(mob.dir);
+            if (targetEntity != null)
+            {
+                try
+                {
+                    var targetX = GetWorldX(targetEntity);
+                    var towardTarget = targetX < x ? -1 : targetX > x ? 1 : dir;
+                    if (towardTarget != 0)
+                        dir = towardTarget;
+                }
+                catch
+                {
+                }
+            }
             net.SendMobAttack(mobSyncId, skillId, requiresTargetInArea, data, x, y, targetUserId, dir);
         }
 
@@ -1273,13 +1292,27 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 {
                     selected = currentTarget;
                 }
-                else if (hostDetectedTargets.Count == 1)
-                {
-                    selected = hostDetectedTargets[0];
-                }
                 else
                 {
-                    selected = hostDetectedTargets[hostTargetRandom.Next(hostDetectedTargets.Count)];
+                    var mx = GetWorldX(mob);
+                    var my = GetWorldY(mob);
+                    var bestDistSq = double.MaxValue;
+
+                    for (int i = 0; i < hostDetectedTargets.Count; i++)
+                    {
+                        var candidate = hostDetectedTargets[i];
+                        if (candidate == null)
+                            continue;
+
+                        var dx = GetWorldX(candidate) - mx;
+                        var dy = GetWorldY(candidate) - my;
+                        var distSq = dx * dx + dy * dy;
+                        if (distSq < bestDistSq)
+                        {
+                            bestDistSq = distSq;
+                            selected = candidate;
+                        }
+                    }
                 }
 
                 // Never keep entity wrappers across frames here.
@@ -1552,6 +1585,25 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (dir < 0) return -1;
             if (dir > 0) return 1;
             return 0;
+        }
+
+        private static int ComputeResponsiveFacingDir(Mob mob, ClientMobState state)
+        {
+            if (mob == null)
+                return NormalizeDir(state.Dir);
+
+            var netDir = NormalizeDir(state.Dir);
+            if (netDir != 0)
+                return netDir;
+
+            var currentX = GetWorldX(mob);
+            var deltaX = state.X - currentX;
+            if (deltaX >= ClientTurnSnapDeltaPx)
+                return 1;
+            if (deltaX <= -ClientTurnSnapDeltaPx)
+                return -1;
+
+            return NormalizeDir(mob.dir);
         }
 
         private static double GetWorldX(Entity entity)
@@ -1856,7 +1908,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     if (localIndex >= 0 && localIndex < trackedMobs.Count)
                         mob = trackedMobs[localIndex];
                     if (mob != null)
+                    {
+                        var incomingDir = NormalizeDir(state.Dir);
+                        if (incomingDir != 0 && !IsClientAttackUnlockActiveLocked(localIndex, nowTick))
+                        {
+                            try { mob.dir = incomingDir; } catch { }
+                        }
+
                         lifeApplies.Add((mob, state.Life, state.MaxLife));
+                    }
 
                     var animPayload = state.AnimPayload;
                     if (IsClientAttackUnlockActiveLocked(localIndex, nowTick) &&
@@ -1909,6 +1969,23 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                         var unlockTicks = (long)(Stopwatch.Frequency * ClientAttackUnlockSeconds);
                         clientAttackUnlockUntilTick[localIndex] = Stopwatch.GetTimestamp() + unlockTicks;
                         var normalizedAttackDir = NormalizeDir(attack.Dir);
+                        if (normalizedAttackDir == 0 && mob != null)
+                        {
+                            try
+                            {
+                                var fallbackTarget = ResolveClientAttackTargetEntity(mob, attack.TargetUserId);
+                                if (fallbackTarget != null)
+                                {
+                                    var mobX = GetWorldX(mob);
+                                    var targetX = GetWorldX(fallbackTarget);
+                                    normalizedAttackDir = targetX < mobX ? -1 : targetX > mobX ? 1 : NormalizeDir(mob.dir);
+                                }
+                            }
+                            catch
+                            {
+                            }
+                        }
+
                         if (normalizedAttackDir != 0)
                             clientAttackForcedDir[localIndex] = normalizedAttackDir;
                         else
@@ -2103,10 +2180,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (oldSkill == null)
                     return;
 
-                // Host already validated attack timing/target, so do not gate replay by client-side range checks.
-                mob.queueAttack(oldSkill, false, data);
-                if (IsClientOldSkillQueuedOrCharging(mob, oldSkill))
-                    RegisterClientQueuedOldSkillMarker(mob, skillId);
+                mob.queueAttack(oldSkill, requiresTargetInArea, data);
+                var queuedOrCharging = IsClientOldSkillQueuedOrCharging(mob, oldSkill);
+                if (!queuedOrCharging)
+                {
+                    TrySetClientMobAttackTarget(mob, targetUserId, attackDir);
+                    try { oldSkill.prepare(data); } catch { }
+                    oldSkill.execute(null);
+                    queuedOrCharging = true;
+                }
             }
             catch
             {
@@ -2123,7 +2205,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     TrySetClientMobAttackTarget(mob, targetUserId, attackDir);
                     try { oldSkill.prepare(data); } catch { }
                     oldSkill.execute(null);
-                    RegisterClientQueuedOldSkillMarker(mob, skillId);
                 }
                 catch
                 {
@@ -2287,12 +2368,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     clientQueuedOldSkillMarkers.Remove(localIndex);
                     return false;
                 }
+
+                if (string.Equals(marker.SkillId, incomingSkillId, StringComparison.Ordinal))
+                {
+                    clientQueuedOldSkillMarkers.Remove(localIndex);
+                    return true;
+                }
             }
 
-            if (string.Equals(marker.SkillId, incomingSkillId, StringComparison.Ordinal))
-                return true;
-
-            return IsClientOldSkillQueuedOrCharging(mob, null);
+            return false;
         }
 
         private static void TrySetClientMobAttackTarget(Mob mob, int targetUserId, int attackDir)
@@ -2473,8 +2557,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (useForcedDir)
                 self.dir = forcedDir;
-            else if (target.Dir != 0)
-                self.dir = target.Dir;
+            else
+            {
+                var responsiveDir = ComputeResponsiveFacingDir(self, target);
+                if (responsiveDir != 0)
+                    self.dir = responsiveDir;
+            }
 
             ApplyAuthoritativeLifeState(self, target.Life, target.MaxLife);
         }
@@ -2550,8 +2638,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (useForcedDir)
                 self.dir = forcedDir;
-            else if (target.Dir != 0)
-                self.dir = target.Dir;
+            else
+            {
+                var responsiveDir = ComputeResponsiveFacingDir(self, target);
+                if (responsiveDir != 0)
+                    self.dir = responsiveDir;
+            }
 
             if (attackUnlock)
                 return;

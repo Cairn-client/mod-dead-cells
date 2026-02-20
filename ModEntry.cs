@@ -126,9 +126,10 @@ namespace DeadCellsMultiplayerMod
         private const double LocalReviveBodyYOffsetPx = 0.5;
         private const double PostRevivePositionLockSeconds = 0.0;
         private const string ReviveHintText = "Hold R to restore";
-        private string _lastRoomStateLevelId = string.Empty;
-        private int _lastRoomStateRoomId = int.MinValue;
-        private const double RoomMismatchKeepDistancePx = 850;
+        private string _lastDoorMarkerLevelId = string.Empty;
+        private int _lastDoorMarkerToken = int.MinValue;
+        private string _localLastDoorMarkerLevelId = string.Empty;
+        private int _localLastDoorMarkerToken = int.MinValue;
 
         private sealed class RemoteDownedState
         {
@@ -139,9 +140,17 @@ namespace DeadCellsMultiplayerMod
             public long UpdatedAtTicks;
         }
 
+        private sealed class RemoteDoorMarkerState
+        {
+            public int MarkerToken;
+            public string LevelId = string.Empty;
+        }
+
         private readonly Dictionary<int, RemoteDownedState> _remoteDowned = new();
         private readonly Dictionary<int, RemoteDownedCorpse> _remoteDownedCines = new();
         private readonly HashSet<int> _downedAnnouncements = new();
+        private readonly Dictionary<int, RemoteDoorMarkerState> _remoteLastDoorMarkers = new();
+        private readonly Dictionary<int, RemoteDoorMarkerState> _remotePendingDoorMarkers = new();
 
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
@@ -402,25 +411,7 @@ namespace DeadCellsMultiplayerMod
             {
                 try
                 {
-                    var targetLevelId = self.destMap?.id?.ToString();
-                    var targetRoomId = self.linkId;
-                    if (targetRoomId >= 0)
-                    {
-                        var targetAreaKey = targetRoomId;
-                        try
-                        {
-                            var targetRoom = self.destMap?.getRoomById(targetRoomId);
-                            var mapped = ComputeRoomAreaKey(targetRoom);
-                            if (mapped >= 0)
-                                targetAreaKey = mapped;
-                        }
-                        catch
-                        {
-                        }
-
-                        SendRoomTarget(targetLevelId, targetAreaKey, force: true);
-                        shouldRefresh = true;
-                    }
+                    shouldRefresh = SendDoorMarkerFromActivation(self);
                 }
                 catch
                 {
@@ -694,7 +685,6 @@ namespace DeadCellsMultiplayerMod
                 rLastY[i] = 0;
             }
 
-            SendCurrentRoomStateIfNeeded(force: true);
             ReceiveGhostCoords();
         }
 
@@ -735,7 +725,6 @@ namespace DeadCellsMultiplayerMod
             TryRecoverMissedFakeDeathFromLife();
             if (!_localFakeDead)
                 SendHeroCoords();
-            SendCurrentRoomStateIfNeeded(force: false);
             ReceiveGhostCoords();
             UpdateFakeDeathFlow(dt);
             MaintainPostRevivePositionLock();
@@ -794,99 +783,113 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             if (!force &&
-                string.Equals(_lastRoomStateLevelId, effectiveLevelId, StringComparison.Ordinal) &&
-                _lastRoomStateRoomId == targetRoomId)
+                string.Equals(_lastDoorMarkerLevelId, effectiveLevelId, StringComparison.Ordinal) &&
+                _lastDoorMarkerToken == targetRoomId)
             {
                 return;
             }
 
             net.SendRoomTarget(effectiveLevelId, targetRoomId);
-            _lastRoomStateLevelId = effectiveLevelId;
-            _lastRoomStateRoomId = targetRoomId;
+            _lastDoorMarkerLevelId = effectiveLevelId;
+            _lastDoorMarkerToken = targetRoomId;
         }
 
-        private void SendCurrentRoomStateIfNeeded(bool force)
+        private bool SendDoorMarkerFromActivation(ZDoor self)
         {
-            if (me == null)
-                return;
-            if (!TryGetHeroRoomSignature(me, out var currentLevelId, out var currentRoomId))
-                return;
-
-            SendRoomTarget(currentLevelId, currentRoomId, force);
-        }
-
-        private static bool TryGetHeroRoomSignature(Hero? hero, out string levelIdValue, out int roomId)
-        {
-            levelIdValue = string.Empty;
-            roomId = -1;
-            if (hero == null)
+            if (self == null)
                 return false;
 
-            try
-            {
-                var level = hero._level;
-                var map = level?.map;
-                if (map == null)
-                    return false;
-
-                levelIdValue = map.id?.ToString() ?? string.Empty;
-                Room? room = null;
-
-                if (hero.lastRoomId >= 0)
-                    room = map.getRoomById(hero.lastRoomId);
-                if (room == null)
-                    room = map.getRoomAt(hero.cx, hero.cy);
-                if (room == null)
-                    return false;
-
-                roomId = ComputeRoomAreaKey(room);
-                if (roomId < 0)
-                    roomId = room.id;
-                return roomId >= 0;
-            }
-            catch
-            {
+            var targetLevelId = self.destMap?.id?.ToString();
+            if (string.IsNullOrWhiteSpace(targetLevelId))
+                targetLevelId = GetCurrentLevelId();
+            if (string.IsNullOrWhiteSpace(targetLevelId))
                 return false;
+
+            var sourceLevelId = GetCurrentLevelId();
+            if (string.IsNullOrWhiteSpace(sourceLevelId))
+            {
+                try { sourceLevelId = me?._level?.map?.id?.ToString() ?? string.Empty; }
+                catch { sourceLevelId = string.Empty; }
             }
+
+            var linkId = -1;
+            var doorCx = -1;
+            var doorCy = -1;
+            try { linkId = self.linkId; } catch { }
+            try { doorCx = self.cx; } catch { }
+            try { doorCy = self.cy; } catch { }
+
+            var marker = ComputeDoorMarkerToken(sourceLevelId, targetLevelId, linkId, doorCx, doorCy);
+            if (marker < 0)
+                return false;
+
+            SendRoomTarget(targetLevelId, marker, force: true);
+            RegisterLocalDoorMarker(targetLevelId, marker);
+            return true;
         }
 
-        private static int ComputeRoomAreaKey(Room? room)
+        private static int ComputeDoorMarkerToken(string? sourceLevelId, string? targetLevelId, int linkId, int doorCx, int doorCy)
         {
-            if (room == null)
-                return -1;
+            var src = string.IsNullOrWhiteSpace(sourceLevelId) ? "?" : sourceLevelId.Trim();
+            var dst = string.IsNullOrWhiteSpace(targetLevelId) ? "?" : targetLevelId.Trim();
+            var key = string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{src}>{dst}|{linkId}|{doorCx}|{doorCy}");
 
-            try
+            unchecked
             {
-                var group = room.rGroup;
-                if (group >= 0)
-                    return group;
-            }
-            catch
-            {
-            }
+                uint hash = 2166136261;
+                for (int i = 0; i < key.Length; i++)
+                {
+                    hash ^= key[i];
+                    hash *= 16777619;
+                }
 
-            try
-            {
-                var parent = room.parent;
-                if (parent != null && parent.id >= 0)
-                    return parent.id;
+                var positive = (int)(hash & 0x7FFFFFFF);
+                return positive == 0 ? 1 : positive;
             }
-            catch
-            {
-            }
-
-            try
-            {
-                if (room.id >= 0)
-                    return room.id;
-            }
-            catch
-            {
-            }
-
-            return -1;
         }
 
+        private void RegisterLocalDoorMarker(string? levelId, int markerToken)
+        {
+            if (markerToken < 0)
+                return;
+
+            _localLastDoorMarkerLevelId = string.IsNullOrWhiteSpace(levelId)
+                ? string.Empty
+                : levelId.Trim();
+            _localLastDoorMarkerToken = markerToken;
+
+            var knownRemoteIds = new HashSet<int>();
+            for (int i = 0; i < clientIds.Length; i++)
+            {
+                var remoteId = clientIds[i];
+                if (remoteId > 0)
+                    knownRemoteIds.Add(remoteId);
+            }
+
+            foreach (var remoteId in _remoteLastDoorMarkers.Keys)
+                knownRemoteIds.Add(remoteId);
+
+            foreach (var remoteId in knownRemoteIds)
+            {
+                if (_remoteLastDoorMarkers.TryGetValue(remoteId, out var state) &&
+                    state != null &&
+                    state.MarkerToken == markerToken &&
+                    string.Equals(state.LevelId, _localLastDoorMarkerLevelId, StringComparison.Ordinal))
+                {
+                    _remotePendingDoorMarkers.Remove(remoteId);
+                    continue;
+                }
+
+                // Local crossed a door and this remote hasn't confirmed the same door marker yet.
+                _remotePendingDoorMarkers[remoteId] = new RemoteDoorMarkerState
+                {
+                    MarkerToken = markerToken,
+                    LevelId = _localLastDoorMarkerLevelId
+                };
+            }
+        }
 
         double last_x, last_y;
         int lastDir;
@@ -1082,27 +1085,6 @@ namespace DeadCellsMultiplayerMod
                 try { localLevelId = me._level?.map?.id?.ToString() ?? string.Empty; }
                 catch { localLevelId = string.Empty; }
             }
-            var localRoomId = -1;
-            try
-            {
-                var map = me._level?.map;
-                Room? localRoom = null;
-                if (map != null)
-                {
-                    if (me.lastRoomId >= 0)
-                        localRoom = map.getRoomById(me.lastRoomId);
-                    if (localRoom == null)
-                        localRoom = map.getRoomAt(me.cx, me.cy);
-                }
-
-                localRoomId = ComputeRoomAreaKey(localRoom);
-                if (localRoomId < 0 && localRoom != null)
-                    localRoomId = localRoom.id;
-            }
-            catch
-            {
-                localRoomId = -1;
-            }
 
             foreach (var remote in remotes)
             {
@@ -1111,7 +1093,8 @@ namespace DeadCellsMultiplayerMod
 
                 remotePlayerId = remote.Id;
                 clientIds[index] = remote.Id;
-                if (!ShouldKeepRemoteKingVisibleInRoom(remote, localLevelId, localRoomId))
+                ProcessRemoteDoorMarker(remote);
+                if (!ShouldKeepRemoteKingVisibleInRoom(remote, localLevelId))
                 {
                     DisposeClientSlot(index, clearIdentity: false);
                     continue;
@@ -1172,7 +1155,7 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private bool ShouldKeepRemoteKingVisibleInRoom(NetNode.RemoteSnapshot remote, string localLevelId, int localRoomId)
+        private bool ShouldKeepRemoteKingVisibleInRoom(NetNode.RemoteSnapshot remote, string localLevelId)
         {
             if (string.IsNullOrWhiteSpace(localLevelId))
                 return true;
@@ -1184,42 +1167,66 @@ namespace DeadCellsMultiplayerMod
                 return false;
             }
 
-            if (localRoomId < 0)
-                return true;
-
-            if (remote.HasRoom &&
-                remote.RoomId.HasValue &&
-                remote.RoomId.Value >= 0 &&
-                !string.IsNullOrWhiteSpace(remote.RoomLevelId))
+            if (_remotePendingDoorMarkers.TryGetValue(remote.Id, out var pending) &&
+                pending != null)
             {
-                if (!string.Equals(remote.RoomLevelId, localLevelId, StringComparison.Ordinal))
-                    return false;
-
-                if (remote.RoomId.Value == localRoomId)
-                    return true;
-
-                // Transition/chest/teleporter boundaries can report different room ids
-                // while players are still effectively in the same visible area.
-                return ShouldKeepRemoteByProximity(remote);
+                return false;
             }
 
             return true;
         }
 
-        private bool ShouldKeepRemoteByProximity(NetNode.RemoteSnapshot remote)
+        private void ProcessRemoteDoorMarker(NetNode.RemoteSnapshot remote)
         {
-            var hero = me;
-            if (hero?.spr == null)
-                return false;
+            if (!remote.HasRoom ||
+                !remote.RoomId.HasValue ||
+                remote.RoomId.Value < 0 ||
+                string.IsNullOrWhiteSpace(remote.RoomLevelId))
+            {
+                return;
+            }
 
-            var dx = remote.X - hero.spr.x;
-            var dy = remote.Y - hero.spr.y;
-            if (!double.IsFinite(dx) || !double.IsFinite(dy))
-                return false;
+            var markerToken = remote.RoomId.Value;
+            var markerLevelId = remote.RoomLevelId.Trim();
+            if (string.IsNullOrWhiteSpace(markerLevelId))
+                return;
 
-            var distSq = dx * dx + dy * dy;
-            var maxDist = RoomMismatchKeepDistancePx;
-            return distSq <= maxDist * maxDist;
+            if (_remoteLastDoorMarkers.TryGetValue(remote.Id, out var last) &&
+                last != null &&
+                last.MarkerToken == markerToken &&
+                string.Equals(last.LevelId, markerLevelId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _remoteLastDoorMarkers[remote.Id] = new RemoteDoorMarkerState
+            {
+                MarkerToken = markerToken,
+                LevelId = markerLevelId
+            };
+
+            if (IsLocalDoorMarkerMatch(markerLevelId, markerToken))
+            {
+                _remotePendingDoorMarkers.Remove(remote.Id);
+                return;
+            }
+
+            _remotePendingDoorMarkers[remote.Id] = new RemoteDoorMarkerState
+            {
+                MarkerToken = markerToken,
+                LevelId = markerLevelId
+            };
+        }
+
+        private bool IsLocalDoorMarkerMatch(string markerLevelId, int markerToken)
+        {
+            if (markerToken < 0 || string.IsNullOrWhiteSpace(markerLevelId))
+                return false;
+            if (_localLastDoorMarkerToken != markerToken)
+                return false;
+            if (!string.Equals(_localLastDoorMarkerLevelId, markerLevelId, StringComparison.Ordinal))
+                return false;
+            return true;
         }
 
         private GhostKing? EnsureClientKingSlot(int slot)
@@ -1258,6 +1265,8 @@ namespace DeadCellsMultiplayerMod
             if (slot < 0 || slot >= clients.Length)
                 return;
 
+            var previousRemoteId = clientIds[slot];
+
             var head = clientHeads[slot];
             if (head != null)
             {
@@ -1276,6 +1285,12 @@ namespace DeadCellsMultiplayerMod
 
             if (!clearIdentity)
                 return;
+
+            if (previousRemoteId > 0)
+            {
+                _remoteLastDoorMarkers.Remove(previousRemoteId);
+                _remotePendingDoorMarkers.Remove(previousRemoteId);
+            }
 
             clientIds[slot] = 0;
             clientLabels[slot] = null;
@@ -1622,6 +1637,16 @@ namespace DeadCellsMultiplayerMod
             _lastSentHeroHeadSkin = null;
         }
 
+        private void ResetDoorMarkerState()
+        {
+            _lastDoorMarkerLevelId = string.Empty;
+            _lastDoorMarkerToken = int.MinValue;
+            _localLastDoorMarkerLevelId = string.Empty;
+            _localLastDoorMarkerToken = int.MinValue;
+            _remoteLastDoorMarkers.Clear();
+            _remotePendingDoorMarkers.Clear();
+        }
+
 
         private IPEndPoint BuildEndpoint(string ipText, int port)
         {
@@ -1652,6 +1677,7 @@ namespace DeadCellsMultiplayerMod
                 _net?.Dispose();
                 ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
                 ResetLocalSkinSendCache();
+                ResetDoorMarkerState();
 
                 _net = NetNode.CreateHost(Logger, ep);
                 _netRole = NetRole.Host;
@@ -1679,6 +1705,7 @@ namespace DeadCellsMultiplayerMod
                 _net?.Dispose();
                 ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
                 ResetLocalSkinSendCache();
+                ResetDoorMarkerState();
 
                 _net = NetNode.CreateClient(Logger, ep);
                 _netRole = NetRole.Client;
@@ -1712,6 +1739,7 @@ namespace DeadCellsMultiplayerMod
             catch { }
             ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
             ResetLocalSkinSendCache();
+            ResetDoorMarkerState();
             _net = null;
             _netRole = NetRole.None;
             GameMenu.NetRef = null;

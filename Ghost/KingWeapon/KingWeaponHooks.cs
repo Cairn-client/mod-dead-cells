@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using dc;
 using dc.en;
 using dc.en.loot;
@@ -15,6 +17,9 @@ namespace DeadCellsMultiplayerMod.Ghost;
 internal static class KingWeaponHooks
 {
     private static bool _installed;
+    private static readonly Dictionary<int, long> _recentKingWeaponMobRefHits = new();
+    private static readonly Dictionary<string, long> _recentKingWeaponMobSignatureHits = new(StringComparer.Ordinal);
+    private const double RecentKingWeaponMobHitSeconds = 3.0;
 
     internal static void Install()
     {
@@ -29,6 +34,8 @@ internal static class KingWeaponHooks
 
         Hook_Hero.lockControlFromSkill += Hook_Hero_lockControlFromSkill;
         Hook_Hero.unlockControls += Hook_Hero_unlockControls;
+        Hook_Hero.addKillCount += Hook_Hero_addKillCount;
+        Hook_Hero.onMobDeath += Hook_Hero_onMobDeath;
         Hook_Viewport.bumpDir += Hook_Viewport_bumpDir;
 
         Hook_Entity.recoil += Hook_Entity_recoil;
@@ -37,7 +44,12 @@ internal static class KingWeaponHooks
         Hook_Entity.cancelVelocities += Hook_Entity_cancelVelocities;
         Hook_Entity.onDamage += Hook_Entity_onDamage;
         Hook_Entity.setAffectS += Hook_Entity_setAffectS;
+        Hook_Entity.addTimeToAffect += Hook_Entity_addTimeToAffect;
+        Hook_Entity.removeAffects += Hook_Entity_removeAffects;
         Hook_Entity.removeAllAffects += Hook_Entity_removeAllAffects;
+        Hook_Entity.resetAllAffectToTime += Hook_Entity_resetAllAffectToTime;
+        Hook_Entity.multiplyAffect += Hook_Entity_multiplyAffect;
+        Hook_Entity.minTimeAffect += Hook_Entity_minTimeAffect;
         Hook_Entity.addAllAffixesFrom += Hook_Entity_addAllAffixesFrom;
         Hook_Entity.addReceivedAffix += Hook_Entity_addReceivedAffix;
         Hook_Entity.removeAllReceivedAffix += Hook_Entity_removeAllReceivedAffix;
@@ -132,6 +144,26 @@ internal static class KingWeaponHooks
         orig(self);
     }
 
+    private static void Hook_Hero_addKillCount(Hook_Hero.orig_addKillCount orig, Hero self, Mob mob)
+    {
+        if(WasRecentKingWeaponMobHit(mob))
+            return;
+
+        if(ShouldSuppressLocalHeroKillProgress(self))
+            return;
+        orig(self, mob);
+    }
+
+    private static void Hook_Hero_onMobDeath(Hook_Hero.orig_onMobDeath orig, Hero self, Mob old)
+    {
+        if(WasRecentKingWeaponMobHit(old))
+            return;
+
+        if(ShouldSuppressLocalHeroKillProgress(self))
+            return;
+        orig(self, old);
+    }
+
     private static void Hook_Viewport_bumpDir(Hook_Viewport.orig_bumpDir orig, Viewport self, int dir, double? pow)
     {
         if(KingWeaponSupport.IsInKingContext)
@@ -169,8 +201,13 @@ internal static class KingWeaponHooks
 
     private static void Hook_Entity_onDamage(Hook_Entity.orig_onDamage orig, Entity self, AttackData a)
     {
-        if(ShouldSuppressDamageFromKingWeapon(self, a))
+        var suppress = ShouldSuppressDamageFromKingWeapon(self, a);
+        if(!suppress && self is Mob mob && IsKingWeaponAttack(a))
+            TrackKingWeaponMobHit(mob);
+
+        if(suppress)
             return;
+
         orig(self, a);
     }
 
@@ -182,16 +219,51 @@ internal static class KingWeaponHooks
         Ref<double> ignoreResist,
         bool? allowResist)
     {
-        if(KingWeaponSupport.IsInKingContext && ModEntry.me != null && ReferenceEquals(self, ModEntry.me))
+        if(ShouldSuppressLocalHeroAffectMutation(self))
             return;
         orig(self, id, sec, ignoreResist, allowResist);
     }
 
-    private static void Hook_Entity_removeAllAffects(Hook_Entity.orig_removeAllAffects orig, Entity self, int list)
+    private static void Hook_Entity_addTimeToAffect(Hook_Entity.orig_addTimeToAffect orig, Entity self, virtual_a_t_uniqId_val_ affect, double frames)
     {
-        if(KingWeaponSupport.IsInKingContext && ModEntry.me != null && ReferenceEquals(self, ModEntry.me))
+        if(ShouldSuppressLocalHeroAffectMutation(self))
+            return;
+        orig(self, affect, frames);
+    }
+
+    private static void Hook_Entity_removeAffects(Hook_Entity.orig_removeAffects orig, Entity self, virtual_a_t_uniqId_val_ list)
+    {
+        if(ShouldSuppressLocalHeroAffectMutation(self))
             return;
         orig(self, list);
+    }
+
+    private static void Hook_Entity_removeAllAffects(Hook_Entity.orig_removeAllAffects orig, Entity self, int list)
+    {
+        if(ShouldSuppressLocalHeroAffectMutation(self))
+            return;
+        orig(self, list);
+    }
+
+    private static void Hook_Entity_resetAllAffectToTime(Hook_Entity.orig_resetAllAffectToTime orig, Entity self, int id, double t)
+    {
+        if(ShouldSuppressLocalHeroAffectMutation(self))
+            return;
+        orig(self, id, t);
+    }
+
+    private static void Hook_Entity_multiplyAffect(Hook_Entity.orig_multiplyAffect orig, Entity self, int id, double v)
+    {
+        if(ShouldSuppressLocalHeroAffectMutation(self))
+            return;
+        orig(self, id, v);
+    }
+
+    private static void Hook_Entity_minTimeAffect(Hook_Entity.orig_minTimeAffect orig, Entity self, int id, double v)
+    {
+        if(ShouldSuppressLocalHeroAffectMutation(self))
+            return;
+        orig(self, id, v);
     }
 
     private static void Hook_Entity_addAllAffixesFrom(
@@ -704,6 +776,24 @@ internal static class KingWeaponHooks
         }
     }
 
+    private static bool ShouldSuppressLocalHeroKillProgress(Hero? self)
+    {
+        if(self == null)
+            return false;
+
+        var localHero = ModEntry.me;
+        if(localHero == null || !ReferenceEquals(self, localHero))
+            return false;
+
+        if(KingWeaponSupport.IsInKingContext)
+            return true;
+
+        if(ModEntry.IsLocalPlayerDowned())
+            return true;
+
+        return false;
+    }
+
     private static bool ShouldSuppressPlayerAffixesInKingContext(Entity? self)
     {
         if(self == null)
@@ -714,6 +804,26 @@ internal static class KingWeaponHooks
             return true;
         if(self is KingSkin)
             return true;
+        return false;
+    }
+
+    private static bool ShouldSuppressLocalHeroAffectMutation(Entity? self)
+    {
+        if(self == null)
+            return false;
+        if(self is not Hero)
+            return false;
+
+        var localHero = ModEntry.me;
+        if(localHero == null || !ReferenceEquals(self, localHero))
+            return false;
+
+        if(KingWeaponSupport.IsInKingContext)
+            return true;
+
+        if(ModEntry.IsLocalPlayerDowned())
+            return true;
+
         return false;
     }
 
@@ -772,6 +882,155 @@ internal static class KingWeaponHooks
             return true;
 
         return false;
+    }
+
+    private static bool IsKingWeaponAttack(AttackData? attack)
+    {
+        if(attack == null)
+            return false;
+
+        if(KingWeaponSupport.IsInKingContext)
+            return true;
+
+        Weapon sourceWeapon;
+        try
+        {
+            sourceWeapon = attack.sourceWeapon;
+        }
+        catch
+        {
+            sourceWeapon = null!;
+        }
+
+        if(sourceWeapon != null && KingWeaponSupport.IsKingWeapon(sourceWeapon))
+            return true;
+
+        InventItem sourceItem;
+        try
+        {
+            sourceItem = attack.sourceItem;
+        }
+        catch
+        {
+            sourceItem = null!;
+        }
+
+        if(sourceItem != null && KingWeaponSupport.TryGetSourceByItem(sourceItem, out var sourceByItem) && sourceByItem != null)
+            return true;
+
+        Entity sourceEntity;
+        try
+        {
+            sourceEntity = attack.source;
+        }
+        catch
+        {
+            sourceEntity = null!;
+        }
+
+        return sourceEntity is KingSkin;
+    }
+
+    private static void TrackKingWeaponMobHit(Mob mob)
+    {
+        if(mob == null)
+            return;
+
+        var now = Stopwatch.GetTimestamp();
+        var maxAgeTicks = (long)(Stopwatch.Frequency * RecentKingWeaponMobHitSeconds);
+
+        lock(_recentKingWeaponMobRefHits)
+        {
+            PruneRecentKingWeaponMobHitsLocked(now, maxAgeTicks);
+
+            var refKey = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(mob);
+            _recentKingWeaponMobRefHits[refKey] = now;
+
+            var signature = BuildMobHitSignature(mob);
+            if(!string.IsNullOrWhiteSpace(signature))
+                _recentKingWeaponMobSignatureHits[signature] = now;
+        }
+    }
+
+    private static bool WasRecentKingWeaponMobHit(Mob? mob)
+    {
+        if(mob == null)
+            return false;
+
+        var now = Stopwatch.GetTimestamp();
+        var maxAgeTicks = (long)(Stopwatch.Frequency * RecentKingWeaponMobHitSeconds);
+
+        lock(_recentKingWeaponMobRefHits)
+        {
+            PruneRecentKingWeaponMobHitsLocked(now, maxAgeTicks);
+
+            var refKey = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(mob);
+            if(_recentKingWeaponMobRefHits.ContainsKey(refKey))
+            {
+                _recentKingWeaponMobRefHits.Remove(refKey);
+
+                var signature = BuildMobHitSignature(mob);
+                if(!string.IsNullOrWhiteSpace(signature))
+                    _recentKingWeaponMobSignatureHits.Remove(signature);
+
+                return true;
+            }
+
+            var key = BuildMobHitSignature(mob);
+            if(!string.IsNullOrWhiteSpace(key) && _recentKingWeaponMobSignatureHits.Remove(key))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void PruneRecentKingWeaponMobHitsLocked(long now, long maxAgeTicks)
+    {
+        if(_recentKingWeaponMobRefHits.Count > 0)
+        {
+            var staleRef = new List<int>();
+            foreach(var pair in _recentKingWeaponMobRefHits)
+            {
+                if(now - pair.Value > maxAgeTicks)
+                    staleRef.Add(pair.Key);
+            }
+
+            for(int i = 0; i < staleRef.Count; i++)
+                _recentKingWeaponMobRefHits.Remove(staleRef[i]);
+        }
+
+        if(_recentKingWeaponMobSignatureHits.Count > 0)
+        {
+            var staleSignatures = new List<string>();
+            foreach(var pair in _recentKingWeaponMobSignatureHits)
+            {
+                if(now - pair.Value > maxAgeTicks)
+                    staleSignatures.Add(pair.Key);
+            }
+
+            for(int i = 0; i < staleSignatures.Count; i++)
+                _recentKingWeaponMobSignatureHits.Remove(staleSignatures[i]);
+        }
+    }
+
+    private static string BuildMobHitSignature(Mob mob)
+    {
+        if(mob == null)
+            return string.Empty;
+
+        try
+        {
+            var type = mob.type?.ToString() ?? string.Empty;
+            var cx = mob.cx;
+            var cy = mob.cy;
+            var xr = (int)System.Math.Round(mob.xr * 100.0);
+            var yr = (int)System.Math.Round(mob.yr * 100.0);
+            return $"{type}|{cx}|{cy}|{xr}|{yr}";
+        }
+        catch
+        {
+            return string.Empty;
+        }
     }
 
     private static void TryCleanupReturnedAmmo(Ammo? ammo)
