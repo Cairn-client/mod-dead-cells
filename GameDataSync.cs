@@ -133,7 +133,7 @@ namespace DeadCellsMultiplayerMod
             {
                 CaptureOriginalUserData(user);
                 var meta = EnsureItemMeta(user, user.itemMeta);
-                var arr = EnsureArray(meta.itemProgress);
+                var arr = CloneItemProgress(meta.itemProgress) ?? EnsureArray(null);
                 var existing = new Dictionary<string, ItemProgress>(StringComparer.Ordinal);
                 for (int i = 0; i < arr.length; i++)
                 {
@@ -142,7 +142,7 @@ namespace DeadCellsMultiplayerMod
                     if (progress != null && !string.IsNullOrWhiteSpace(id))
                         existing[id] = progress;
                 }
-                var permanent = EnsureArray(meta.permanentItems);
+                var permanent = CloneItemList(meta.permanentItems) ?? EnsureArray(null);
                 var existingPermanent = new HashSet<string>(StringComparer.Ordinal);
                 for (int i = 0; i < permanent.length; i++)
                 {

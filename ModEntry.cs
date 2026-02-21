@@ -458,7 +458,6 @@ namespace DeadCellsMultiplayerMod
                 }
             }
 
-
             return orig(self);
         }
 
