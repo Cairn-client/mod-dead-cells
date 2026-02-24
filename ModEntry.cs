@@ -45,6 +45,7 @@ using DeadCellsMultiplayerMod.Tools.ModLang;
 using DeadCellsMultiplayerMod.KingHead;
 using dc.steam.ugc;
 using DeadCellsMultiplayerMod.Mobs.Levelinit;
+using dc.en.inter.door;
 
 
 namespace DeadCellsMultiplayerMod
@@ -323,6 +324,7 @@ namespace DeadCellsMultiplayerMod
             Hook_AnimManager.play += Hook_AnimManager_play;
             Hook_MiniMap.track += Hook_MiniMap_track;
             Hook__LevelStruct.get += Hook__LevelStruct_get;
+            Hook_LevelGen.generateGraph += Hook_LevelGen_generateGraph;
             Hook_Boot.update += hook_boot_update;
             Hook_Game.pause += Hook_Game_pause;
             Hook_Hero.kill += Hook_Hero_kill;
@@ -330,6 +332,7 @@ namespace DeadCellsMultiplayerMod
             Hook_Hero.startDeathCine += Hook_Hero_startDeathCine;
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
             Hook_ZDoor.onActivate += Hook_ZDoor_onActivate;
+            Hook_BossRushDoor.initGfx += Hook_BossRushDoor_initGfx;
             Hook_Hero.applySkin += Hook_Hero_applySkin;
             Hook_HeroHead.initCustomHead += Hook_HeroHead_initCustomHead;
             // Hook_Hero.tryToApplyYoloPerk += Hook_Hero_tryToApplyYoloPerk;
@@ -426,6 +429,45 @@ namespace DeadCellsMultiplayerMod
             {
                 try { ReceiveGhostCoords(); } catch { }
             }
+        }
+
+        private void Hook_BossRushDoor_initGfx(Hook_BossRushDoor.orig_initGfx orig, BossRushDoor self)
+        {
+            try
+            {
+                orig(self);
+                return;
+            }
+            catch (Exception ex)
+            {
+                if (_netRole != NetRole.Client || self == null || !ContainsBossRushFrameCrash(ex))
+                    throw;
+
+                string? bossRushType = null;
+                try { bossRushType = self.bossRushType?.ToString(); } catch { }
+
+                Logger.Warning("[NetMod] BossRushDoor.initGfx skipped on client level={LevelId}: type={Type} ({Msg})",
+                    levelId,
+                    bossRushType ?? "null",
+                    ex.Message);
+                // base.initGfx() has already run before BossRushDoor selects its frame.
+                // If the atlas has no bossRushDoor* frames, keep the entity headless instead of crashing the client.
+                try { self.spr = null; } catch { }
+                return;
+            }
+        }
+
+        private static bool ContainsBossRushFrameCrash(Exception ex)
+        {
+            for (var cur = ex; cur != null; cur = cur.InnerException)
+            {
+                var msg = cur.Message;
+                if (!string.IsNullOrWhiteSpace(msg) &&
+                    msg.IndexOf("Unknown frame: bossRushDoor", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+
+            return false;
         }
 
         private void Hook_Hero_lockControlFromSkill(Hook_Hero.orig_lockControlFromSkill orig, Hero self, double sec)
@@ -597,8 +639,10 @@ namespace DeadCellsMultiplayerMod
         Rand rng)
         {
             levelId = l.id.ToString();
-            SendLevel(levelId);
             var net = _net;
+            Logger.Information("[NetMod] _LevelStruct.get hook role={Role} level={LevelId}", _netRole, levelId);
+            SendLevel(levelId);
+
             if (_netRole == NetRole.Host)
                 GameDataSync.SendLevelSeed(levelId, rng, net);
             else if (_netRole == NetRole.Client)
@@ -606,7 +650,58 @@ namespace DeadCellsMultiplayerMod
                 GameDataSync.TryApplyRemoteSerializerSync();
                 GameDataSync.TryApplyRemoteLevelSeed(levelId, rng);
             }
-            return orig(user, l, rng);
+
+            var result = orig(user, l, rng);
+
+            return result;
+        }
+
+        private RoomNode Hook_LevelGen_generateGraph(Hook_LevelGen.orig_generateGraph orig,
+        LevelGen self,
+        User user,
+        virtual_baseLootLevel_biome_bonusTripleScrollAfterBC_cellBonus_dlc_doubleUps_eliteRoomChance_eliteWanderChance_flagsProps_group_icon_id_index_loreDescriptions_mapDepth_minGold_mobDensity_mobs_name_nextLevels_parallax_props_quarterUpsBC3_quarterUpsBC4_specificLoots_specificSubBiome_transitionTo_tripleUps_worldDepth_ l,
+        Rand rng)
+        {
+            var graphLevelId = l?.id?.ToString() ?? levelId ?? string.Empty;
+            Logger.Information("[NetMod] LevelGen.generateGraph hook role={Role} level={LevelId}", _netRole, graphLevelId);
+
+            var root = orig(self, user, l, rng);
+            var graph = root?.@struct;
+
+            if (_netRole == NetRole.Host)
+            {
+                try
+                {
+                    GameDataSync.SendLevelGraph(graphLevelId, root, graph, rng, _net);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warning("[NetMod] Failed to send level graph for {LevelId}: {msg}", graphLevelId, ex.Message);
+                }
+            }
+            else if (_netRole == NetRole.Client)
+            {
+                try
+                {
+                    const int graphSyncWaitMs = 650;
+                    if (GameDataSync.TryApplyRemoteLevelGraph(graphLevelId, graph, rng, graphSyncWaitMs, out var remoteRoot, out var reason))
+                    {
+                        Logger.Information("[NetMod] Applied remote level graph+rand for {LevelId}", graphLevelId);
+                        if (remoteRoot != null)
+                            root = remoteRoot;
+                    }
+                    else
+                    {
+                        Logger.Warning("[NetMod] Remote level graph not applied for {LevelId}: {Reason}", graphLevelId, reason);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warning("[NetMod] Failed to apply remote level graph for {LevelId}: {msg}", graphLevelId, ex.Message);
+                }
+            }
+
+            return root;
         }
 
 
