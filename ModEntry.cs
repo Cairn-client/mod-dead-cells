@@ -450,8 +450,6 @@ namespace DeadCellsMultiplayerMod
                     levelId,
                     bossRushType ?? "null",
                     ex.Message);
-                // base.initGfx() has already run before BossRushDoor selects its frame.
-                // If the atlas has no bossRushDoor* frames, keep the entity headless instead of crashing the client.
                 try { self.spr = null; } catch { }
                 return;
             }
@@ -928,9 +926,15 @@ namespace DeadCellsMultiplayerMod
         {
             var src = string.IsNullOrWhiteSpace(sourceLevelId) ? "?" : sourceLevelId.Trim();
             var dst = string.IsNullOrWhiteSpace(targetLevelId) ? "?" : targetLevelId.Trim();
-            var key = string.Create(
-                System.Globalization.CultureInfo.InvariantCulture,
-                $"{src}>{dst}|{linkId}|{doorCx}|{doorCy}");
+            // ZDoor room placement/door visuals can differ in local coordinates even when the logical link is the same.
+            // Prefer stable linkId-based marker so remote ghosts do not stay hidden after a valid ZDoor transition.
+            var key = linkId >= 0
+                ? string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"{src}>{dst}|L|{linkId}")
+                : string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"{src}>{dst}|C|{doorCx}|{doorCy}");
 
             unchecked
             {
