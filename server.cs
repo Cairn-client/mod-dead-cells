@@ -2978,6 +2978,18 @@ public sealed class NetNode : IDisposable
         }
     }
 
+    public void ClearMobSyncQueues()
+    {
+        lock (_sync)
+        {
+            _pendingMobStates.Clear();
+            _pendingMobHits.Clear();
+            _pendingMobDies.Clear();
+            _pendingMobAttacks.Clear();
+            _pendingMobDraws.Clear();
+        }
+    }
+
     public bool TryConsumeMobStates(out List<MobStateSnapshot> snapshot)
     {
         lock (_sync)

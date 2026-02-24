@@ -145,6 +145,7 @@ namespace DeadCellsMultiplayerMod
         {
             public int MarkerToken;
             public string LevelId = string.Empty;
+            public long UpdatedAtTicks;
         }
 
         private readonly Dictionary<int, RemoteDownedState> _remoteDowned = new();
@@ -154,6 +155,7 @@ namespace DeadCellsMultiplayerMod
         private readonly Dictionary<int, RemoteDoorMarkerState> _remotePendingDoorMarkers = new();
         private readonly Dictionary<int, long> _pendingClientDisposeTicks = new();
         private const double ClientDisposeTransitionSeconds = 0.28;
+        private const double PendingDoorMarkerHideMaxSeconds = 1.5;
 
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
@@ -759,6 +761,7 @@ namespace DeadCellsMultiplayerMod
         {
             kingInitialized = false;
             DeadCellsMultiplayerMod.Mobs.MobsSynchronization.MobsSynchronization.ClearTrackingForLevelChange();
+            try { _net?.ClearMobSyncQueues(); } catch { }
             ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false, clearRemoteDownedTracking: false, clearDownedAnnouncements: false);
             me = self;
             try { me._targetable = true; } catch { }
@@ -986,7 +989,8 @@ namespace DeadCellsMultiplayerMod
                 _remotePendingDoorMarkers[remoteId] = new RemoteDoorMarkerState
                 {
                     MarkerToken = markerToken,
-                    LevelId = _localLastDoorMarkerLevelId
+                    LevelId = _localLastDoorMarkerLevelId,
+                    UpdatedAtTicks = Stopwatch.GetTimestamp()
                 };
             }
         }
@@ -1272,6 +1276,12 @@ namespace DeadCellsMultiplayerMod
             if (_remotePendingDoorMarkers.TryGetValue(remote.Id, out var pending) &&
                 pending != null)
             {
+                if (pending.UpdatedAtTicks > 0 &&
+                    Stopwatch.GetElapsedTime(pending.UpdatedAtTicks).TotalSeconds > PendingDoorMarkerHideMaxSeconds)
+                {
+                    _remotePendingDoorMarkers.Remove(remote.Id);
+                    return true;
+                }
                 return false;
             }
 
@@ -1304,7 +1314,8 @@ namespace DeadCellsMultiplayerMod
             _remoteLastDoorMarkers[remote.Id] = new RemoteDoorMarkerState
             {
                 MarkerToken = markerToken,
-                LevelId = markerLevelId
+                LevelId = markerLevelId,
+                UpdatedAtTicks = Stopwatch.GetTimestamp()
             };
 
             if (IsLocalDoorMarkerMatch(markerLevelId, markerToken))
@@ -1316,7 +1327,8 @@ namespace DeadCellsMultiplayerMod
             _remotePendingDoorMarkers[remote.Id] = new RemoteDoorMarkerState
             {
                 MarkerToken = markerToken,
-                LevelId = markerLevelId
+                LevelId = markerLevelId,
+                UpdatedAtTicks = Stopwatch.GetTimestamp()
             };
         }
 
