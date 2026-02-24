@@ -596,7 +596,7 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook_Game_pause(Hook_Game.orig_pause orig, dc.pr.Game self)
         {
-            return;
+            orig(self);
         }
 
 
@@ -683,7 +683,7 @@ namespace DeadCellsMultiplayerMod
             {
                 try
                 {
-                    const int graphSyncWaitMs = 650;
+                    const int graphSyncWaitMs = 6000;
                     if (GameDataSync.TryApplyRemoteLevelGraph(graphLevelId, graph, rng, graphSyncWaitMs, out var remoteRoot, out var reason))
                     {
                         Logger.Information("[NetMod] Applied remote level graph+rand for {LevelId}", graphLevelId);
@@ -1687,7 +1687,7 @@ namespace DeadCellsMultiplayerMod
             {
                 if(IsWeaponKindMatch(currentSlotItem, cleaned))
                     existing = currentSlotItem;
-                else
+                else if (slot < 0)
                 {
                     var w0 = inv.getEquippedWeaponOn(0);
                     if(IsWeaponKindMatch(w0, cleaned))
