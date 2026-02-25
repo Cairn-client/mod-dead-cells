@@ -126,7 +126,7 @@ namespace DeadCellsMultiplayerMod
         private const double DownedGhostBodyYOffsetPx = 40.0;
         private const double LocalReviveBodyYOffsetPx = 0.5;
         private const double PostRevivePositionLockSeconds = 0.0;
-        private const string ReviveHintText = "Hold R to restore";
+        private const string ReviveHintText = "Hold to revive.";
         private string _lastDoorMarkerLevelId = string.Empty;
         private int _lastDoorMarkerToken = int.MinValue;
         private string _localLastDoorMarkerLevelId = string.Empty;
@@ -767,6 +767,7 @@ namespace DeadCellsMultiplayerMod
             try { me._targetable = true; } catch { }
             SendLevel(levelId);
             orig(self, oldLevel);
+            try { _net?.ClearMobSyncQueues(); } catch { }
             EnsureHeroVisibilityAfterRoomChange(me);
             if (_netRole == NetRole.None) return;
             var net = _net;

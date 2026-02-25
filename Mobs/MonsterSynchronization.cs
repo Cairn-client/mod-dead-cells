@@ -121,6 +121,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 ResetMobTrackingLocked();
             }
+            SyncMobIdRegistry.ClearForLevel(null);
         }
 
         public void OnAdvancedModuleInitializing(ModEntry entry)
@@ -155,6 +156,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (net == null || !net.IsAlive)
                 return;
 
+            lock (Sync)
+            {
+                if (currentLevel != null && trackedMobs.Count > 0)
+                    return;
+            }
+
             if (IsHost(net))
             {
                 ConsumeIncomingMobDraws(net);
@@ -180,6 +187,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             orig(self);
             RebuildMobArray(self);
+            try { GameMenu.NetRef?.ClearMobSyncQueues(); } catch { }
         }
 
         private static void Hook_Level_registerEntity(Hook_Level.orig_registerEntity orig, Level self, Entity clid)

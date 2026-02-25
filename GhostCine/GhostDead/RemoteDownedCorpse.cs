@@ -27,6 +27,7 @@ namespace DeadCellsMultiplayerMod
         private double _targetY;
         private int _targetDir;
         private string? _interactionLabelText;
+        private LightTip? _interactionLightTip;
         private Pointer? _corpsePointer;
         private const int CorpseMarkerColor = 0xED6a1F;
         private const int PointerFxSuppressionKey = 188743680;
@@ -414,17 +415,35 @@ namespace DeadCellsMultiplayerMod
             if (corpse == null || corpse.destroyed)
                 return;
 
+            ClearInteractionLightTip();
+
             try
             {
-                var textColor = 0xFFFFFF;
                 if (string.IsNullOrEmpty(_interactionLabelText))
-                    corpse.setGameplayLabel(null, Ref<int>.From(ref textColor));
-                else
-                    corpse.setGameplayLabel(_interactionLabelText.AsHaxeString(), Ref<int>.From(ref textColor));
+                    return;
+
+                var tip = corpse.createLightTip(null);
+                if (tip == null)
+                    return;
+
+                tip.addActivate(_interactionLabelText.AsHaxeString(), null, null);
+                _interactionLightTip = tip;
             }
             catch
             {
+                _interactionLightTip = null;
             }
+        }
+
+        private void ClearInteractionLightTip()
+        {
+            _interactionLightTip = null;
+
+            var corpse = _corpse;
+            if (corpse == null || corpse.destroyed)
+                return;
+
+            try { corpse.removeLightTip(); } catch { }
         }
 
         private void EnsureViewportTracksTemplateHero(bool immediate)
@@ -543,6 +562,7 @@ namespace DeadCellsMultiplayerMod
 
         private void DisposeCorpse()
         {
+            ClearInteractionLightTip();
             ClearCorpsePointer();
 
             var corpse = _corpse;
