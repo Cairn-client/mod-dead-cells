@@ -52,8 +52,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static int forceExactNemesisTargetDepth;
         private static readonly Dictionary<int, QueuedOldSkillMarker> hostQueuedOldSkillMarkers = new();
 
-        private const double ClientMobDrawSendRateHz = 60.0;
-        private const double HostStateSendRateHz = 60.0;
+        private const double ClientMobDrawSendRateHz = 30.0;
+        private const double HostStateSendRateHz = 30.0;
         private const double ClientInterpolationAlpha = 0.7;
         private const double ClientAiLockSeconds = 0.3;
         private const double ClientAttackUnlockSeconds = 2.2;
@@ -603,25 +603,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var x = GetSyncX(mob);
             var y = GetSyncY(mob);
             var dir = NormalizeDir(mob.dir);
-            if (targetEntity != null)
-            {
-                try
-                {
-                    var targetX = GetWorldX(targetEntity);
-                    var towardTarget = targetX < x ? -1 : targetX > x ? 1 : dir;
-                    if (towardTarget != 0)
-                        dir = towardTarget;
-                }
-                catch
-                {
-                }
-            }
             net.SendMobAttack(mobSyncId, skillId, requiresTargetInArea, data, x, y, targetUserId, dir);
         }
 
         private void Hook_Mob_setNemesisTarget(Hook_Mob.orig_setNemesisTarget orig, Mob self, Entity e)
         {
             if (System.Threading.Volatile.Read(ref forceExactNemesisTargetDepth) > 0)
+            {
+                orig(self, e);
+                return;
+            }
+
+            if (!IsMobHostileToPlayers(self))
             {
                 orig(self, e);
                 return;
@@ -1275,6 +1268,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             if (mob == null)
                 return;
+            if (!IsMobHostileToPlayers(mob))
+                return;
 
             Entity? selected = null;
 
@@ -1380,6 +1375,26 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (!hostDetectedTargets.Contains(candidate))
                 hostDetectedTargets.Add(candidate);
+        }
+
+        private static bool IsMobHostileToPlayers(Mob? mob)
+        {
+            if (mob == null)
+                return false;
+
+            try
+            {
+                var level = mob._level;
+                var mobTeam = mob._team;
+                if (level == null || mobTeam == null)
+                    return false;
+
+                return ReferenceEquals(mobTeam, level.teamMob);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static int ResolveHostTargetUserId(Entity? target, int localUserId)
@@ -2398,6 +2413,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static Entity? ResolveClientAttackTargetEntity(Mob mob, int targetUserId)
         {
+            if (!IsMobHostileToPlayers(mob))
+                return null;
+
             if (targetUserId > 0)
             {
                 var net = GameMenu.NetRef;
@@ -2449,6 +2467,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static Entity? ResolveDetectedClientTargetEntity(Mob mob)
         {
             if (mob == null)
+                return null;
+            if (!IsMobHostileToPlayers(mob))
                 return null;
 
             var candidates = new List<Entity>(4);

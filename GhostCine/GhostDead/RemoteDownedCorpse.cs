@@ -134,6 +134,7 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
+            KeepCorpseActive(corpse);
             ApplyTargetToCorpse(forceStartFall: false);
             EnsureLethalFallStarted();
             EnsureCorpsePointer();
@@ -275,6 +276,31 @@ namespace DeadCellsMultiplayerMod
 
             _lethalFallStarted = true;
             try { corpse.startLethalFall(); } catch { }
+        }
+
+        private static void KeepCorpseActive(HeroDeadCorpse corpse)
+        {
+            if (corpse == null || corpse.destroyed)
+                return;
+
+            var wasOutOfGame = false;
+            try { wasOutOfGame = corpse.isOutOfGame; } catch { }
+
+            try { corpse.isOnScreen = true; } catch { }
+            try
+            {
+                if (corpse.onScreenRecent < 1200.0)
+                    corpse.onScreenRecent = 1200.0;
+            }
+            catch { }
+
+            try { corpse.lastOutOfGame = false; } catch { }
+            try { corpse.isOutOfGame = false; } catch { }
+
+            if (!wasOutOfGame)
+                return;
+
+            try { corpse.onOutOfGameChange(); } catch { }
         }
 
         private void SuppressCineEffects()

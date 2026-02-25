@@ -1322,53 +1322,10 @@ namespace DeadCellsMultiplayerMod
             if (node == null || genData == null)
                 return;
 
-            try
-            {
-                var dst = node.genData;
-                if (dst == null)
-                    return;
-
-                var reflect = dc._Reflect.Class as dc._Reflect;
-                if (reflect == null)
-                    return;
-
-                void SetIfPresent(string fieldName, object? value)
-                {
-                    if (value == null)
-                        return;
-
-                    try
-                    {
-                        var hxField = fieldName.AsHaxeString();
-                        if (!reflect.hasField.Invoke(dst, hxField))
-                            return;
-                        reflect.setField.Invoke(dst, hxField, value);
-                    }
-                    catch
-                    {
-                    }
-                }
-
-                if (genData.SpecificBiome != null)
-                    SetIfPresent("specificBiome", genData.SpecificBiome.AsHaxeString());
-                if (genData.ZDoorLock.HasValue)
-                    SetIfPresent("zDoorLock", genData.ZDoorLock.Value);
-                if (genData.ForcePauseTimer.HasValue)
-                    SetIfPresent("forcePauseTimer", genData.ForcePauseTimer.Value);
-                if (genData.ShouldBeFlipped.HasValue)
-                    SetIfPresent("shouldBeFlipped", genData.ShouldBeFlipped.Value);
-                if (genData.GenSubTeleportTo.HasValue)
-                    SetIfPresent("subTeleportTo", genData.GenSubTeleportTo.Value);
-                if (genData.ZDoorType != null)
-                {
-                    var zDoorType = CreateZDoorTypeFromSync(genData.ZDoorType);
-                    if (zDoorType is not null)
-                        SetIfPresent("zDoorType", zDoorType);
-                }
-            }
-            catch
-            {
-            }
+            // WARNING:
+            // Mutating RoomNode.genData from C# (even via Reflect) can corrupt HL objects and later
+            // explode as unrelated casts like "tool.InventItem -> level.LevelMap".
+            // Keep genData sync capture for diagnostics, but do not apply it here until a native-safe path exists.
         }
 
         private static bool ApplyLevelGraph(LevelStruct target, LevelGraphSync sync, out RoomNode? rebuiltRoot, out string reason)
