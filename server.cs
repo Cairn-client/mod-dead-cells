@@ -226,8 +226,9 @@ public sealed class NetNode : IDisposable
         public readonly int MaxLife;
         public readonly string AnimPayload;
         public readonly string Type;
+        public readonly string StatePayload;
 
-        public MobStateSnapshot(int index, double x, double y, int dir, int life, int maxLife, string animPayload, string type)
+        public MobStateSnapshot(int index, double x, double y, int dir, int life, int maxLife, string animPayload, string type, string statePayload = "")
         {
             Index = index;
             X = x;
@@ -237,6 +238,7 @@ public sealed class NetNode : IDisposable
             MaxLife = maxLife;
             AnimPayload = animPayload ?? string.Empty;
             Type = type ?? string.Empty;
+            StatePayload = statePayload ?? string.Empty;
         }
     }
 
@@ -1778,8 +1780,9 @@ public sealed class NetNode : IDisposable
                 continue;
             var animPayload = parts[6];
             var type = parts.Length > 7 ? parts[7] : string.Empty;
+            var statePayload = parts.Length > 8 ? parts[8] : string.Empty;
 
-            states.Add(new MobStateSnapshot(index, x, y, dir, life, maxLife, animPayload, type));
+            states.Add(new MobStateSnapshot(index, x, y, dir, life, maxLife, animPayload, type, statePayload));
         }
 
         return states;
@@ -2215,6 +2218,8 @@ public sealed class NetNode : IDisposable
                 sb.Append(state.AnimPayload ?? string.Empty);
                 sb.Append(',');
                 sb.Append(state.Type ?? string.Empty);
+                sb.Append(',');
+                sb.Append(state.StatePayload ?? string.Empty);
             }
         }
         sb.Append('\n');
