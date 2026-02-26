@@ -122,7 +122,9 @@ namespace DeadCellsMultiplayerMod
         private const int ReviveInteractKey = 82; // R
         private const double ReviveAttemptCooldownSeconds = 0.2;
         private const double ReviveHoldSeconds = 0.7;
+        private const double ReviveHomunculusBodyMaxDistancePx = 64.0;
         private const double DownedStateResendSeconds = 0.4;
+        private const double DownedHeadStateResendSeconds = 1.0 / 30.0;
         private const double DownedGhostBodyYOffsetPx = 40.0;
         private const double LocalReviveBodyYOffsetPx = 0.5;
         private const double PostRevivePositionLockSeconds = 0.0;
@@ -137,6 +139,11 @@ namespace DeadCellsMultiplayerMod
             public int UserId;
             public double X;
             public double Y;
+            public bool HasHeadPosition;
+            public double HeadX;
+            public double HeadY;
+            public bool HasHeadAnim;
+            public string HeadAnim = string.Empty;
             public string LevelId = string.Empty;
             public long UpdatedAtTicks;
         }
@@ -335,6 +342,12 @@ namespace DeadCellsMultiplayerMod
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
             Hook_ZDoor.onActivate += Hook_ZDoor_onActivate;
             Hook_BossRushDoor.initGfx += Hook_BossRushDoor_initGfx;
+            Hook_Hero.setHeadMode += Hook_Hero_setHeadMode;
+            dc.en.Hook_Homunculus.preUpdate += Hook_Homunculus_preUpdate;
+            // dc.en.Hook_Homunculus.postUpdate += Hook_Homunculus_postUpdate;
+            dc.en.Hook_Homunculus.controlsToMe += Hook_Homunculus_controlsToMe;
+            dc.en.Hook_Homunculus.controlsToHero += Hook_Homunculus_controlsToHero;
+            dc.en.Hook_Homunculus.onDie += Hook_Homunculus_onDie;
             Hook_Hero.applySkin += Hook_Hero_applySkin;
             Hook_HeroHead.initCustomHead += Hook_HeroHead_initCustomHead;
             // Hook_Hero.tryToApplyYoloPerk += Hook_Hero_tryToApplyYoloPerk;
@@ -596,7 +609,8 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook_Game_pause(Hook_Game.orig_pause orig, dc.pr.Game self)
         {
-            orig(self);
+            // don't change that
+            return; 
         }
 
 

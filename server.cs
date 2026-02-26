@@ -343,14 +343,24 @@ public sealed class NetNode : IDisposable
         public readonly double X;
         public readonly double Y;
         public readonly string LevelId;
+        public readonly bool HasHeadPosition;
+        public readonly double HeadX;
+        public readonly double HeadY;
+        public readonly bool HasHeadAnim;
+        public readonly string? HeadAnim;
 
-        public PlayerDownState(int userId, bool isDowned, double x, double y, string levelId)
+        public PlayerDownState(int userId, bool isDowned, double x, double y, string levelId, bool hasHeadPosition = false, double headX = 0, double headY = 0, bool hasHeadAnim = false, string? headAnim = null)
         {
             UserId = userId;
             IsDowned = isDowned;
             X = x;
             Y = y;
             LevelId = levelId ?? string.Empty;
+            HasHeadPosition = hasHeadPosition;
+            HeadX = headX;
+            HeadY = headY;
+            HasHeadAnim = hasHeadAnim;
+            HeadAnim = hasHeadAnim ? (headAnim ?? string.Empty) : null;
         }
     }
 
@@ -1999,7 +2009,31 @@ public sealed class NetNode : IDisposable
         if (levelId.Length == 0)
             levelId = string.Empty;
 
-        state = new PlayerDownState(parsedUserId, isDowned, x, y, levelId);
+        var hasHeadPosition = false;
+        var headX = 0d;
+        var headY = 0d;
+        var hasHeadAnim = false;
+        string? headAnim = null;
+        if (parts.Length >= 7 &&
+            double.TryParse(parts[5], NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedHeadX) &&
+            double.TryParse(parts[6], NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedHeadY))
+        {
+            hasHeadPosition = true;
+            headX = parsedHeadX;
+            headY = parsedHeadY;
+
+            if (parts.Length >= 8)
+            {
+                var parsedAnim = (parts[7] ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty).Trim();
+                if (!string.IsNullOrWhiteSpace(parsedAnim))
+                {
+                    hasHeadAnim = true;
+                    headAnim = parsedAnim;
+                }
+            }
+        }
+
+        state = new PlayerDownState(parsedUserId, isDowned, x, y, levelId, hasHeadPosition, headX, headY, hasHeadAnim, headAnim);
         return true;
     }
 
@@ -2259,6 +2293,24 @@ public sealed class NetNode : IDisposable
             .Replace("|", "/", StringComparison.Ordinal)
             .Replace("\r", string.Empty, StringComparison.Ordinal)
             .Replace("\n", string.Empty, StringComparison.Ordinal);
+        var safeHeadAnim = (state.HeadAnim ?? string.Empty)
+            .Replace("|", "/", StringComparison.Ordinal)
+            .Replace("\r", string.Empty, StringComparison.Ordinal)
+            .Replace("\n", string.Empty, StringComparison.Ordinal);
+
+        if (state.HasHeadPosition)
+        {
+            if (state.HasHeadAnim && !string.IsNullOrWhiteSpace(safeHeadAnim))
+            {
+                return string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"PDOWN|{state.UserId}|{(state.IsDowned ? 1 : 0)}|{state.X}|{state.Y}|{safeLevelId}|{state.HeadX}|{state.HeadY}|{safeHeadAnim}\n");
+            }
+
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"PDOWN|{state.UserId}|{(state.IsDowned ? 1 : 0)}|{state.X}|{state.Y}|{safeLevelId}|{state.HeadX}|{state.HeadY}\n");
+        }
 
         return string.Create(
             CultureInfo.InvariantCulture,
@@ -2721,14 +2773,16 @@ public sealed class NetNode : IDisposable
         _log.Information("[NetNode] Sent hero death");
     }
 
-    public void SendPlayerDownState(bool isDowned, double x, double y, string? levelId)
+    public void SendPlayerDownState(bool isDowned, double x, double y, string? levelId, double? headX = null, double? headY = null, string? headAnim = null)
     {
         if (!HasAnyConnection())
             return;
         if (ID <= 0)
             return;
 
-        var state = new PlayerDownState(ID, isDowned, x, y, levelId ?? string.Empty);
+        var hasHead = isDowned && headX.HasValue && headY.HasValue;
+        var hasAnim = hasHead && !string.IsNullOrWhiteSpace(headAnim);
+        var state = new PlayerDownState(ID, isDowned, x, y, levelId ?? string.Empty, hasHead, headX ?? 0, headY ?? 0, hasAnim, headAnim);
         var line = BuildPlayerDownLine(state);
         _ = SendLineSafe(line);
     }
