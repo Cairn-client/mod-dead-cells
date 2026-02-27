@@ -39,6 +39,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<int, QueuedOldSkillMarker> clientQueuedOldSkillMarkers = new();
         private static readonly Dictionary<int, int> clientLastReportedMobLife = new();
         private static readonly Dictionary<int, long> clientLastMobHitReportTick = new();
+        private static readonly Dictionary<int, string> clientLastSentAffectPayloadBySyncId = new();
         private static readonly Dictionary<int, string> hostMobTypeBySyncId = new();
         private static readonly Dictionary<int, HostMobSentState> hostLastSentMobStatesBySyncId = new();
         private static readonly Dictionary<int, long> hostAttackRetargetLockUntilTick = new();
@@ -53,11 +54,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static double lastHostNetPumpFrame = double.NaN;
         private static double lastHostStateDeltaPumpFrame = double.NaN;
         private static long lastClientMobDrawSendTick;
+        private static long lastClientStateSendTick;
         private static long lastHostStateSendTick;
         private static int forceExactNemesisTargetDepth;
         private static readonly Dictionary<int, QueuedOldSkillMarker> hostQueuedOldSkillMarkers = new();
 
         private const double ClientMobDrawSendRateHz = 30.0;
+        private const double ClientStateSendRateHz = 30.0;
         private const double HostStateSendRateHz = 30.0;
         private const double ClientInterpolationAlpha = 0.7;
         private const double ClientAiLockSeconds = 0.3;
@@ -82,6 +85,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double ClientQueuedOldSkillMarkerSeconds = 0.4;
         private const double HostContactRetargetLockSeconds = 0.25;
         private const double HostOldSkillRetargetLockSeconds = 0.75;
+        private const double ClientAffectSyncSeconds = 0.35;
 
         private readonly struct QueuedOldSkillMarker
         {
@@ -204,6 +208,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 // Host must always consume MOBDRAW/HIT/DIE, even when tracked mobs exist.
                 // Otherwise remote clients cannot wake mobs that are far from the host camera,
                 // because no local mob pre/postUpdate runs for those mobs.
+                ConsumeIncomingClientMobStates(net);
                 ConsumeIncomingMobDraws(net);
                 ConsumeIncomingMobDies(net);
                 ConsumeIncomingMobHits(net);
@@ -311,6 +316,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 ConsumeIncomingHostMobAttacks(net!);
                 ConsumeIncomingMobDies(net!);
                 TrySendClientMobDraws(net!);
+                TrySendClientMobStateDeltaBatchPreUpdate(net!);
             }
 
             if (isClient && IsSyncMob(self))
@@ -578,6 +584,87 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 net.SendMobStates(deltas);
         }
 
+        private static void TrySendClientMobStateDeltaBatchPreUpdate(NetNode net)
+        {
+            if (!IsClient(net))
+                return;
+
+            var now = Stopwatch.GetTimestamp();
+            var minDelta = (long)(Stopwatch.Frequency / ClientStateSendRateHz);
+            if (lastClientStateSendTick != 0 && now - lastClientStateSendTick < minDelta)
+                return;
+            lastClientStateSendTick = now;
+
+            List<Mob> mobs;
+            lock (Sync)
+            {
+                PruneInvalidTrackedMobsLocked();
+                if (trackedMobs.Count == 0)
+                    return;
+
+                mobs = new List<Mob>(trackedMobs.Count);
+                for (int i = 0; i < trackedMobs.Count; i++)
+                {
+                    var mob = trackedMobs[i];
+                    if (mob != null && IsSyncMob(mob))
+                        mobs.Add(mob);
+                }
+            }
+
+            if (mobs.Count == 0)
+                return;
+
+            var deltas = new List<NetNode.MobStateSnapshot>(mobs.Count);
+            for (int i = 0; i < mobs.Count; i++)
+            {
+                var mob = mobs[i];
+                if (mob == null)
+                    continue;
+                if (!TryGetMobSyncId(mob, out var mobSyncId) || mobSyncId < 0)
+                    continue;
+
+                var statePayload = BuildMobAffectStatePayload(mob);
+                var shouldSend = false;
+                var hasAnyState = !string.IsNullOrWhiteSpace(statePayload);
+
+                lock (Sync)
+                {
+                    var changed = !clientLastSentAffectPayloadBySyncId.TryGetValue(mobSyncId, out var lastPayload) ||
+                                  !string.Equals(lastPayload, statePayload, StringComparison.Ordinal);
+                    if (changed || hasAnyState)
+                    {
+                        clientLastSentAffectPayloadBySyncId[mobSyncId] = statePayload;
+                        shouldSend = true;
+                    }
+                }
+
+                if (!shouldSend)
+                    continue;
+
+                var x = GetWorldX(mob);
+                var y = GetWorldY(mob);
+                var dir = NormalizeDir(mob.dir);
+                var life = mob.life;
+                var maxLife = mob.maxLife;
+                var animPayload = BuildAnimPayload(mob);
+                var mobType = BuildMobStateTypeSignature(mob);
+
+                deltas.Add(new NetNode.MobStateSnapshot(
+                    mobSyncId,
+                    x,
+                    y,
+                    dir,
+                    life,
+                    maxLife,
+                    animPayload,
+                    mobType,
+                    statePayload));
+            }
+
+            if (deltas.Count > 0)
+                net.SendMobStates(deltas);
+        }
+
         private static bool TryBuildHostMobStateDeltaSnapshot(Mob mob, out NetNode.MobStateSnapshot snapshot)
         {
             snapshot = default;
@@ -636,26 +723,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                var affects = mob.affects;
+                var affects = mob.getAllAffects();
                 if (affects == null || affects.length <= 0)
                     return string.Empty;
 
                 var ids = new List<int>(affects.length);
                 for (int i = 0; i < affects.length; i++)
                 {
-                    var affect = affects.getDyn(i) as virtual_a_t_uniqId_val_;
-                    if (affect == null)
+                    var affectList = affects.getDyn(i);
+                    if (TryGetDynLength(affectList) <= 0)
                         continue;
 
-                    try
-                    {
-                        var id = affect.a;
-                        if (id >= 0 && !ids.Contains(id))
-                            ids.Add(id);
-                    }
-                    catch
-                    {
-                    }
+                    ids.Add(i);
                 }
 
                 if (ids.Count == 0)
@@ -930,6 +1009,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             hostAttackRetargetLockUntilTick.Clear();
             clientLastReportedMobLife.Clear();
             clientLastMobHitReportTick.Clear();
+            clientLastSentAffectPayloadBySyncId.Clear();
             hostMobTypeBySyncId.Clear();
             hostLastSentMobStatesBySyncId.Clear();
             hostQueuedOldSkillMarkers.Clear();
@@ -942,6 +1022,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             lastHostNetPumpFrame = double.NaN;
             lastHostStateDeltaPumpFrame = double.NaN;
             lastClientMobDrawSendTick = 0;
+            lastClientStateSendTick = 0;
             lastHostStateSendTick = 0;
         }
 
@@ -949,6 +1030,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             if (SyncMobIdRegistry.TryGetExistingSyncId(mob, out var syncId))
             {
+                clientLastSentAffectPayloadBySyncId.Remove(syncId);
                 hostMobTypeBySyncId.Remove(syncId);
                 hostLastSentMobStatesBySyncId.Remove(syncId);
             }
@@ -969,6 +1051,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var mob = trackedMobs[index];
             if (SyncMobIdRegistry.TryGetExistingSyncId(mob, out var syncId))
             {
+                clientLastSentAffectPayloadBySyncId.Remove(syncId);
                 hostMobTypeBySyncId.Remove(syncId);
                 hostLastSentMobStatesBySyncId.Remove(syncId);
             }
@@ -2237,12 +2320,73 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             ApplyIncomingHostMobStates(states);
         }
 
+        private static void ConsumeIncomingClientMobStates(NetNode net)
+        {
+            if (!net.TryConsumeMobStates(out var states))
+                return;
+
+            ApplyIncomingClientMobStatesOnHost(states);
+        }
+
+        private static void ApplyIncomingClientMobStatesOnHost(IReadOnlyList<NetNode.MobStateSnapshot> states)
+        {
+            if (states == null || states.Count == 0)
+                return;
+
+            List<(Mob mob, string statePayload)> applies = new(states.Count);
+            lock (Sync)
+            {
+                PruneInvalidTrackedMobsLocked();
+                for (int i = 0; i < states.Count; i++)
+                {
+                    var state = states[i];
+                    var mob = ResolveMobBySyncIdLocked(state.Index);
+                    if (mob == null)
+                        continue;
+                    if (string.IsNullOrWhiteSpace(state.StatePayload))
+                        continue;
+
+                    applies.Add((mob, state.StatePayload));
+                }
+            }
+
+            for (int i = 0; i < applies.Count; i++)
+            {
+                var entry = applies[i];
+                ApplyClientReportedAffectStateOnHost(entry.mob, entry.statePayload);
+            }
+        }
+
+        private static void ApplyClientReportedAffectStateOnHost(Mob mob, string? payload)
+        {
+            if (mob == null || mob.destroyed)
+                return;
+
+            var desired = ParseAffectStatePayload(payload);
+            if (desired.Count == 0)
+                return;
+
+            foreach (var affectId in desired)
+            {
+                try
+                {
+                    if (mob.hasAffect(affectId))
+                        mob.minTimeAffect(affectId, ClientAffectSyncSeconds);
+                    else
+                        mob.setAffectS(affectId, ClientAffectSyncSeconds, HaxeProxy.Runtime.Ref<double>.Null, null);
+                }
+                catch
+                {
+                }
+            }
+        }
+
         private static void ApplyIncomingHostMobStates(IReadOnlyList<NetNode.MobStateSnapshot> states)
         {
             if (states == null || states.Count == 0)
                 return;
 
-            List<(Mob mob, int life, int maxLife)> lifeApplies = new(states.Count);
+            List<(Mob mob, int life, int maxLife, string statePayload)> stateApplies = new(states.Count);
             lock (Sync)
             {
                 PruneInvalidTrackedMobsLocked();
@@ -2269,7 +2413,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                             try { mob.dir = incomingDir; } catch { }
                         }
 
-                        lifeApplies.Add((mob, state.Life, state.MaxLife));
+                        stateApplies.Add((mob, state.Life, state.MaxLife, state.StatePayload ?? string.Empty));
                     }
 
                     var animPayload = state.AnimPayload;
@@ -2284,10 +2428,118 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 }
             }
 
-            for (int i = 0; i < lifeApplies.Count; i++)
+            for (int i = 0; i < stateApplies.Count; i++)
             {
-                var entry = lifeApplies[i];
+                var entry = stateApplies[i];
                 ApplyAuthoritativeLifeState(entry.mob, entry.life, entry.maxLife);
+                ApplyAuthoritativeAffectState(entry.mob, entry.statePayload);
+            }
+        }
+
+        private static void ApplyAuthoritativeAffectState(Mob mob, string? payload)
+        {
+            if (mob == null || mob.destroyed)
+                return;
+
+            var desired = ParseAffectStatePayload(payload);
+            if (!TryGetCurrentAffectIds(mob, out var current))
+                return;
+
+            if (current.SetEquals(desired))
+            {
+                if (desired.Count == 0)
+                    return;
+
+                foreach (var affectId in desired)
+                {
+                    try { mob.minTimeAffect(affectId, ClientAffectSyncSeconds); } catch { }
+                }
+                return;
+            }
+
+            foreach (var currentId in current)
+            {
+                if (desired.Contains(currentId))
+                    continue;
+
+                try { mob.removeAllAffects(currentId); } catch { }
+            }
+
+            foreach (var affectId in desired)
+            {
+                if (current.Contains(affectId))
+                {
+                    try { mob.minTimeAffect(affectId, ClientAffectSyncSeconds); } catch { }
+                    continue;
+                }
+
+                try { mob.setAffectS(affectId, ClientAffectSyncSeconds, HaxeProxy.Runtime.Ref<double>.Null, null); } catch { }
+            }
+        }
+
+        private static bool TryGetCurrentAffectIds(Mob mob, out HashSet<int> ids)
+        {
+            ids = new HashSet<int>();
+            if (mob == null)
+                return false;
+
+            try
+            {
+                var affects = mob.getAllAffects();
+                if (affects == null || affects.length <= 0)
+                    return true;
+
+                for (int i = 0; i < affects.length; i++)
+                {
+                    var affectList = affects.getDyn(i);
+                    if (TryGetDynLength(affectList) <= 0)
+                        continue;
+                    ids.Add(i);
+                }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static HashSet<int> ParseAffectStatePayload(string? payload)
+        {
+            var ids = new HashSet<int>();
+            if (string.IsNullOrWhiteSpace(payload))
+                return ids;
+
+            var decoded = payload!;
+            try { decoded = Uri.UnescapeDataString(decoded); } catch { }
+            if (string.IsNullOrWhiteSpace(decoded))
+                return ids;
+
+            var parts = decoded.Split('.', StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (!int.TryParse(parts[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
+                    continue;
+                if (id < 0)
+                    continue;
+                ids.Add(id);
+            }
+
+            return ids;
+        }
+
+        private static int TryGetDynLength(object? dynArray)
+        {
+            if (dynArray == null)
+                return 0;
+
+            try
+            {
+                return ((dynamic)dynArray).length;
+            }
+            catch
+            {
+                return 0;
             }
         }
 

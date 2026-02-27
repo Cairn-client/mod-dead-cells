@@ -1293,14 +1293,19 @@ public sealed class NetNode : IDisposable
 
         if (line.StartsWith("MOBSTATE|", StringComparison.OrdinalIgnoreCase))
         {
-            if (_role == NetRole.Host)
-                return true;
-
             var payload = line["MOBSTATE|".Length..];
             var parsedStates = ParseMobStatesPayload(payload);
             lock (_sync)
             {
-                _pendingMobStates = parsedStates;
+                if (_role == NetRole.Host)
+                {
+                    if (parsedStates.Count > 0)
+                        _pendingMobStates.AddRange(parsedStates);
+                }
+                else
+                {
+                    _pendingMobStates = parsedStates;
+                }
                 _hasRemote = true;
             }
             return true;
@@ -2806,7 +2811,7 @@ public sealed class NetNode : IDisposable
 
     public void SendMobStates(IReadOnlyList<MobStateSnapshot> states)
     {
-        if (_role != NetRole.Host)
+        if (_role != NetRole.Host && _role != NetRole.Client)
             return;
         if (!HasAnyConnection())
             return;
