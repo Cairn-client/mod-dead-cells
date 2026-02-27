@@ -2668,7 +2668,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 TrySetClientMobAttackTarget(mob, targetUserId, attackDir, forceRetarget: true);
                 TryWakeMobForForcedSimulation(mob);
-                TryResetQueuedOldSkillIfMatches(mob, normalizedSkillId);
                 TryInvokeOldSkillChargeComplete(oldSkill);
                 oldSkill.execute(null);
             }
@@ -2696,15 +2695,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (oldSkill == null)
                     return;
 
-                if (TryGetChargingOldSkillId(mob, out var chargingOldSkillId))
-                {
-                    if (string.Equals(chargingOldSkillId, normalizedSkillId, StringComparison.Ordinal))
-                        return;
-                }
-
                 TrySetClientMobAttackTarget(mob, targetUserId, attackDir, forceRetarget: true);
                 TryWakeMobForForcedSimulation(mob);
-                TryResetQueuedOldSkillIfMatches(mob, normalizedSkillId);
 
                 if (!TryExecuteClientOldSkillNativeLike(oldSkill, data))
                 {
