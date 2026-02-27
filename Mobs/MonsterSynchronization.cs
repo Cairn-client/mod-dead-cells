@@ -75,6 +75,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double MobStateTypeRebindSearchRadius = 96.0;
         private const double MobStateTypeRebindSearchRadiusSq = MobStateTypeRebindSearchRadius * MobStateTypeRebindSearchRadius;
         private const string ContactAttackPacketSkillId = "@contact";
+        private const string OldSkillChargeCompletePacketPrefix = "@oldcc:";
         private const string OldSkillExecutePacketPrefix = "@oldexec:";
         private const string NewSkillExecutePacketPrefix = "@newexec:";
         private const double HostQueuedOldSkillMarkerSeconds = 3.0;
@@ -736,7 +737,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!IsHost(net))
                 return;
 
-            TrySendHostMobAttack(ownerMob, OldSkillExecutePacketPrefix + skillId, false, null);
+            TrySendHostMobAttack(ownerMob, OldSkillChargeCompletePacketPrefix + skillId, false, null);
         }
 
         private void Hook_Mob_queueAttack(Hook_Mob.orig_queueAttack orig, Mob self, OldMobSkill a, bool requiresTargetInArea, int? data)
@@ -2563,6 +2564,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
             }
 
+            if (skillId.StartsWith(OldSkillChargeCompletePacketPrefix, StringComparison.Ordinal))
+            {
+                TryExecuteClientOldSkill(mob, skillId[OldSkillChargeCompletePacketPrefix.Length..], data, targetUserId, attackDir);
+                return;
+            }
+
             if (skillId.StartsWith(NewSkillExecutePacketPrefix, StringComparison.Ordinal))
             {
                 TryExecuteClientNewSkill(mob, skillId[NewSkillExecutePacketPrefix.Length..], data, targetUserId, attackDir);
@@ -2598,13 +2605,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (mob == null || string.IsNullOrWhiteSpace(rawSkillId))
                 return;
 
-            if (ShouldSkipClientOldSkillExecuteFromMarker(mob, rawSkillId))
-                return;
-
             try
             {
                 var normalizedSkillId = rawSkillId.Trim();
                 if (string.IsNullOrWhiteSpace(normalizedSkillId))
+                    return;
+
+                if (ShouldSkipClientOldSkillExecuteFromMarker(mob, normalizedSkillId))
                     return;
 
                 var skillId = normalizedSkillId.AsHaxeString();
@@ -2619,23 +2626,47 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 {
                     if (!string.Equals(chargingOldSkillId, normalizedSkillId, StringComparison.Ordinal))
                         return;
+                }
 
-                    oldSkill.execute(null);
+                TrySetClientMobAttackTarget(mob, targetUserId, attackDir, forceRetarget: true);
+                TryWakeMobForForcedSimulation(mob);
+                TryResetQueuedOldSkillIfMatches(mob, normalizedSkillId);
+                TryInvokeOldSkillChargeComplete(oldSkill);
+                oldSkill.execute(null);
+            }
+            catch
+            {
+            }
+        }
+
+        private static void TryInvokeOldSkillChargeComplete(OldMobSkill oldSkill)
+        {
+            if (oldSkill == null)
+                return;
+
+            try
+            {
+                dynamic dyn = oldSkill;
+                var cb = dyn.dynOnChargeComplete;
+                if (cb != null)
+                {
+                    cb.Invoke();
                     return;
                 }
+            }
+            catch
+            {
+            }
 
-                var hadQueuedSkill = IsQueuedOldSkillId(mob, normalizedSkillId);
-                if (hadQueuedSkill)
-                    TryResetQueuedOldSkillIfMatches(mob, normalizedSkillId);
-                else
-                    TrySetClientMobAttackTarget(mob, targetUserId, attackDir, forceRetarget: true);
+            try
+            {
+                var prop = oldSkill.GetType().GetProperty("dynOnChargeComplete");
+                var cb = prop?.GetValue(oldSkill);
+                if (cb == null)
+                    return;
 
-                if (!TryExecuteClientOldSkillNativeLike(oldSkill, data))
-                {
-                    try { oldSkill.prepare(data); } catch { }
-                }
-
-                oldSkill.execute(null);
+                var invoke = cb.GetType().GetMethod("Invoke", System.Type.EmptyTypes);
+                invoke?.Invoke(cb, null);
             }
             catch
             {
