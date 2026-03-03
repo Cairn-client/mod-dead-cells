@@ -66,6 +66,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static long lastClientStateSendTick;
         private static long lastHostStateSendTick;
         private static int forceExactNemesisTargetDepth;
+        private static int clientNetworkQueuedAttackDepth;
+        private static Mob? clientNetworkQueuedAttackMob;
         private static readonly Dictionary<int, QueuedOldSkillMarker> hostQueuedOldSkillMarkers = new();
 
         private const double ClientMobDrawSendRateHz = 30.0;
@@ -87,7 +89,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double ClientDrawKeepAliveSeconds = 0.9;
         private const double ClientInterpolationAlpha = 0.62;
         private const double ClientAiLockSeconds = 0.3;
-        private const double ClientAttackUnlockSeconds = 2.2;
+        private const double ClientAttackUnlockContactSeconds = 0.35;
+        private const double ClientAttackUnlockOldPrepareSeconds = 0.45;
+        private const double ClientAttackUnlockOldExecuteSeconds = 1.15;
+        private const double ClientAttackUnlockNewExecuteSeconds = 0.95;
+        private const double ClientAttackUnlockQueueSeconds = 0.6;
         private const double ClientAttackForcedDirSeconds = 0.22;
         private const double HostContactAttackSendCooldownSeconds = 0.3;
         private const double ClientMobHitReportMinIntervalSeconds = 0.05;
@@ -1027,12 +1033,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private void Hook_Mob_queueAttack(Hook_Mob.orig_queueAttack orig, Mob self, OldMobSkill a, bool requiresTargetInArea, int? data)
         {
+            var net = GameMenu.NetRef;
+            if (IsClient(net) && IsSyncMob(self) && !IsClientNetworkQueuedAttackAllowed(self))
+                return;
+
             orig(self, a, requiresTargetInArea, data);
 
             if (self == null || a == null)
                 return;
 
-            var net = GameMenu.NetRef;
             if (!IsHost(net))
                 return;
 
@@ -1050,6 +1059,35 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             TrySendHostMobAttack(self, skillId, requiresTargetInArea, data);
+        }
+
+        private static bool IsClientNetworkQueuedAttackAllowed(Mob? mob)
+        {
+            if (mob == null)
+                return false;
+
+            return clientNetworkQueuedAttackDepth > 0 &&
+                   clientNetworkQueuedAttackMob != null &&
+                   ReferenceEquals(clientNetworkQueuedAttackMob, mob);
+        }
+
+        private static void WithClientNetworkQueuedAttackContext(Mob mob, Action action)
+        {
+            if (mob == null || action == null)
+                return;
+
+            var previousMob = clientNetworkQueuedAttackMob;
+            clientNetworkQueuedAttackMob = mob;
+            clientNetworkQueuedAttackDepth++;
+            try
+            {
+                action();
+            }
+            finally
+            {
+                clientNetworkQueuedAttackDepth--;
+                clientNetworkQueuedAttackMob = previousMob;
+            }
         }
 
         private void Hook_MobSkill_execute(Hook_MobSkill.orig_execute orig, MobSkill self, double? ratio)
@@ -2872,10 +2910,26 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     if (localIndex >= 0 && localIndex < trackedMobs.Count)
                     {
                         mob = trackedMobs[localIndex];
-                        var unlockTicks = (long)(Stopwatch.Frequency * ClientAttackUnlockSeconds);
                         var forcedDirTicks = (long)(Stopwatch.Frequency * ClientAttackForcedDirSeconds);
                         var nowTick = Stopwatch.GetTimestamp();
-                        clientAttackUnlockUntilTick[localIndex] = nowTick + unlockTicks;
+                        var unlockSeconds = ResolveClientAttackUnlockSeconds(attack.SkillId);
+                        if (unlockSeconds > 0.0)
+                        {
+                            var unlockTicks = (long)(Stopwatch.Frequency * unlockSeconds);
+                            var until = nowTick + unlockTicks;
+                            if (clientAttackUnlockUntilTick.TryGetValue(localIndex, out var previousUntil) &&
+                                previousUntil > until)
+                            {
+                                until = previousUntil;
+                            }
+
+                            clientAttackUnlockUntilTick[localIndex] = until;
+                        }
+                        else
+                        {
+                            clientAttackUnlockUntilTick.Remove(localIndex);
+                        }
+
                         var normalizedAttackDir = NormalizeDir(attack.Dir);
                         if (normalizedAttackDir != 0)
                         {
@@ -2895,6 +2949,29 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 TryQueueClientMobAttack(mob, attack.SkillId, attack.RequiresTargetInArea, attack.Data, attack.TargetUserId, attack.Dir);
             }
+        }
+
+        private static double ResolveClientAttackUnlockSeconds(string? skillId)
+        {
+            if (string.IsNullOrWhiteSpace(skillId))
+                return 0.0;
+
+            if (string.Equals(skillId, ContactAttackPacketSkillId, StringComparison.Ordinal))
+                return ClientAttackUnlockContactSeconds;
+
+            if (skillId.StartsWith(OldSkillPreparePacketPrefix, StringComparison.Ordinal))
+                return ClientAttackUnlockOldPrepareSeconds;
+
+            if (skillId.StartsWith(OldSkillExecutePacketPrefix, StringComparison.Ordinal) ||
+                skillId.StartsWith(OldSkillChargeCompletePacketPrefix, StringComparison.Ordinal))
+            {
+                return ClientAttackUnlockOldExecuteSeconds;
+            }
+
+            if (skillId.StartsWith(NewSkillExecutePacketPrefix, StringComparison.Ordinal))
+                return ClientAttackUnlockNewExecuteSeconds;
+
+            return ClientAttackUnlockQueueSeconds;
         }
 
         private static void TrySendClientMobDraws(NetNode net)
@@ -3116,7 +3193,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (oldSkill == null)
                     return;
 
-                mob.queueAttack(oldSkill, requiresTargetInArea, data);
+                WithClientNetworkQueuedAttackContext(mob, () =>
+                {
+                    mob.queueAttack(oldSkill, requiresTargetInArea, data);
+                });
             }
             catch
             {
@@ -3182,7 +3262,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (oldSkill == null)
                     return;
 
-                TrySetClientMobAttackTarget(mob, targetUserId, attackDir, forceRetarget: true);
+                TrySetClientMobAttackFacingOnly(mob, targetUserId, attackDir);
                 TryWakeMobForForcedSimulation(mob);
 
                 if (!TryExecuteClientOldSkillNativeLike(oldSkill, data))
@@ -3472,6 +3552,35 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             TrySetMobAttackTargetsExact(mob, target, attackDir, forceAttackDir: true);
+        }
+
+        private static void TrySetClientMobAttackFacingOnly(Mob mob, int targetUserId, int attackDir)
+        {
+            if (mob == null)
+                return;
+
+            var normalizedAttackDir = NormalizeDir(attackDir);
+            if (normalizedAttackDir != 0)
+            {
+                try { mob.dir = normalizedAttackDir; } catch { }
+                return;
+            }
+
+            var target = ResolveClientAttackTargetEntity(mob, targetUserId);
+            if (target == null)
+                return;
+
+            try
+            {
+                var mobX = GetWorldX(mob);
+                var targetX = GetWorldX(target);
+                var facing = targetX < mobX ? -1 : targetX > mobX ? 1 : NormalizeDir(mob.dir);
+                if (facing != 0)
+                    mob.dir = facing;
+            }
+            catch
+            {
+            }
         }
 
         private static Entity? ResolveClientAttackTargetEntity(Mob mob, int targetUserId)
