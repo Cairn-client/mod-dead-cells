@@ -62,6 +62,10 @@ namespace DeadCellsMultiplayerMod
         private static int _remoteSerializerSeq;
         private static int _remoteSerializerUid;
         private static bool _hasRemoteSerializerSync;
+        private static bool _hasRemoteSerializerValues;
+        private static bool _localSerializerCaptured;
+        private static int _localSerializerSeq;
+        private static int _localSerializerUid;
         private static readonly Dictionary<string, int> _remoteCountersSnapshot = new(StringComparer.Ordinal);
         private static readonly Dictionary<int, int> _remoteNpcProgressSnapshot = new();
         private static int _remoteStoryDataVersion;
@@ -104,7 +108,6 @@ namespace DeadCellsMultiplayerMod
             }
             else if (net != null)
             {
-                TryApplyRemoteSerializerSync();
                 if (!string.IsNullOrEmpty(_remoteCountersPayload))
                     ReceiveCounters(_remoteCountersPayload, self);
                 if (!string.IsNullOrEmpty(_remoteBlueprintsPayload))
@@ -376,10 +379,15 @@ namespace DeadCellsMultiplayerMod
                 _remoteNpcProgressSnapshot.Clear();
                 _remoteStoryDataVersion = 0;
                 _hasRemoteStoryDataVersion = false;
+                _hasRemoteSerializerSync = false;
+                _hasRemoteSerializerValues = false;
+                _remoteSerializerSeq = 0;
+                _remoteSerializerUid = 0;
                 lock (_bossRuneLock)
                 {
                     _remoteBossRune = null;
                 }
+                RestoreLocalSerializerSyncIfCaptured();
                 _origStoryCaptured = false;
                 _origStory = null;
                 _origCounters = null;
@@ -533,6 +541,7 @@ namespace DeadCellsMultiplayerMod
                 _remoteSerializerSeq = seq;
                 _remoteSerializerUid = uid;
                 _hasRemoteSerializerSync = true;
+                _hasRemoteSerializerValues = true;
             }
         }
 
@@ -556,13 +565,67 @@ namespace DeadCellsMultiplayerMod
                 if (serializerClass == null)
                     return false;
 
+                if (!_localSerializerCaptured)
+                {
+                    _localSerializerSeq = serializerClass.SEQ;
+                    _localSerializerUid = serializerClass.UID;
+                    _localSerializerCaptured = true;
+                }
+
                 serializerClass.SEQ = seq;
                 serializerClass.UID = uid;
+                _hasRemoteSerializerValues = true;
                 return true;
             }
             catch
             {
                 return false;
+            }
+        }
+
+        public static bool SwapToLocalSerializerSync()
+        {
+            if (!_localSerializerCaptured)
+                return false;
+
+            try
+            {
+                var serializerClass = dc.hxbit.Serializer.Class;
+                if (serializerClass == null)
+                    return false;
+
+                if (serializerClass.SEQ == _localSerializerSeq &&
+                    serializerClass.UID == _localSerializerUid)
+                {
+                    return false;
+                }
+
+                serializerClass.SEQ = _localSerializerSeq;
+                serializerClass.UID = _localSerializerUid;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static void RestoreRemoteSerializerSync()
+        {
+            if (!_hasRemoteSerializerValues)
+                return;
+
+            try
+            {
+                var serializerClass = dc.hxbit.Serializer.Class;
+                if (serializerClass == null)
+                    return;
+
+                serializerClass.SEQ = _remoteSerializerSeq;
+                serializerClass.UID = _remoteSerializerUid;
+            }
+            catch
+            {
             }
         }
 
@@ -927,6 +990,25 @@ namespace DeadCellsMultiplayerMod
             if (bool.TryParse(value, out var parsed))
                 return parsed;
             return fallback;
+        }
+
+        private static void RestoreLocalSerializerSyncIfCaptured()
+        {
+            if (!_localSerializerCaptured)
+                return;
+
+            try
+            {
+                var serializerClass = dc.hxbit.Serializer.Class;
+                if (serializerClass == null)
+                    return;
+
+                serializerClass.SEQ = _localSerializerSeq;
+                serializerClass.UID = _localSerializerUid;
+            }
+            catch
+            {
+            }
         }
 
         private static void RestoreOriginalStory(User user, bool preserveLocalProgress)

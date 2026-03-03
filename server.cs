@@ -428,6 +428,8 @@ public sealed class NetNode : IDisposable
     private readonly object _hostCacheSync = new();
     private int? _cachedHostSeed;
     private int? _cachedHostBossRune;
+    private int? _cachedHostSerializerSeq;
+    private int? _cachedHostSerializerUid;
     private string? _cachedHostCountersPayload;
     private string? _cachedHostBlueprintsPayload;
     private string? _cachedHostLevelGraphPayload;
@@ -545,6 +547,8 @@ public sealed class NetNode : IDisposable
                 {
                     int? cachedBossRune;
                     int? cachedSeed;
+                    int? cachedSerializerSeq;
+                    int? cachedSerializerUid;
                     string? cachedCountersPayload;
                     string? cachedBlueprintsPayload;
                     string? cachedLevelGraphPayload;
@@ -552,10 +556,15 @@ public sealed class NetNode : IDisposable
                     {
                         cachedBossRune = _cachedHostBossRune;
                         cachedSeed = _cachedHostSeed;
+                        cachedSerializerSeq = _cachedHostSerializerSeq;
+                        cachedSerializerUid = _cachedHostSerializerUid;
                         cachedCountersPayload = _cachedHostCountersPayload;
                         cachedBlueprintsPayload = _cachedHostBlueprintsPayload;
                         cachedLevelGraphPayload = _cachedHostLevelGraphPayload;
                     }
+
+                    if (cachedSerializerSeq.HasValue && cachedSerializerUid.HasValue)
+                        await SendLineToClientSafe(connection, $"HXSYNC|{cachedSerializerSeq.Value}|{cachedSerializerUid.Value}\n").ConfigureAwait(false);
 
                     if (cachedBossRune.HasValue)
                         await SendLineToClientSafe(connection, $"BOSSRUNE|{cachedBossRune.Value}\n").ConfigureAwait(false);
@@ -2461,6 +2470,11 @@ public sealed class NetNode : IDisposable
     {
         if (_role != NetRole.Host)
             return;
+        lock (_hostCacheSync)
+        {
+            _cachedHostSerializerSeq = seq;
+            _cachedHostSerializerUid = uid;
+        }
         if (!HasAnyConnection())
             return;
 
@@ -3337,8 +3351,11 @@ public sealed class NetNode : IDisposable
         {
             _cachedHostSeed = null;
             _cachedHostBossRune = null;
+            _cachedHostSerializerSeq = null;
+            _cachedHostSerializerUid = null;
             _cachedHostCountersPayload = null;
             _cachedHostBlueprintsPayload = null;
+            _cachedHostLevelGraphPayload = null;
         }
         lock (_sync)
         {
