@@ -519,8 +519,18 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook__Save_save(Hook__Save.orig_save orig, User u, bool onlyGameData)
         {
+            if (_netRole == NetRole.Host)
+            {
+                orig(u, onlyGameData);
+                if (u != null)
+                    GameDataSync.SendHostStorySync(u, _net);
+                return;
+            }
+
             if (_netRole == NetRole.Client)
             {
+                if (u != null)
+                    GameDataSync.CaptureSessionStory(u);
                 var swapped = u != null && GameDataSync.SwapToOriginalUserData(u);
                 var serializerSwapped = GameDataSync.SwapToLocalSerializerSync();
                 try
@@ -533,6 +543,8 @@ namespace DeadCellsMultiplayerMod
                         GameDataSync.RestoreRemoteSerializerSync();
                     if (swapped && u != null)
                         GameDataSync.RestoreRemoteUserData(u);
+                    if (u != null)
+                        GameDataSync.RestoreSessionStory(u);
                 }
                 return;
             }

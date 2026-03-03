@@ -46,6 +46,11 @@ namespace DeadCellsMultiplayerMod
         private static readonly Dictionary<string, int> _origCountersSnapshot = new(StringComparer.Ordinal);
         private static readonly Dictionary<int, int> _origNpcProgressSnapshot = new();
         private static int _origStoryDataVersion;
+        private static bool _sessionStoryCaptured;
+        private static bool _sessionStoryWasNull;
+        private static readonly Dictionary<string, int> _sessionCountersSnapshot = new(StringComparer.Ordinal);
+        private static readonly Dictionary<int, int> _sessionNpcProgressSnapshot = new();
+        private static int _sessionStoryDataVersion;
         private static bool _origItemMetaCaptured;
         private static ItemMetaManager? _origItemMeta;
         private static ArrayObj? _origItemProgress;
@@ -108,8 +113,6 @@ namespace DeadCellsMultiplayerMod
             }
             else if (net != null)
             {
-                if (!string.IsNullOrEmpty(_remoteCountersPayload))
-                    ReceiveCounters(_remoteCountersPayload, self);
                 if (!string.IsNullOrEmpty(_remoteBlueprintsPayload))
                     ReceiveBlueprints(_remoteBlueprintsPayload, self);
                 if (GameMenu.TryGetRemoteSeed(out var remoteSeed))
@@ -139,6 +142,11 @@ namespace DeadCellsMultiplayerMod
                 SendBlueprints(self, net);
             }
             orig(self, lvl, isTwitch, isCustom, mode, gdata);
+
+            if (net != null && net.IsHost)
+                SendHostStorySync(self, net);
+            else if (net != null && !string.IsNullOrEmpty(_remoteCountersPayload))
+                ReceiveCounters(_remoteCountersPayload, self);
         }
 
         public static void ReceiveBlueprints(string payload, User? target = null)
@@ -394,6 +402,7 @@ namespace DeadCellsMultiplayerMod
                 _origCountersSnapshot.Clear();
                 _origNpcProgressSnapshot.Clear();
                 _origStoryDataVersion = 0;
+                ClearSessionStory();
                 _origItemMetaCaptured = false;
                 _origItemMeta = null;
                 _origItemProgress = null;
@@ -437,6 +446,40 @@ namespace DeadCellsMultiplayerMod
                 _origBossRuneCaptured = true;
                 _origBossRune = user.bossRuneActivated;
             }
+        }
+
+        public static void CaptureSessionStory(User user)
+        {
+            if (user == null)
+                return;
+
+            _sessionStoryCaptured = true;
+            _sessionStoryWasNull = user.story == null;
+            _sessionCountersSnapshot.Clear();
+            CopyCountersToDictionary(user.story?.counters, _sessionCountersSnapshot);
+            _sessionNpcProgressSnapshot.Clear();
+            CopyNpcProgressToDictionary(user.story?.npcProgresses, _sessionNpcProgressSnapshot);
+            _sessionStoryDataVersion = user.story?.storyDataVersion ?? 0;
+        }
+
+        public static void RestoreSessionStory(User user)
+        {
+            if (!_sessionStoryCaptured || user == null)
+                return;
+
+            if (_sessionStoryWasNull && _sessionCountersSnapshot.Count == 0 && _sessionNpcProgressSnapshot.Count == 0 && _sessionStoryDataVersion == 0)
+            {
+                user.story = null;
+                ClearSessionStory();
+                return;
+            }
+
+            var story = user.story ?? new StoryManager();
+            story.counters = BuildCountersMap(_sessionCountersSnapshot);
+            story.npcProgresses = BuildNpcProgressMap(_sessionNpcProgressSnapshot);
+            story.storyDataVersion = _sessionStoryDataVersion;
+            user.story = story;
+            ClearSessionStory();
         }
 
         public static void RestoreRemoteUserData(User user)
@@ -756,6 +799,14 @@ namespace DeadCellsMultiplayerMod
                 net.SendCounters(payload);
         }
 
+        public static void SendHostStorySync(User user, NetNode? net)
+        {
+            if (user == null || net == null || !net.IsHost)
+                return;
+
+            SendCounters(user, net);
+        }
+
 
 
 
@@ -1009,6 +1060,15 @@ namespace DeadCellsMultiplayerMod
             catch
             {
             }
+        }
+
+        private static void ClearSessionStory()
+        {
+            _sessionStoryCaptured = false;
+            _sessionStoryWasNull = false;
+            _sessionCountersSnapshot.Clear();
+            _sessionNpcProgressSnapshot.Clear();
+            _sessionStoryDataVersion = 0;
         }
 
         private static void RestoreOriginalStory(User user, bool preserveLocalProgress)
