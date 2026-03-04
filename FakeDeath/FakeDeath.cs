@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Diagnostics;
 using dc.en;
+using dc.tool.atk;
 using dc.tool.mainSkills;
 using dc.ui;
+using dc.cine;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using ModCore.Modules;
@@ -101,6 +103,33 @@ namespace DeadCellsMultiplayerMod
             orig(self);
         }
 
+        private void Hook_Hero_checkCursedWeaponHit(Hook_Hero.orig_checkCursedWeaponHit orig, Hero self, AttackData a)
+        {
+            var net = _net;
+            if (_netRole != NetRole.None &&
+                net != null &&
+                me != null &&
+                ReferenceEquals(self, me))
+            {
+                if (_localFakeDead)
+                    return;
+
+                orig(self, a);
+
+                if (_localFakeDead)
+                    return;
+
+                // Cursed death sometimes starts vanilla death flow without passing through local death hooks.
+                if (ShouldEnterFakeDeathFromEarlyDeathHook(self, net) || IsVanillaHeroDeathCineActive())
+                {
+                    EnterLocalFakeDeath(self, net);
+                }
+                return;
+            }
+
+            orig(self, a);
+        }
+
         private bool ShouldEnterFakeDeathFromEarlyDeathHook(Hero self, NetNode net)
         {
             if (self == null || net == null)
@@ -126,6 +155,23 @@ namespace DeadCellsMultiplayerMod
             }
 
             return true;
+        }
+
+        private static bool IsVanillaHeroDeathCineActive()
+        {
+            try
+            {
+                var cine = dc.pr.Game.Class.ME?.curCine;
+                return cine is HeroDeath ||
+                       cine is HeroDeathBase ||
+                       cine is HeroDeathContinue ||
+                       cine is HeroDeathRespawn ||
+                       cine is HeroDeathDLCP;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private void Hook_Hero_startDeathCine(Hook_Hero.orig_startDeathCine orig, Hero self)

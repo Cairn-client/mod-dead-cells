@@ -344,6 +344,7 @@ namespace DeadCellsMultiplayerMod
             Hook_Game.pause += Hook_Game_pause;
             Hook_Hero.kill += Hook_Hero_kill;
             Hook_Hero.onDie += Hook_Hero_onDie;
+            Hook_Hero.checkCursedWeaponHit += Hook_Hero_checkCursedWeaponHit;
             Hook_Hero.startDeathCine += Hook_Hero_startDeathCine;
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
             Hook_ZDoor.onActivate += Hook_ZDoor_onActivate;
