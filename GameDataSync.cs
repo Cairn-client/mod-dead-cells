@@ -432,25 +432,37 @@ namespace DeadCellsMultiplayerMod
             return restored;
         }
 
-        public static void CaptureOriginalUserData(User user)
+        public static void CaptureOriginalUserData(User user, bool allowReplaceWhenBetter = false)
         {
-            if (!_origStoryCaptured)
+            var shouldCaptureOriginalStory = !_origStoryCaptured;
+            if (!shouldCaptureOriginalStory &&
+                allowReplaceWhenBetter &&
+                !HasAnyStorySnapshotData(
+                    _origCountersSnapshot,
+                    _origNpcProgressSnapshot,
+                    _origLoreRoomRunIdsSnapshot,
+                    _origVisitedLoreRoomsSnapshot,
+                    _origPlannedLoresSnapshot,
+                    _origStoryDataVersion) &&
+                HasAnyUserStoryData(user))
+            {
+                shouldCaptureOriginalStory = true;
+            }
+
+            if (shouldCaptureOriginalStory)
             {
                 _origStoryCaptured = true;
                 _origStory = user.story;
-                _origStoryWasNull = user.story == null;
                 _origCounters = user.story?.counters;
-                _origCountersSnapshot.Clear();
-                CopyCountersToDictionary(user.story?.counters, _origCountersSnapshot);
-                _origNpcProgressSnapshot.Clear();
-                CopyNpcProgressToDictionary(user.story?.npcProgresses, _origNpcProgressSnapshot);
-                _origLoreRoomRunIdsSnapshot.Clear();
-                CopyStoryStringIntMapToDictionary(user.story?.loreRoomRunIds, _origLoreRoomRunIdsSnapshot);
-                _origVisitedLoreRoomsSnapshot.Clear();
-                CopyStoryVisitedLoreRoomsToSet(user.story?.visitedLoreRooms, _origVisitedLoreRoomsSnapshot);
-                _origPlannedLoresSnapshot.Clear();
-                CopyStoryPlannedLoresToList(user.story?.plannedLores, _origPlannedLoresSnapshot);
-                _origStoryDataVersion = user.story?.storyDataVersion ?? 0;
+                CaptureStorySnapshot(
+                    user,
+                    _origCountersSnapshot,
+                    _origNpcProgressSnapshot,
+                    _origLoreRoomRunIdsSnapshot,
+                    _origVisitedLoreRoomsSnapshot,
+                    _origPlannedLoresSnapshot,
+                    out _origStoryWasNull,
+                    out _origStoryDataVersion);
             }
 
             if (!_origItemMetaCaptured)
@@ -478,18 +490,15 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             _sessionStoryCaptured = true;
-            _sessionStoryWasNull = user.story == null;
-            _sessionCountersSnapshot.Clear();
-            CopyCountersToDictionary(user.story?.counters, _sessionCountersSnapshot);
-            _sessionNpcProgressSnapshot.Clear();
-            CopyNpcProgressToDictionary(user.story?.npcProgresses, _sessionNpcProgressSnapshot);
-            _sessionLoreRoomRunIdsSnapshot.Clear();
-            CopyStoryStringIntMapToDictionary(user.story?.loreRoomRunIds, _sessionLoreRoomRunIdsSnapshot);
-            _sessionVisitedLoreRoomsSnapshot.Clear();
-            CopyStoryVisitedLoreRoomsToSet(user.story?.visitedLoreRooms, _sessionVisitedLoreRoomsSnapshot);
-            _sessionPlannedLoresSnapshot.Clear();
-            CopyStoryPlannedLoresToList(user.story?.plannedLores, _sessionPlannedLoresSnapshot);
-            _sessionStoryDataVersion = user.story?.storyDataVersion ?? 0;
+            CaptureStorySnapshot(
+                user,
+                _sessionCountersSnapshot,
+                _sessionNpcProgressSnapshot,
+                _sessionLoreRoomRunIdsSnapshot,
+                _sessionVisitedLoreRoomsSnapshot,
+                _sessionPlannedLoresSnapshot,
+                out _sessionStoryWasNull,
+                out _sessionStoryDataVersion);
         }
 
         public static void RestoreSessionStory(User user)
@@ -499,12 +508,13 @@ namespace DeadCellsMultiplayerMod
 
             if (_sessionStoryWasNull && _sessionCountersSnapshot.Count == 0 && _sessionNpcProgressSnapshot.Count == 0 && _sessionStoryDataVersion == 0)
             {
-                user.story = null;
+                ClearUserStoryState(user);
                 ClearSessionStory();
                 return;
             }
 
-            user.story = BuildStoryManager(
+            ApplyStoryState(
+                user,
                 _sessionCountersSnapshot,
                 _sessionNpcProgressSnapshot,
                 _sessionStoryDataVersion,
@@ -750,6 +760,13 @@ namespace DeadCellsMultiplayerMod
                     ParseLegacyCountersPayload(payload, counters);
                 }
 
+                if (!HasAnyIncomingStoryData(counters, npcProgress, loreRoomRunIds, visitedLoreRooms, plannedLores, storyDataVersion) &&
+                    HasAnyUserStoryData(user))
+                {
+                    _log?.Warning("[NetMod] Ignoring empty story counters payload to avoid wiping local story state");
+                    return;
+                }
+
                 CaptureOriginalUserData(user);
                 if (!hasExtendedStoryPayload)
                 {
@@ -761,10 +778,12 @@ namespace DeadCellsMultiplayerMod
                     CopyStoryPlannedLoresToList(user.story?.plannedLores, plannedLores);
                 }
 
-                user.story = BuildStoryManager(
+                var storyDataVersionToApply = storyDataVersion ?? (user.story?.storyDataVersion ?? 0);
+                ApplyStoryState(
+                    user,
                     counters,
                     npcProgress,
-                    storyDataVersion ?? (user.story?.storyDataVersion ?? 0),
+                    storyDataVersionToApply,
                     loreRoomRunIds,
                     visitedLoreRooms,
                     plannedLores);
@@ -1264,11 +1283,12 @@ namespace DeadCellsMultiplayerMod
                 plannedLoresToApply.Count == 0 &&
                 storyDataVersionToApply == 0)
             {
-                user.story = null;
+                ClearUserStoryState(user);
                 return;
             }
 
-            user.story = BuildStoryManager(
+            ApplyStoryState(
+                user,
                 countersToApply,
                 npcProgressToApply,
                 storyDataVersionToApply,
@@ -1575,6 +1595,122 @@ namespace DeadCellsMultiplayerMod
             commitPair();
         }
 
+        private static void CaptureStorySnapshot(
+            User user,
+            Dictionary<string, int> countersTarget,
+            Dictionary<int, int> npcProgressTarget,
+            Dictionary<string, int> loreRoomRunIdsTarget,
+            HashSet<string> visitedLoreRoomsTarget,
+            List<int> plannedLoresTarget,
+            out bool storyWasNull,
+            out int storyDataVersion)
+        {
+            countersTarget.Clear();
+            npcProgressTarget.Clear();
+            loreRoomRunIdsTarget.Clear();
+            visitedLoreRoomsTarget.Clear();
+            plannedLoresTarget.Clear();
+
+            var story = user.story;
+            storyWasNull = story == null;
+            if (story != null)
+            {
+                CopyCountersToDictionary(story.counters, countersTarget);
+                CopyNpcProgressToDictionary(story.npcProgresses, npcProgressTarget);
+                CopyStoryStringIntMapToDictionary(story.loreRoomRunIds, loreRoomRunIdsTarget);
+                CopyStoryVisitedLoreRoomsToSet(story.visitedLoreRooms, visitedLoreRoomsTarget);
+                CopyStoryPlannedLoresToList(story.plannedLores, plannedLoresTarget);
+                storyDataVersion = story.storyDataVersion;
+                return;
+            }
+
+            storyDataVersion = 0;
+            CopyCountersToDictionary(user.counters, countersTarget);
+            CopyNpcProgressToDictionary(user.npcs, npcProgressTarget);
+            if (countersTarget.Count > 0 || npcProgressTarget.Count > 0)
+                storyWasNull = false;
+        }
+
+        private static bool HasAnyIncomingStoryData(
+            Dictionary<string, int> counters,
+            Dictionary<int, int> npcProgress,
+            Dictionary<string, int> loreRoomRunIds,
+            HashSet<string> visitedLoreRooms,
+            List<int> plannedLores,
+            int? storyDataVersion)
+        {
+            return counters.Count > 0 ||
+                   npcProgress.Count > 0 ||
+                   loreRoomRunIds.Count > 0 ||
+                   visitedLoreRooms.Count > 0 ||
+                   plannedLores.Count > 0 ||
+                   (storyDataVersion ?? 0) != 0;
+        }
+
+        private static bool HasAnyStorySnapshotData(
+            Dictionary<string, int> counters,
+            Dictionary<int, int> npcProgress,
+            Dictionary<string, int> loreRoomRunIds,
+            HashSet<string> visitedLoreRooms,
+            List<int> plannedLores,
+            int storyDataVersion)
+        {
+            return counters.Count > 0 ||
+                   npcProgress.Count > 0 ||
+                   loreRoomRunIds.Count > 0 ||
+                   visitedLoreRooms.Count > 0 ||
+                   plannedLores.Count > 0 ||
+                   storyDataVersion != 0;
+        }
+
+        private static bool HasAnyUserStoryData(User user)
+        {
+            if (HasAnyStoryData(user.story))
+                return true;
+
+            var legacyCounters = new Dictionary<string, int>(StringComparer.Ordinal);
+            CopyCountersToDictionary(user.counters, legacyCounters);
+            if (legacyCounters.Count > 0)
+                return true;
+
+            var legacyNpcProgress = new Dictionary<int, int>();
+            CopyNpcProgressToDictionary(user.npcs, legacyNpcProgress);
+            return legacyNpcProgress.Count > 0;
+        }
+
+        private static bool HasAnyStoryData(StoryManager? story)
+        {
+            if (story == null)
+                return false;
+
+            if (story.storyDataVersion != 0)
+                return true;
+
+            var counters = new Dictionary<string, int>(StringComparer.Ordinal);
+            CopyCountersToDictionary(story.counters, counters);
+            if (counters.Count > 0)
+                return true;
+
+            var npcProgress = new Dictionary<int, int>();
+            CopyNpcProgressToDictionary(story.npcProgresses, npcProgress);
+            if (npcProgress.Count > 0)
+                return true;
+
+            var loreRoomRunIds = new Dictionary<string, int>(StringComparer.Ordinal);
+            CopyStoryStringIntMapToDictionary(story.loreRoomRunIds, loreRoomRunIds);
+            if (loreRoomRunIds.Count > 0)
+                return true;
+
+            var visitedLoreRooms = new HashSet<string>(StringComparer.Ordinal);
+            CopyStoryVisitedLoreRoomsToSet(story.visitedLoreRooms, visitedLoreRooms);
+            if (visitedLoreRooms.Count > 0)
+                return true;
+
+            var plannedLores = new List<int>();
+            CopyStoryPlannedLoresToList(story.plannedLores, plannedLores);
+            return plannedLores.Count > 0;
+        }
+
         private static void CopyCountersToDictionary(StringMap? map, Dictionary<string, int> target)
         {
             target.Clear();
@@ -1829,6 +1965,33 @@ namespace DeadCellsMultiplayerMod
             }
 
             return arr;
+        }
+
+        private static void ApplyStoryState(
+            User user,
+            Dictionary<string, int> counters,
+            Dictionary<int, int> npcProgress,
+            int storyDataVersion,
+            Dictionary<string, int> loreRoomRunIds,
+            HashSet<string> visitedLoreRooms,
+            List<int> plannedLores)
+        {
+            user.story = BuildStoryManager(
+                counters,
+                npcProgress,
+                storyDataVersion,
+                loreRoomRunIds,
+                visitedLoreRooms,
+                plannedLores);
+            user.counters = BuildCountersMap(counters);
+            user.npcs = BuildNpcProgressMap(npcProgress);
+        }
+
+        private static void ClearUserStoryState(User user)
+        {
+            user.story = null;
+            user.counters = new StringMap();
+            user.npcs = new EnumValueMap();
         }
 
         private static StoryManager BuildStoryManager(

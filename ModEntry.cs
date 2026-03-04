@@ -501,7 +501,7 @@ namespace DeadCellsMultiplayerMod
         {
             orig(self, v);
             if (_netRole == NetRole.Client)
-                GameDataSync.CaptureOriginalUserData(self);
+                GameDataSync.CaptureOriginalUserData(self, allowReplaceWhenBetter: true);
         }
 
         private void Hook_Game_onDispose(Hook_Game.orig_onDispose orig, dc.pr.Game self)
