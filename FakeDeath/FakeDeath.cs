@@ -21,6 +21,11 @@ namespace DeadCellsMultiplayerMod
         private bool _allDownedRestartQueued;
         private long _allDownedRestartAtTicks;
         private const double AllDownedGameOverDelaySeconds = 0.2;
+        private bool _hasLocalDownedAnchor;
+        private double _localDownedAnchorX;
+        private double _localDownedAnchorY;
+        private const double DownedCorpseMaxDriftPx = 96.0;
+        private const double DownedCorpseMaxDriftSq = DownedCorpseMaxDriftPx * DownedCorpseMaxDriftPx;
 
         private void Hook_Hero_onHeroDie(Hook_Hero.orig_onHeroDie orig, Hero self)
         {
@@ -607,6 +612,9 @@ namespace DeadCellsMultiplayerMod
             _localDownedY = hero.spr?.y ?? 0;
             _localHeldX = _localDownedX;
             _localHeldY = _localDownedY;
+            _localDownedAnchorX = _localDownedX;
+            _localDownedAnchorY = _localDownedY;
+            _hasLocalDownedAnchor = true;
             _localDownedLevelId = GetCurrentLevelId();
             _nextDownedStateSendTicks = 0;
             _nextReviveAttemptTicks = 0;
@@ -670,10 +678,7 @@ namespace DeadCellsMultiplayerMod
             var cine = _localDeadCine;
             if (cine != null && cine.TryGetCorpsePixelPosition(out var corpseX, out var corpseY))
             {
-                _localDownedX = corpseX;
-                _localDownedY = corpseY;
-                _localHeldX = _localDownedX;
-                _localHeldY = _localDownedY;
+                TryUpdateDownedPositionFromCorpse(corpseX, corpseY);
             }
 
             SnapHeroToDownedPosition(me, _localHeldX, _localHeldY, clampToGround: false);
@@ -740,6 +745,9 @@ namespace DeadCellsMultiplayerMod
             _nextDownedStateSendTicks = 0;
             _nextReviveAttemptTicks = 0;
             _localDownedLevelId = string.Empty;
+            _hasLocalDownedAnchor = false;
+            _localDownedAnchorX = 0;
+            _localDownedAnchorY = 0;
             StopLocalDeadCine();
 
             var reviveX = _localDownedX;
@@ -1164,6 +1172,9 @@ namespace DeadCellsMultiplayerMod
             _postReviveLockUntilTicks = 0;
             _postReviveLockX = 0;
             _postReviveLockY = 0;
+            _hasLocalDownedAnchor = false;
+            _localDownedAnchorX = 0;
+            _localDownedAnchorY = 0;
             ResetReviveHold();
             ClearReviveHints();
             if (clearRemoteDownedTracking)
@@ -1226,10 +1237,7 @@ namespace DeadCellsMultiplayerMod
             var cine = _localDeadCine;
             if (cine != null && cine.TryGetCorpsePixelPosition(out var corpseX, out var corpseY))
             {
-                _localDownedX = corpseX;
-                _localDownedY = corpseY;
-                _localHeldX = _localDownedX;
-                _localHeldY = _localDownedY;
+                TryUpdateDownedPositionFromCorpse(corpseX, corpseY);
             }
             SnapHeroToDownedPosition(me, _localHeldX, _localHeldY, clampToGround: false);
             SendLocalDownedState(net, isDowned: true, force: false);
@@ -1300,6 +1308,31 @@ namespace DeadCellsMultiplayerMod
             _allDownedGameOverShown = false;
             _allDownedRestartQueued = false;
             _allDownedRestartAtTicks = 0;
+        }
+
+        private bool TryUpdateDownedPositionFromCorpse(double corpseX, double corpseY)
+        {
+            if (!double.IsFinite(corpseX) || !double.IsFinite(corpseY))
+                return false;
+
+            if (!_hasLocalDownedAnchor)
+            {
+                _localDownedAnchorX = _localDownedX;
+                _localDownedAnchorY = _localDownedY;
+                _hasLocalDownedAnchor = true;
+            }
+
+            var dx = corpseX - _localDownedAnchorX;
+            var dy = corpseY - _localDownedAnchorY;
+            var distSq = dx * dx + dy * dy;
+            if (distSq > DownedCorpseMaxDriftSq)
+                return false;
+
+            _localDownedX = corpseX;
+            _localDownedY = corpseY;
+            _localHeldX = _localDownedX;
+            _localHeldY = _localDownedY;
+            return true;
         }
 
         private static void EnsureHeroVisibilityAfterRoomChange(Hero? hero)
