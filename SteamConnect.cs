@@ -24,6 +24,7 @@ namespace DeadCellsMultiplayerMod
         private const string HostPortLobbyKey = "dccm_host_port";
         private const string ModMarkerLobbyKey = "dccm_mod";
         private const string ModMarkerLobbyValue = "DeadCellsMultiplayerMod";
+        private const string LobbyCodePrefix = "DC";
 
         private const string EnvRequestPath = "DCCM_STEAM_CONNECT_REQUEST_PATH";
         private const string EnvResponsePath = "DCCM_STEAM_CONNECT_RESPONSE_PATH";
@@ -269,6 +270,34 @@ namespace DeadCellsMultiplayerMod
             return TrySetClipboardText(text);
         }
 
+        internal static bool TryCopyLobbyCodeToClipboard(string? lobbyCode)
+        {
+            if (string.IsNullOrWhiteSpace(lobbyCode))
+                return false;
+
+            return TrySetClipboardText(lobbyCode.Trim());
+        }
+
+        internal static string BuildLobbyCodeFromLobbyId(ulong lobbyId)
+        {
+            if (lobbyId == 0)
+                return string.Empty;
+
+            Span<char> buffer = stackalloc char[32];
+            const string alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            var value = lobbyId;
+            var index = buffer.Length;
+
+            do
+            {
+                var digit = (int)(value % 36UL);
+                buffer[--index] = alphabet[digit];
+                value /= 36UL;
+            } while (value > 0 && index > 0);
+
+            return string.Concat(LobbyCodePrefix, new string(buffer[index..]));
+        }
+
         internal static bool TryReadLobbyIdFromClipboard(out ulong lobbyId)
         {
             lobbyId = 0;
@@ -296,7 +325,62 @@ namespace DeadCellsMultiplayerMod
                 return true;
             }
 
+            var codeMatch = Regex.Match(raw, @"\bDC[A-Za-z0-9]{6,}\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+            if (codeMatch.Success && TryDecodeLobbyCode(codeMatch.Value, out var decoded))
+            {
+                lobbyId = decoded;
+                return true;
+            }
+
             return false;
+        }
+
+        private static bool TryDecodeLobbyCode(string rawCode, out ulong lobbyId)
+        {
+            lobbyId = 0;
+            if (string.IsNullOrWhiteSpace(rawCode))
+                return false;
+
+            var normalized = rawCode.Trim().ToUpperInvariant();
+            if (normalized.StartsWith(LobbyCodePrefix, StringComparison.Ordinal))
+                normalized = normalized.Substring(LobbyCodePrefix.Length);
+
+            if (normalized.Length == 0)
+                return false;
+
+            ulong value = 0;
+            try
+            {
+                for (int i = 0; i < normalized.Length; i++)
+                {
+                    var ch = normalized[i];
+                    int digit;
+                    if (ch >= '0' && ch <= '9')
+                        digit = ch - '0';
+                    else if (ch >= 'A' && ch <= 'Z')
+                        digit = 10 + (ch - 'A');
+                    else
+                        return false;
+
+                    if (digit >= 36)
+                        return false;
+
+                    checked
+                    {
+                        value = value * 36UL + (ulong)digit;
+                    }
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (value == 0)
+                return false;
+
+            lobbyId = value;
+            return true;
         }
 
         private static bool TryRunHostWorker(WorkerRequest request, out WorkerResponse response)

@@ -50,6 +50,7 @@ namespace DeadCellsMultiplayerMod
         private static ConnectionTransport _menuTransport = ConnectionTransport.Lan;
         private static bool _steamLobbyActive;
         private static ulong _steamLobbyId;
+        private static string _steamLobbyCode = string.Empty;
         private static bool _waitingForHost;
         internal const int ClientConnectMaxAttempts = 3;
         private static int _clientConnectAttempt;
@@ -74,6 +75,26 @@ namespace DeadCellsMultiplayerMod
         private static string _playerId = Guid.NewGuid().ToString("N");
         public static string Username => _username;
         public static string RemoteUsername => _remoteUsername;
+
+        internal static string GetSteamLobbyCodeForUi()
+        {
+            if (!string.IsNullOrWhiteSpace(_steamLobbyCode))
+                return _steamLobbyCode;
+
+            if (_steamLobbyId > 0)
+                return SteamConnect.BuildLobbyCodeFromLobbyId(_steamLobbyId);
+
+            return string.Empty;
+        }
+
+        internal static bool TryCopySteamLobbyCodeFromUi()
+        {
+            var code = GetSteamLobbyCodeForUi();
+            if (string.IsNullOrWhiteSpace(code))
+                return false;
+
+            return SteamConnect.TryCopyLobbyCodeToClipboard(code);
+        }
         private static bool _localReady;
         private static List<PlayerInfo> _playersDisplay = new();
         private static bool _inHostStatusMenu;
@@ -156,6 +177,7 @@ namespace DeadCellsMultiplayerMod
                 _menuTransport = ConnectionTransport.Lan;
                 _steamLobbyActive = false;
                 _steamLobbyId = 0;
+                _steamLobbyCode = string.Empty;
             }
 
             InitializeMenuUiHooks();
@@ -787,7 +809,7 @@ namespace DeadCellsMultiplayerMod
                     screen,
                     GetText.Instance.GetString("Steam join"),
                     () => StartSteamJoin(screen),
-                    GetText.Instance.GetString("Connect by Steam lobby id from clipboard"));
+                    GetText.Instance.GetString("Connect by Steam lobby id/code from clipboard"));
 
                 AddMenuButton(
                     screen,
@@ -918,6 +940,10 @@ namespace DeadCellsMultiplayerMod
         {
             _menuSelection = NetRole.Host;
             _menuTransport = ConnectionTransport.Steam;
+            _steamLobbyActive = false;
+            _steamLobbyId = 0;
+            _steamLobbyCode = string.Empty;
+            ConnectionUI.NotifyConnectionsChanged();
             ApplySteamPersonaUsername();
 
             StartHostServerOnly(bindAnyAddress: true);
@@ -950,22 +976,14 @@ namespace DeadCellsMultiplayerMod
 
             _steamLobbyActive = true;
             _steamLobbyId = lobby.LobbyId;
+            _steamLobbyCode = SteamConnect.BuildLobbyCodeFromLobbyId(_steamLobbyId);
+            ConnectionUI.NotifyConnectionsChanged();
+            _log?.Information("[NetMod][Steam] Host lobby ready: id={LobbyId} code={LobbyCode}", _steamLobbyId, _steamLobbyCode);
 
-            var copied = SteamConnect.TryCopyLobbyIdToClipboard(lobby.LobbyId);
+            var copied = SteamConnect.TryCopyLobbyCodeToClipboard(_steamLobbyCode)
+                         || SteamConnect.TryCopyLobbyIdToClipboard(lobby.LobbyId);
             if (copied)
-            {
-                MultiplayerUI.PushSystemMessage(
-                    string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"Steam lobby id copied: {lobby.LobbyId}"));
-            }
-            else
-            {
-                MultiplayerUI.PushSystemMessage(
-                    string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"Steam lobby id: {lobby.LobbyId}"));
-            }
+                MultiplayerUI.PushSystemMessage("Lobby id copied to clipboard");
 
             ShowHostStatusMenu(screen);
             screen.ShouldAutoHideConnectionUI(true);
@@ -977,6 +995,8 @@ namespace DeadCellsMultiplayerMod
             _menuTransport = ConnectionTransport.Steam;
             _steamLobbyActive = false;
             _steamLobbyId = 0;
+            _steamLobbyCode = string.Empty;
+            ConnectionUI.NotifyConnectionsChanged();
             ApplySteamPersonaUsername();
 
             if (!SteamConnect.TryResolveJoinEndpointFromClipboard(out var join))
@@ -1007,6 +1027,10 @@ namespace DeadCellsMultiplayerMod
 
             _mpIp = endpoint.Address.ToString();
             _mpPort = endpoint.Port;
+            _steamLobbyId = join.LobbyId;
+            _steamLobbyCode = SteamConnect.BuildLobbyCodeFromLobbyId(_steamLobbyId);
+            ConnectionUI.NotifyConnectionsChanged();
+            _log?.Information("[NetMod][Steam] Joined lobby: id={LobbyId} code={LobbyCode}", _steamLobbyId, _steamLobbyCode);
             SaveConfig();
 
             StartNetwork(NetRole.Client, screen);
@@ -1251,14 +1275,6 @@ namespace DeadCellsMultiplayerMod
             {
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
-
-                if (_menuTransport == ConnectionTransport.Steam && _steamLobbyActive && _steamLobbyId > 0)
-                {
-                    AddInfoLine(
-                        screen,
-                        string.Create(CultureInfo.InvariantCulture, $"Steam lobby id: {_steamLobbyId}"),
-                        infoColor: 0xE0E0E0);
-                }
 
                 AddMenuButton(screen, GetText.Instance.GetString("Play"), () => StartHostRun(screen), GetText.Instance.GetString("Launch game"));
                 AddMenuButton(screen, GetText.Instance.GetString("Back"), () =>
@@ -1535,6 +1551,8 @@ namespace DeadCellsMultiplayerMod
             try { SteamConnect.StopHostLobbyWorker(); } catch { }
             _steamLobbyActive = false;
             _steamLobbyId = 0;
+            _steamLobbyCode = string.Empty;
+            ConnectionUI.NotifyConnectionsChanged();
             if (_menuTransport == ConnectionTransport.Steam)
                 _menuTransport = ConnectionTransport.Lan;
         }

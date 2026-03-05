@@ -17,6 +17,7 @@ using dc.haxe.ds;
 using dc.achievements;
 using ModCore.Modules;
 using DeadCellsMultiplayerMod.Tools;
+using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 
 namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 {
@@ -32,6 +33,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         private readonly List<HSprite> sprites = new();
         private readonly List<dc.ui.Text> connectionLabels = new();
         private readonly List<string> lastConnections = new();
+        private dc.ui.Text? lobbyIdLabel;
+        private string lastLobbyIdLabelText = string.Empty;
 
         private static ConnectionUI? Instance;
         private HSprite? spriteui;
@@ -193,6 +196,9 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         private void clean()
         {
+            this.lobbyIdLabel?.remove();
+            this.lobbyIdLabel = null;
+            this.lastLobbyIdLabelText = string.Empty;
             this.bg?.remove();
             this.rootFlow?.remove();
             this.inter?.remove();
@@ -220,7 +226,9 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             double flowW = this.rootFlow.get_innerWidth();
             double flowH = this.rootFlow.get_innerHeight();
 
-
+            this.lobbyIdLabel?.remove();
+            this.lobbyIdLabel = null;
+            this.lastLobbyIdLabelText = string.Empty;
             this.bg?.remove();
             this.bg = UIBox.Class.drawBoxValidation(
                 (int)flowW,
@@ -249,9 +257,10 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
 
             this.inter?.remove();
-            this.inter = new dc.h2d.Interactive(screenWidth, screenHeight, this.bg, null);
+            this.inter = new dc.h2d.Interactive(this.bg.wid, this.bg.hei, this.bg, null);
             this.inter.onClick = new HlAction<Event>(this.OnClick);
             BGtext();
+            UpdateLobbyIdLabel(forceRefreshText: true);
         }
 
 
@@ -366,6 +375,61 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
             this.lastConnections.Clear();
             this.lastConnections.AddRange(allname);
+            UpdateLobbyIdLabel(forceRefreshText: false);
+        }
+
+        private void UpdateLobbyIdLabel(bool forceRefreshText)
+        {
+            if (this.bg == null)
+                return;
+
+            var lobbyCode = GameMenu.GetSteamLobbyCodeForUi();
+            if (string.IsNullOrWhiteSpace(lobbyCode))
+            {
+                if (this.lobbyIdLabel != null)
+                    this.lobbyIdLabel.set_visible(false);
+                this.lastLobbyIdLabelText = string.Empty;
+                return;
+            }
+
+            var uiScale = UiScale.GetResolutionScale();
+            var labelText = $"id: {lobbyCode}";
+
+            if (this.lobbyIdLabel == null)
+            {
+                this.lobbyIdLabel = Assets.Class.makeText(
+                    labelText.AsHaxeString(),
+                    Tools.MultiColor.ColorFromHex("#7fd4ff"),
+                    true,
+                    this.bg);
+                this.lobbyIdLabel.scaleX = 0.54 * uiScale;
+                this.lobbyIdLabel.scaleY = 0.54 * uiScale;
+                forceRefreshText = true;
+            }
+            else
+            {
+                this.lobbyIdLabel.scaleX = 0.54 * uiScale;
+                this.lobbyIdLabel.scaleY = 0.54 * uiScale;
+            }
+
+            if (forceRefreshText || !string.Equals(this.lastLobbyIdLabelText, labelText, StringComparison.Ordinal))
+            {
+                this.lobbyIdLabel.set_text(labelText.AsHaxeString());
+                this.lastLobbyIdLabelText = labelText;
+            }
+
+            var textWidth = this.lobbyIdLabel.textWidth * this.lobbyIdLabel.scaleX;
+            var textHeight = this.lobbyIdLabel.textHeight * this.lobbyIdLabel.scaleY;
+            var rightPadding = 10.0 * uiScale;
+            var bottomPadding = 8.0 * uiScale;
+
+            this.lobbyIdLabel.x = System.Math.Max(2.0, this.bg.wid - textWidth - rightPadding);
+            this.lobbyIdLabel.y = System.Math.Max(2.0, this.bg.hei - textHeight - bottomPadding);
+            this.lobbyIdLabel.set_visible(true);
+            if(lobbyIdLabel is not null)
+            {
+                this.MainTitleflow.addChild(lobbyIdLabel);
+            }
         }
 
         private bool NeedsConnectionsRefresh(List<string> names)
@@ -389,6 +453,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             var names = _ConnectionUI.GetAllPlayerNames();
             if (NeedsConnectionsRefresh(names))
                 RefreshConnections(names);
+            else
+                UpdateLobbyIdLabel(forceRefreshText: false);
 
             if (dc.hxd.Key.Class.isPressed(80))
             {
@@ -407,6 +473,23 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         private void OnClick(Event e)
         {
+            if (this.lobbyIdLabel == null || !this.lobbyIdLabel.visible)
+                return;
+
+            var x = e.relX;
+            var y = e.relY;
+            var width = this.lobbyIdLabel.textWidth * this.lobbyIdLabel.scaleX;
+            var height = this.lobbyIdLabel.textHeight * this.lobbyIdLabel.scaleY;
+            var minX = this.lobbyIdLabel.x;
+            var minY = this.lobbyIdLabel.y;
+            var maxX = minX + width;
+            var maxY = minY + height;
+
+            if (x < minX || x > maxX || y < minY || y > maxY)
+                return;
+
+            if (GameMenu.TryCopySteamLobbyCodeFromUi())
+                MultiplayerUI.PushSystemMessage("Lobby id copied to clipboard");
 
         }
 
