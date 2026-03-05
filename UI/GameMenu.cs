@@ -42,6 +42,14 @@ namespace DeadCellsMultiplayerMod
         private static string _mpIp = "127.0.0.1";
         private static int _mpPort = 1234;
         private static NetRole _menuSelection = NetRole.None;
+        private enum ConnectionTransport
+        {
+            Lan,
+            Steam
+        }
+        private static ConnectionTransport _menuTransport = ConnectionTransport.Lan;
+        private static bool _steamLobbyActive;
+        private static ulong _steamLobbyId;
         private static bool _waitingForHost;
         internal const int ClientConnectMaxAttempts = 3;
         private static int _clientConnectAttempt;
@@ -145,6 +153,9 @@ namespace DeadCellsMultiplayerMod
                 _hostDisconnectCountdownActive = false;
                 _hostDisconnectCountdownUntil = DateTime.MinValue;
                 _lastHostDisconnectCountdown = -1;
+                _menuTransport = ConnectionTransport.Lan;
+                _steamLobbyActive = false;
+                _steamLobbyId = 0;
             }
 
             InitializeMenuUiHooks();
@@ -682,12 +693,12 @@ namespace DeadCellsMultiplayerMod
                 AddMenuButton(
                     screen,
                     GetText.Instance.GetString("Host game"),
-                    () => ShowConnectionMenu(screen, NetRole.Host),
+                    () => ShowHostTransportMenu(screen),
                     GetText.Instance.GetString("Create a multiplayer session"));
                 AddMenuButton(
                     screen,
                     GetText.Instance.GetString("Join game"),
-                    () => ShowConnectionMenu(screen, NetRole.Client),
+                    () => ShowJoinTransportMenu(screen),
                     GetText.Instance.GetString("Connect to an existing host"));
                 AddMenuButton(screen, GetText.Instance.GetString("Back"), () =>
                 {
@@ -710,9 +721,102 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
+        private static void ShowHostTransportMenu(TitleScreen screen)
+        {
+            var prevSuppress = _suppressAutoButton;
+            _suppressAutoButton = true;
+            var prevIsMain = GetIsMainMenu(screen);
+            try
+            {
+                SetIsMainMenu(screen, false);
+                screen.clearMenu();
+
+                AddMenuButton(
+                    screen,
+                    GetText.Instance.GetString("Lan host"),
+                    () => ShowConnectionMenu(screen, NetRole.Host),
+                    GetText.Instance.GetString("Use direct IP/port hosting"));
+
+                AddMenuButton(
+                    screen,
+                    GetText.Instance.GetString("Steam host"),
+                    () => StartSteamHost(screen),
+                    GetText.Instance.GetString("Create Steam lobby and start immediately"));
+
+                AddMenuButton(
+                    screen,
+                    GetText.Instance.GetString("Back"),
+                    () => ShowMultiplayerMenu(screen),
+                    GetText.Instance.GetString("Back to multiplayer menu"));
+
+                RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
+                RemoveDuplicatesKeepFirst(
+                    screen,
+                    GetText.Instance.GetString("Lan host"),
+                    GetText.Instance.GetString("Steam host"),
+                    GetText.Instance.GetString("Back"));
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod] Failed to open host transport menu: {Message}", ex.Message);
+            }
+            finally
+            {
+                SetIsMainMenu(screen, prevIsMain);
+                _suppressAutoButton = prevSuppress;
+            }
+        }
+
+        private static void ShowJoinTransportMenu(TitleScreen screen)
+        {
+            var prevSuppress = _suppressAutoButton;
+            _suppressAutoButton = true;
+            var prevIsMain = GetIsMainMenu(screen);
+            try
+            {
+                SetIsMainMenu(screen, false);
+                screen.clearMenu();
+
+                AddMenuButton(
+                    screen,
+                    GetText.Instance.GetString("Lan join"),
+                    () => ShowConnectionMenu(screen, NetRole.Client),
+                    GetText.Instance.GetString("Connect by IP/port"));
+
+                AddMenuButton(
+                    screen,
+                    GetText.Instance.GetString("Steam join"),
+                    () => StartSteamJoin(screen),
+                    GetText.Instance.GetString("Connect by Steam lobby id from clipboard"));
+
+                AddMenuButton(
+                    screen,
+                    GetText.Instance.GetString("Back"),
+                    () => ShowMultiplayerMenu(screen),
+                    GetText.Instance.GetString("Back to multiplayer menu"));
+
+                RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
+                RemoveDuplicatesKeepFirst(
+                    screen,
+                    GetText.Instance.GetString("Lan join"),
+                    GetText.Instance.GetString("Steam join"),
+                    GetText.Instance.GetString("Back"));
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod] Failed to open join transport menu: {Message}", ex.Message);
+            }
+            finally
+            {
+                SetIsMainMenu(screen, prevIsMain);
+                _suppressAutoButton = prevSuppress;
+            }
+        }
+
         private static void ShowConnectionMenu(TitleScreen screen, NetRole role)
         {
             _menuSelection = role;
+            _menuTransport = ConnectionTransport.Lan;
             if (role == NetRole.Client)
                 _waitingForHost = true;
 
@@ -777,7 +881,14 @@ namespace DeadCellsMultiplayerMod
                 AddMenuButton(
                     screen,
                     GetText.Instance.GetString("Back"),
-                    () => {ShowMultiplayerMenu(screen); screen.ShouldAutoHideConnectionUI(false);},
+                    () =>
+                    {
+                        if (role == NetRole.Host)
+                            ShowHostTransportMenu(screen);
+                        else
+                            ShowJoinTransportMenu(screen);
+                        screen.ShouldAutoHideConnectionUI(false);
+                    },
                     GetText.Instance.GetString("Back to multiplayer menu"));
                 RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
                 RemoveDuplicatesKeepFirst(
@@ -795,6 +906,157 @@ namespace DeadCellsMultiplayerMod
             catch (Exception ex)
             {
                 _log?.Warning("[NetMod] Failed to show connection menu: {Message}", ex.Message);
+            }
+            finally
+            {
+                SetIsMainMenu(screen, prevIsMain);
+                _suppressAutoButton = prevSuppress;
+            }
+        }
+
+        private static void StartSteamHost(TitleScreen screen)
+        {
+            _menuSelection = NetRole.Host;
+            _menuTransport = ConnectionTransport.Steam;
+            ApplySteamPersonaUsername();
+
+            StartHostServerOnly(bindAnyAddress: true);
+            if (NetRef == null || !NetRef.IsAlive || !NetRef.IsHost)
+            {
+                _log?.Warning("[NetMod][Steam] Host start failed: host server was not created");
+                ShowConnectionErrorPopup(
+                    screen,
+                    GetText.Instance.GetString("Steam host failed"),
+                    GetText.Instance.GetString("Could not start Steam host. Check console logs."),
+                    () => ShowHostTransportMenu(screen));
+                return;
+            }
+
+            var listenerPort = NetRef.ListenerEndpoint?.Port ?? _mpPort;
+            if (!SteamConnect.TryCreateHostLobby(listenerPort, out var lobby))
+            {
+                StopNetworkFromMenu();
+                _log?.Warning("[NetMod][SteamWorkerError] {Error}", lobby.Error);
+                ShowConnectionErrorPopup(
+                    screen,
+                    GetText.Instance.GetString("Steam host failed"),
+                    GetText.Instance.GetString("Steam lobby creation failed. Check console logs."),
+                    () => ShowHostTransportMenu(screen));
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(lobby.PersonaName))
+                ApplySteamPersonaUsername(lobby.PersonaName);
+
+            _steamLobbyActive = true;
+            _steamLobbyId = lobby.LobbyId;
+
+            var copied = SteamConnect.TryCopyLobbyIdToClipboard(lobby.LobbyId);
+            if (copied)
+            {
+                MultiplayerUI.PushSystemMessage(
+                    string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"Steam lobby id copied: {lobby.LobbyId}"));
+            }
+            else
+            {
+                MultiplayerUI.PushSystemMessage(
+                    string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"Steam lobby id: {lobby.LobbyId}"));
+            }
+
+            ShowHostStatusMenu(screen);
+            screen.ShouldAutoHideConnectionUI(true);
+        }
+
+        private static void StartSteamJoin(TitleScreen screen)
+        {
+            _menuSelection = NetRole.Client;
+            _menuTransport = ConnectionTransport.Steam;
+            _steamLobbyActive = false;
+            _steamLobbyId = 0;
+            ApplySteamPersonaUsername();
+
+            if (!SteamConnect.TryResolveJoinEndpointFromClipboard(out var join))
+            {
+                _log?.Warning("[NetMod][SteamWorkerError] {Error}", join.Error);
+                ShowConnectionErrorPopup(
+                    screen,
+                    GetText.Instance.GetString("Steam join failed"),
+                    GetText.Instance.GetString("Steam join failed. Check console logs."),
+                    () => ShowJoinTransportMenu(screen));
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(join.PersonaName))
+                ApplySteamPersonaUsername(join.PersonaName);
+
+            var endpoint = join.Endpoint;
+            if (endpoint == null)
+            {
+                _log?.Warning("[NetMod][Steam] Join failed: lobby endpoint is missing");
+                ShowConnectionErrorPopup(
+                    screen,
+                    GetText.Instance.GetString("Steam join failed"),
+                    GetText.Instance.GetString("Steam lobby endpoint is invalid. Check console logs."),
+                    () => ShowJoinTransportMenu(screen));
+                return;
+            }
+
+            _mpIp = endpoint.Address.ToString();
+            _mpPort = endpoint.Port;
+            SaveConfig();
+
+            StartNetwork(NetRole.Client, screen);
+            ShowClientWaitingMenu(screen);
+            screen.ShouldAutoHideConnectionUI(true);
+        }
+
+        private static void ApplySteamPersonaUsername(string? preferredPersona = null)
+        {
+            var candidate = string.IsNullOrWhiteSpace(preferredPersona)
+                ? GetDefaultUsername()
+                : preferredPersona;
+
+            var cleaned = CleanUsername(candidate);
+            if (string.IsNullOrWhiteSpace(cleaned))
+                return;
+
+            _username = cleaned;
+            SaveConfig();
+            SendUsernameToRemote();
+        }
+
+        private static void ShowConnectionErrorPopup(TitleScreen screen, string title, string details, Action onOk)
+        {
+            var prevSuppress = _suppressAutoButton;
+            _suppressAutoButton = true;
+            var prevIsMain = GetIsMainMenu(screen);
+            try
+            {
+                SetIsMainMenu(screen, false);
+                screen.clearMenu();
+
+                AddInfoLine(screen, title, infoColor: 0xFF9090);
+                if (!string.IsNullOrWhiteSpace(details))
+                    AddInfoLine(screen, details, infoColor: 0xE0E0E0);
+
+                AddMenuButton(
+                    screen,
+                    GetText.Instance.GetString("OK"),
+                    onOk,
+                    GetText.Instance.GetString("Return to previous menu"));
+
+                RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
+                RemoveDuplicatesKeepFirst(screen, GetText.Instance.GetString("OK"));
+                _inClientWaitingMenu = false;
+                _inHostStatusMenu = false;
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod] Failed to open connection error popup: {Message}", ex.Message);
             }
             finally
             {
@@ -847,7 +1109,7 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private static void StartHostServerOnly()
+        private static void StartHostServerOnly(bool bindAnyAddress = false)
         {
             // try
             // {
@@ -863,7 +1125,8 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
-            ModEntry.Instance.StartHostFromMenu(_mpIp, _mpPort);
+            var hostIp = bindAnyAddress ? "0.0.0.0" : _mpIp;
+            ModEntry.Instance.StartHostFromMenu(hostIp, _mpPort);
             _waitingForHost = false;
             // }
             // catch (Exception ex)
@@ -924,6 +1187,7 @@ namespace DeadCellsMultiplayerMod
             _waitingForHost = false;
             ResetClientConnectState();
             _menuSelection = NetRole.None;
+            ResetSteamState();
 
             if (roleBefore == NetRole.Client)
             {
@@ -987,6 +1251,14 @@ namespace DeadCellsMultiplayerMod
             {
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
+
+                if (_menuTransport == ConnectionTransport.Steam && _steamLobbyActive && _steamLobbyId > 0)
+                {
+                    AddInfoLine(
+                        screen,
+                        string.Create(CultureInfo.InvariantCulture, $"Steam lobby id: {_steamLobbyId}"),
+                        infoColor: 0xE0E0E0);
+                }
 
                 AddMenuButton(screen, GetText.Instance.GetString("Play"), () => StartHostRun(screen), GetText.Instance.GetString("Launch game"));
                 AddMenuButton(screen, GetText.Instance.GetString("Back"), () =>
@@ -1085,6 +1357,7 @@ namespace DeadCellsMultiplayerMod
             _waitingForHost = false;
             ResetClientConnectState();
             _menuSelection = NetRole.None;
+            ResetSteamState();
             _inHostStatusMenu = false;
             _inClientWaitingMenu = false;
             screen.mainMenu();
@@ -1102,6 +1375,7 @@ namespace DeadCellsMultiplayerMod
             {
                 _inActualRun = false;
             }
+            ResetSteamState();
         }
 
         private static void EditUsername(TitleScreen screen)
@@ -1198,6 +1472,7 @@ namespace DeadCellsMultiplayerMod
             NetRef = null;
             _waitingForHost = false;
             _menuSelection = NetRole.None;
+            ResetSteamState();
             ClearNetworkCaches();
             _inHostStatusMenu = false;
             _inClientWaitingMenu = false;
@@ -1253,6 +1528,15 @@ namespace DeadCellsMultiplayerMod
             CacheLevelDescSync(null);
             _genArrived = false;
             _seedArrived = false;
+        }
+
+        private static void ResetSteamState()
+        {
+            try { SteamConnect.StopHostLobbyWorker(); } catch { }
+            _steamLobbyActive = false;
+            _steamLobbyId = 0;
+            if (_menuTransport == ConnectionTransport.Steam)
+                _menuTransport = ConnectionTransport.Lan;
         }
 
         private static void StartHostDisconnectCountdown()

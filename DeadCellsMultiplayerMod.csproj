@@ -5,24 +5,37 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Version>0.1.2</Version>
-
     <ModType>mod</ModType>
     <ModMain>DeadCellsMultiplayerMod.ModEntry</ModMain>
-        <AutoInstallMod Condition="'$(Configuration)' == 'Debug'">true</AutoInstallMod>
+    <AutoInstallMod Condition="'$(Configuration)' == 'Debug'">true</AutoInstallMod>
+
+    <SteamworksNetHintPath Condition="'$(SteamworksNetHintPath)' == '' and '$(DCCM_MDK_ROOT)' != ''">$(DCCM_MDK_ROOT)\tools\Steamworks.NET.dll</SteamworksNetHintPath>
+    <SteamworksNetHintPath Condition="'$(SteamworksNetHintPath)' == '' and '$(_DCCM_MDK_Root)' != ''">$(_DCCM_MDK_Root)\tools\Steamworks.NET.dll</SteamworksNetHintPath>
+    <SteamworksNetHintPath Condition="'$(SteamworksNetHintPath)' == '' and '$(DCCM_ROOT)' != ''">$(DCCM_ROOT)\core\mdk\tools\Steamworks.NET.dll</SteamworksNetHintPath>
+    <SteamworksNetHintPath Condition="'$(SteamworksNetHintPath)' == '' and '$(DEAD_CELLS_GAME_PATH)' != ''">$(DEAD_CELLS_GAME_PATH)\coremod\core\mdk\tools\Steamworks.NET.dll</SteamworksNetHintPath>
   </PropertyGroup>
 
-  <!-- MDK reference -->
   <ItemGroup>
     <PackageReference Include="DeadCellsCoreModding.MDK" Version="1.0.1" />
     <PackageReference Include="MonoMod.RuntimeDetour" Version="25.3.3" />
+    <Reference Include="Steamworks.NET" Condition="Exists('$(SteamworksNetHintPath)')">
+      <HintPath>$(SteamworksNetHintPath)</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
-   <PropertyGroup>
+  <PropertyGroup>
     <GenerateSinglePakFile>true</GenerateSinglePakFile>
   </PropertyGroup>
 
- <ItemGroup>
+  <ItemGroup>
     <PackAssets Include="Resourcefile\**\*" RootInPak="DeadCellsMultiplayerModLang" />
   </ItemGroup>
+
+  <Target Name="EnsureSteamworksReference" BeforeTargets="ResolveAssemblyReferences">
+    <Error
+      Condition="!Exists('$(SteamworksNetHintPath)')"
+      Text="Steamworks.NET.dll not found. Set DCCM_MDK_ROOT (or SteamworksNetHintPath) to your DCCM MDK path." />
+  </Target>
 
 </Project>
