@@ -111,6 +111,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const string OldSkillChargeCompletePacketPrefix = "@oldcc:";
         private const string OldSkillExecutePacketPrefix = "@oldexec:";
         private const string NewSkillExecutePacketPrefix = "@newexec:";
+        private const bool DisableBossSyncTemporarily = true;
         private const double HostQueuedOldSkillMarkerSeconds = 3.0;
         private const double ClientQueuedOldSkillMarkerSeconds = 0.4;
         private const double HostContactRetargetLockSeconds = 0.25;
@@ -537,7 +538,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 lock (Sync)
                 {
-                    if (clientLastReportedMobLife.TryGetValue(localIndex, out var lastLife) && life >= lastLife)
+                    if (!clientLastReportedMobLife.TryGetValue(localIndex, out var lastLife))
+                    {
+                        // No baseline yet (fresh tracked mob). Seed and wait for next confirmed delta.
+                        // This avoids false zero-life reports during boss intro/phase transitions.
+                        clientLastReportedMobLife[localIndex] = life;
+                        return;
+                    }
+
+                    if (life >= lastLife)
                         return;
 
                     if (life > 0 &&
@@ -561,14 +570,25 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (attack == null)
                 return false;
 
-            var localHero = ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
-            if (localHero == null)
+            var localHero = (Entity?)(ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance);
+            var gameHero = (Entity?)ModCore.Modules.Game.Instance?.HeroInstance;
+            if (localHero == null && gameHero == null)
                 return false;
 
             try
             {
                 var source = attack.source;
-                if (source != null && ReferenceEquals(source, localHero))
+                if (IsLocalPlayerDamageSource(source, localHero, gameHero))
+                    return true;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var carrier = attack.carrier;
+                if (IsLocalPlayerDamageSource(carrier, localHero, gameHero))
                     return true;
             }
             catch
@@ -581,8 +601,68 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (sourceWeapon == null)
                     return false;
 
-                var owner = sourceWeapon.owner;
-                if (owner != null && ReferenceEquals(owner, localHero))
+                var owner = (Entity?)sourceWeapon.owner;
+                if (IsLocalPlayerDamageSource(owner, localHero, gameHero))
+                    return true;
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private static bool IsLocalPlayerDamageSource(Entity? source, Entity? localHero, Entity? gameHero)
+        {
+            if (source == null)
+                return false;
+
+            if (localHero != null && IsSameEntityForDamage(source, localHero))
+                return true;
+
+            if (gameHero != null && IsSameEntityForDamage(source, gameHero))
+                return true;
+
+            try
+            {
+                if ((source is Hero || source is KingSkin) && !IsKnownRemoteClientEntity(source))
+                    return true;
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private static bool IsKnownRemoteClientEntity(Entity? source)
+        {
+            if (source == null)
+                return false;
+
+            for (int i = 0; i < ModEntry.clients.Length; i++)
+            {
+                var client = ModEntry.clients[i];
+                if (client != null && IsSameEntityForDamage(source, client))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsSameEntityForDamage(Entity? left, Entity? right)
+        {
+            if (left == null || right == null)
+                return false;
+
+            if (ReferenceEquals(left, right))
+                return true;
+
+            try
+            {
+                var leftUid = left.__uid;
+                var rightUid = right.__uid;
+                if (leftUid > 0 && rightUid > 0 && leftUid == rightUid)
                     return true;
             }
             catch
@@ -1482,7 +1562,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 var shouldRemove = false;
                 try
                 {
-                    shouldRemove = mob.destroyed || mob._level == null || mob.life <= 0;
+                    // Do not prune by life<=0: some bosses spawn/transition with temporary zero life
+                    // and must stay tracked to receive authoritative host life.
+                    shouldRemove = mob.destroyed || mob._level == null;
                 }
                 catch
                 {
@@ -1516,7 +1598,23 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
+                if (mob.destroyed || mob._level == null)
+                    return false;
+
+                if (DisableBossSyncTemporarily && IsBossMob(mob))
+                    return false;
+
+                // Primary rule: any combat-hostile mob (including bosses) must be synced.
+                if (IsMobHostileToPlayers(mob))
+                    return true;
+
                 var typeName = mob.GetType().ToString();
+
+                if (typeName.Contains("dc.en.boss.", StringComparison.OrdinalIgnoreCase) ||
+                    typeName.Contains(".boss.", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
                 
                 if (typeName.Contains("dc.en.mob.", StringComparison.Ordinal))
                     return true;
@@ -1528,6 +1626,28 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 }
                 
                 return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsBossMob(Mob mob)
+        {
+            if (mob == null)
+                return false;
+
+            try
+            {
+                var runtimeType = mob.GetType();
+                var typeName = runtimeType?.FullName ?? runtimeType?.ToString() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(typeName))
+                    typeName = mob.GetType().ToString();
+
+                return typeName.Contains("dc.en.mob.boss.", StringComparison.OrdinalIgnoreCase) ||
+                       typeName.Contains(".mob.boss.", StringComparison.OrdinalIgnoreCase) ||
+                       typeName.Contains(".boss.", StringComparison.OrdinalIgnoreCase);
             }
             catch
             {
@@ -1770,7 +1890,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                if (mob.destroyed || mob._level == null || mob.life <= 0)
+                if (mob.destroyed || mob._level == null)
                     return false;
 
                 if (currentLevel != null && !ReferenceEquals(mob._level, currentLevel))
@@ -2782,6 +2902,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                             try { mob.dir = incomingDir; } catch { }
                         }
 
+                        // Keep a fresh baseline for local hit-delta reporting.
+                        clientLastReportedMobLife[localIndex] = state.Life;
                         stateApplies.Add((state.Index, mob, state.Life, state.MaxLife, state.StatePayload ?? string.Empty));
                     }
 
