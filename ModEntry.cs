@@ -531,9 +531,23 @@ namespace DeadCellsMultiplayerMod
             if (_netRole == NetRole.Client)
             {
                 if (u != null)
+                {
                     GameDataSync.CaptureSessionStory(u);
-                var swapped = u != null && GameDataSync.SwapToOriginalUserData(u);
+                    GameDataSync.CaptureOriginalUserData(u, allowReplaceWhenBetter: true);
+                }
+
+                var swapped = u != null && GameDataSync.RestoreOriginalUserState(u, clearRemote: false);
                 var serializerSwapped = GameDataSync.SwapToLocalSerializerSync();
+                if (!swapped && u != null && _net != null && _net.IsAlive)
+                {
+                    Logger.Warning("[NetMod] Skipping client save: local snapshot is unavailable, preventing host progress overwrite");
+                    if (serializerSwapped)
+                        GameDataSync.RestoreRemoteSerializerSync();
+                    GameDataSync.RestoreRemoteUserData(u);
+                    GameDataSync.RestoreSessionStory(u);
+                    return;
+                }
+
                 try
                 {
                     orig(u, onlyGameData);
@@ -542,7 +556,7 @@ namespace DeadCellsMultiplayerMod
                 {
                     if (serializerSwapped)
                         GameDataSync.RestoreRemoteSerializerSync();
-                    if (swapped && u != null)
+                    if (u != null)
                         GameDataSync.RestoreRemoteUserData(u);
                     if (u != null)
                         GameDataSync.RestoreSessionStory(u);

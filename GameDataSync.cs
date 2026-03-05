@@ -24,6 +24,7 @@ namespace DeadCellsMultiplayerMod
     {
         static Serilog.ILogger _log;
         static public int Seed;
+        private static readonly bool EnableStoryManagerSync = false;
 
         static public virtual_baseLootLevel_biome_bonusTripleScrollAfterBC_cellBonus_dlc_doubleUps_eliteRoomChance_eliteWanderChance_flagsProps_group_icon_id_index_loreDescriptions_mapDepth_minGold_mobDensity_mobs_name_nextLevels_parallax_props_quarterUpsBC3_quarterUpsBC4_specificLoots_specificSubBiome_transitionTo_tripleUps_worldDepth_ _isTwitch;
         static public bool _isCustom;
@@ -434,35 +435,38 @@ namespace DeadCellsMultiplayerMod
 
         public static void CaptureOriginalUserData(User user, bool allowReplaceWhenBetter = false)
         {
-            var shouldCaptureOriginalStory = !_origStoryCaptured;
-            if (!shouldCaptureOriginalStory &&
-                allowReplaceWhenBetter &&
-                !HasAnyStorySnapshotData(
-                    _origCountersSnapshot,
-                    _origNpcProgressSnapshot,
-                    _origLoreRoomRunIdsSnapshot,
-                    _origVisitedLoreRoomsSnapshot,
-                    _origPlannedLoresSnapshot,
-                    _origStoryDataVersion) &&
-                HasAnyUserStoryData(user))
+            if (EnableStoryManagerSync)
             {
-                shouldCaptureOriginalStory = true;
-            }
+                var shouldCaptureOriginalStory = !_origStoryCaptured;
+                if (!shouldCaptureOriginalStory &&
+                    allowReplaceWhenBetter &&
+                    !HasAnyStorySnapshotData(
+                        _origCountersSnapshot,
+                        _origNpcProgressSnapshot,
+                        _origLoreRoomRunIdsSnapshot,
+                        _origVisitedLoreRoomsSnapshot,
+                        _origPlannedLoresSnapshot,
+                        _origStoryDataVersion) &&
+                    HasAnyUserStoryData(user))
+                {
+                    shouldCaptureOriginalStory = true;
+                }
 
-            if (shouldCaptureOriginalStory)
-            {
-                _origStoryCaptured = true;
-                _origStory = user.story;
-                _origCounters = user.story?.counters;
-                CaptureStorySnapshot(
-                    user,
-                    _origCountersSnapshot,
-                    _origNpcProgressSnapshot,
-                    _origLoreRoomRunIdsSnapshot,
-                    _origVisitedLoreRoomsSnapshot,
-                    _origPlannedLoresSnapshot,
-                    out _origStoryWasNull,
-                    out _origStoryDataVersion);
+                if (shouldCaptureOriginalStory)
+                {
+                    _origStoryCaptured = true;
+                    _origStory = user.story;
+                    _origCounters = user.story?.counters;
+                    CaptureStorySnapshot(
+                        user,
+                        _origCountersSnapshot,
+                        _origNpcProgressSnapshot,
+                        _origLoreRoomRunIdsSnapshot,
+                        _origVisitedLoreRoomsSnapshot,
+                        _origPlannedLoresSnapshot,
+                        out _origStoryWasNull,
+                        out _origStoryDataVersion);
+                }
             }
 
             if (!_origItemMetaCaptured)
@@ -486,7 +490,7 @@ namespace DeadCellsMultiplayerMod
 
         public static void CaptureSessionStory(User user)
         {
-            if (user == null)
+            if (!EnableStoryManagerSync || user == null)
                 return;
 
             _sessionStoryCaptured = true;
@@ -503,7 +507,7 @@ namespace DeadCellsMultiplayerMod
 
         public static void RestoreSessionStory(User user)
         {
-            if (!_sessionStoryCaptured || user == null)
+            if (!EnableStoryManagerSync || !_sessionStoryCaptured || user == null)
                 return;
 
             if (_sessionStoryWasNull && _sessionCountersSnapshot.Count == 0 && _sessionNpcProgressSnapshot.Count == 0 && _sessionStoryDataVersion == 0)
@@ -526,7 +530,7 @@ namespace DeadCellsMultiplayerMod
 
         public static void RestoreRemoteUserData(User user)
         {
-            if (!string.IsNullOrEmpty(_remoteCountersPayload))
+            if (EnableStoryManagerSync && !string.IsNullOrEmpty(_remoteCountersPayload))
                 ReceiveCounters(_remoteCountersPayload, user);
             if (!string.IsNullOrEmpty(_remoteBlueprintsPayload))
                 ReceiveBlueprints(_remoteBlueprintsPayload, user);
@@ -735,6 +739,12 @@ namespace DeadCellsMultiplayerMod
         public static void ReceiveCounters(string payload, User? target = null)
         {
             _remoteCountersPayload = payload;
+            if (!EnableStoryManagerSync)
+            {
+                _hasRemoteCounters = false;
+                return;
+            }
+
             if (string.IsNullOrEmpty(payload))
                 return;
 
@@ -838,7 +848,7 @@ namespace DeadCellsMultiplayerMod
 
         private static void SendCounters(User user, NetNode? net)
         {
-            if (user == null)
+            if (!EnableStoryManagerSync || user == null)
                 return;
 
             var map = user.story?.counters;
