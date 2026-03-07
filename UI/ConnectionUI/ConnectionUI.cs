@@ -33,6 +33,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         private readonly List<HSprite> sprites = new();
         private readonly List<dc.ui.Text> connectionLabels = new();
         private readonly List<string> lastConnections = new();
+        private Flow? lobbyCodeFlow;
         private dc.ui.Text? lobbyCodeTitleLabel;
         private dc.ui.Text? lobbyIdLabel;
         private string lastLobbyIdLabelText = string.Empty;
@@ -197,11 +198,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         private void clean()
         {
-            this.lobbyCodeTitleLabel?.remove();
-            this.lobbyCodeTitleLabel = null;
-            this.lobbyIdLabel?.remove();
-            this.lobbyIdLabel = null;
-            this.lastLobbyIdLabelText = string.Empty;
+            ClearLobbyCodeUi();
             this.bg?.remove();
             this.rootFlow?.remove();
             this.inter?.remove();
@@ -229,11 +226,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             double flowW = this.rootFlow.get_innerWidth();
             double flowH = this.rootFlow.get_innerHeight();
 
-            this.lobbyCodeTitleLabel?.remove();
-            this.lobbyCodeTitleLabel = null;
-            this.lobbyIdLabel?.remove();
-            this.lobbyIdLabel = null;
-            this.lastLobbyIdLabelText = string.Empty;
+            ClearLobbyCodeUi();
             this.bg?.remove();
             this.bg = UIBox.Class.drawBoxValidation(
                 (int)flowW,
@@ -383,6 +376,58 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             UpdateLobbyIdLabel(forceRefreshText: false);
         }
 
+        private void ClearLobbyCodeUi()
+        {
+            this.lobbyCodeFlow?.remove();
+            this.lobbyCodeFlow = null;
+
+            this.lobbyCodeTitleLabel?.remove();
+            this.lobbyCodeTitleLabel = null;
+            this.lobbyIdLabel?.remove();
+            this.lobbyIdLabel = null;
+            this.lastLobbyIdLabelText = string.Empty;
+        }
+
+        private void EnsureLobbyCodeFlow(double uiScale)
+        {
+            if (this.bg == null)
+                return;
+
+            if (this.lobbyCodeFlow == null)
+            {
+                this.lobbyCodeFlow = new Flow(null);
+                this.lobbyCodeFlow.isVertical = true;
+                this.lobbyCodeFlow.set_horizontalAlign(new FlowAlign.Left());
+                this.lobbyCodeFlow.set_verticalAlign(new FlowAlign.Top());
+                this.bg.addChild(this.lobbyCodeFlow);
+            }
+
+            this.lobbyCodeFlow.set_verticalSpacing((int)(2 * uiScale));
+
+            if (this.lobbyCodeTitleLabel == null)
+            {
+                this.lobbyCodeTitleLabel = Assets.Class.makeText(
+                    "lobby code".AsHaxeString(),
+                    Tools.MultiColor.ColorFromHex("#9ea8b3"),
+                    false,
+                    null);
+                this.lobbyCodeFlow.addChild(this.lobbyCodeTitleLabel);
+            }
+
+            if (this.lobbyIdLabel == null)
+            {
+                this.lobbyIdLabel = Assets.Class.makeText(
+                    string.Empty.AsHaxeString(),
+                    Tools.MultiColor.ColorFromHex("#7fd4ff"),
+                    true,
+                    null);
+                this.lobbyCodeFlow.addChild(this.lobbyIdLabel);
+            }
+
+            this.lobbyCodeTitleLabel.scaleX = 0.44 * uiScale;
+            this.lobbyCodeTitleLabel.scaleY = 0.44 * uiScale;
+        }
+
         private void UpdateLobbyIdLabel(bool forceRefreshText)
         {
             if (this.bg == null)
@@ -391,50 +436,17 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             var lobbyCode = GameMenu.GetSteamLobbyCodeForUi();
             if (string.IsNullOrWhiteSpace(lobbyCode))
             {
-                if (this.lobbyCodeTitleLabel != null)
-                    this.lobbyCodeTitleLabel.set_visible(false);
-                if (this.lobbyIdLabel != null)
-                    this.lobbyIdLabel.set_visible(false);
+                if (this.lobbyCodeFlow != null)
+                    this.lobbyCodeFlow.set_visible(false);
                 this.lastLobbyIdLabelText = string.Empty;
                 return;
             }
 
             var uiScale = UiScale.GetResolutionScale();
-            var titleText = "lobby code";
             var labelText = lobbyCode.Trim().ToLowerInvariant();
-
-            if (this.lobbyCodeTitleLabel == null)
-            {
-                this.lobbyCodeTitleLabel = Assets.Class.makeText(
-                    titleText.AsHaxeString(),
-                    Tools.MultiColor.ColorFromHex("#9ea8b3"),
-                    false,
-                    this.bg);
-                this.lobbyCodeTitleLabel.scaleX = 0.44 * uiScale;
-                this.lobbyCodeTitleLabel.scaleY = 0.44 * uiScale;
-            }
-            else
-            {
-                this.lobbyCodeTitleLabel.scaleX = 0.44 * uiScale;
-                this.lobbyCodeTitleLabel.scaleY = 0.44 * uiScale;
-            }
-
-            if (this.lobbyIdLabel == null)
-            {
-                this.lobbyIdLabel = Assets.Class.makeText(
-                    labelText.AsHaxeString(),
-                    Tools.MultiColor.ColorFromHex("#7fd4ff"),
-                    true,
-                    this.bg);
-                // this.lobbyIdLabel.scaleX = 0.54 * uiScale;
-                // this.lobbyIdLabel.scaleY = 0.54 * uiScale;
-                forceRefreshText = true;
-            }
-            else
-            {
-                // this.lobbyIdLabel.scaleX = 0.54 * uiScale;
-                // this.lobbyIdLabel.scaleY = 0.54 * uiScale;
-            }
+            EnsureLobbyCodeFlow(uiScale);
+            if (this.lobbyCodeFlow == null || this.lobbyIdLabel == null || this.lobbyCodeTitleLabel == null)
+                return;
 
             if (forceRefreshText || !string.Equals(this.lastLobbyIdLabelText, labelText, StringComparison.Ordinal))
             {
@@ -442,21 +454,12 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 this.lastLobbyIdLabelText = labelText;
             }
 
-            var textHeight = this.lobbyIdLabel.textHeight * this.lobbyIdLabel.scaleY;
-            var titleHeight = this.lobbyCodeTitleLabel!.textHeight * this.lobbyCodeTitleLabel.scaleY;
             var leftPadding = 10.0 * uiScale;
             var bottomPadding = 8.0 * uiScale;
-            var spacing = 2.0 * uiScale;
-
-            this.lobbyIdLabel.x = System.Math.Max(2.0, leftPadding);
-            this.lobbyIdLabel.y = System.Math.Max(2.0, this.bg.hei - textHeight - bottomPadding);
-            this.lobbyIdLabel.set_visible(true);
-
-            this.lobbyCodeTitleLabel.x = System.Math.Max(2.0, leftPadding);
-            this.lobbyCodeTitleLabel.y = System.Math.Max(2.0, this.lobbyIdLabel.y - titleHeight - spacing);
-            this.lobbyCodeTitleLabel.set_visible(true);
-            this.MainTitleflow.addChild(lobbyCodeTitleLabel);
-            this.MainTitleflow.addChild(lobbyIdLabel);
+            this.lobbyCodeFlow.reflow();
+            this.lobbyCodeFlow.x = System.Math.Max(2.0, leftPadding);
+            this.lobbyCodeFlow.y = System.Math.Max(2.0, this.bg.hei - this.lobbyCodeFlow.get_innerHeight() - bottomPadding);
+            this.lobbyCodeFlow.set_visible(true);
         }
 
         private bool NeedsConnectionsRefresh(List<string> names)
@@ -500,15 +503,15 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         private void OnClick(Event e)
         {
-            if (this.lobbyIdLabel == null || !this.lobbyIdLabel.visible)
+            if (this.lobbyCodeFlow == null || !this.lobbyCodeFlow.visible)
                 return;
 
             var x = e.relX;
             var y = e.relY;
-            var width = this.lobbyIdLabel.textWidth * this.lobbyIdLabel.scaleX;
-            var height = this.lobbyIdLabel.textHeight * this.lobbyIdLabel.scaleY;
-            var minX = this.lobbyIdLabel.x;
-            var minY = this.lobbyIdLabel.y;
+            var width = this.lobbyCodeFlow.get_innerWidth();
+            var height = this.lobbyCodeFlow.get_innerHeight();
+            var minX = this.lobbyCodeFlow.x;
+            var minY = this.lobbyCodeFlow.y;
             var maxX = minX + width;
             var maxY = minY + height;
 

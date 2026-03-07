@@ -46,11 +46,30 @@ public sealed class NetNode : IDisposable
         public CSteamID SteamId { get; }
         public SemaphoreSlim SendLock { get; } = new(1, 1);
         public int AssignedId { get; }
+        private readonly object _initialStateSync = new();
+        private DateTime _lastInitialStateSentUtc = DateTime.MinValue;
 
         public SteamClientConnection(CSteamID steamId, int assignedId)
         {
             SteamId = steamId;
             AssignedId = assignedId;
+        }
+
+        public bool TryReserveInitialStateSend(TimeSpan minInterval, bool force = false)
+        {
+            var now = DateTime.UtcNow;
+            lock (_initialStateSync)
+            {
+                if (!force &&
+                    _lastInitialStateSentUtc != DateTime.MinValue &&
+                    now - _lastInitialStateSentUtc < minInterval)
+                {
+                    return false;
+                }
+
+                _lastInitialStateSentUtc = now;
+                return true;
+            }
         }
 
         public void Dispose()
@@ -464,6 +483,8 @@ public sealed class NetNode : IDisposable
     private int? _cachedHostSerializerUid;
     private string? _cachedHostCountersPayload;
     private string? _cachedHostBlueprintsPayload;
+    private string? _cachedHostLevelDescPayload;
+    private string? _cachedHostLevelSeedPayload;
     private string? _cachedHostLevelGraphPayload;
 
     public bool HasRemote
@@ -800,8 +821,11 @@ public sealed class NetNode : IDisposable
         return true;
     }
 
-    private async Task SendInitialStateToSteamClient(SteamClientConnection connection)
+    private async Task SendInitialStateToSteamClient(SteamClientConnection connection, bool forceSend = false)
     {
+        if (!connection.TryReserveInitialStateSend(TimeSpan.FromMilliseconds(750), forceSend))
+            return;
+
         await SendSteamHandshakeToSteamClient(connection).ConfigureAwait(false);
 
         int? cachedBossRune;
@@ -810,6 +834,8 @@ public sealed class NetNode : IDisposable
         int? cachedSerializerUid;
         string? cachedCountersPayload;
         string? cachedBlueprintsPayload;
+        string? cachedLevelDescPayload;
+        string? cachedLevelSeedPayload;
         string? cachedLevelGraphPayload;
         lock (_hostCacheSync)
         {
@@ -819,6 +845,8 @@ public sealed class NetNode : IDisposable
             cachedSerializerUid = _cachedHostSerializerUid;
             cachedCountersPayload = _cachedHostCountersPayload;
             cachedBlueprintsPayload = _cachedHostBlueprintsPayload;
+            cachedLevelDescPayload = _cachedHostLevelDescPayload;
+            cachedLevelSeedPayload = _cachedHostLevelSeedPayload;
             cachedLevelGraphPayload = _cachedHostLevelGraphPayload;
         }
 
@@ -832,6 +860,10 @@ public sealed class NetNode : IDisposable
             await SendLineToSteamClientSafe(connection, $"COUNTERS|{cachedCountersPayload}\n").ConfigureAwait(false);
         if (cachedBlueprintsPayload != null)
             await SendLineToSteamClientSafe(connection, $"BLUEPRINTS|{cachedBlueprintsPayload}\n").ConfigureAwait(false);
+        if (cachedLevelDescPayload != null)
+            await SendLineToSteamClientSafe(connection, $"LDESC|{cachedLevelDescPayload}\n").ConfigureAwait(false);
+        if (cachedLevelSeedPayload != null)
+            await SendLineToSteamClientSafe(connection, $"LSEED|{cachedLevelSeedPayload}\n").ConfigureAwait(false);
         if (cachedLevelGraphPayload != null)
             await SendLineToSteamClientSafe(connection, $"LGRAPH|{cachedLevelGraphPayload}\n").ConfigureAwait(false);
         await SendKnownUsersToSteamClientSafe(connection).ConfigureAwait(false);
@@ -932,6 +964,8 @@ public sealed class NetNode : IDisposable
                     int? cachedSerializerUid;
                     string? cachedCountersPayload;
                     string? cachedBlueprintsPayload;
+                    string? cachedLevelDescPayload;
+                    string? cachedLevelSeedPayload;
                     string? cachedLevelGraphPayload;
                     lock (_hostCacheSync)
                     {
@@ -941,6 +975,8 @@ public sealed class NetNode : IDisposable
                         cachedSerializerUid = _cachedHostSerializerUid;
                         cachedCountersPayload = _cachedHostCountersPayload;
                         cachedBlueprintsPayload = _cachedHostBlueprintsPayload;
+                        cachedLevelDescPayload = _cachedHostLevelDescPayload;
+                        cachedLevelSeedPayload = _cachedHostLevelSeedPayload;
                         cachedLevelGraphPayload = _cachedHostLevelGraphPayload;
                     }
 
@@ -958,6 +994,12 @@ public sealed class NetNode : IDisposable
 
                     if (cachedBlueprintsPayload != null)
                         await SendLineToClientSafe(connection, $"BLUEPRINTS|{cachedBlueprintsPayload}\n").ConfigureAwait(false);
+
+                    if (cachedLevelDescPayload != null)
+                        await SendLineToClientSafe(connection, $"LDESC|{cachedLevelDescPayload}\n").ConfigureAwait(false);
+
+                    if (cachedLevelSeedPayload != null)
+                        await SendLineToClientSafe(connection, $"LSEED|{cachedLevelSeedPayload}\n").ConfigureAwait(false);
 
                     if (cachedLevelGraphPayload != null)
                         await SendLineToClientSafe(connection, $"LGRAPH|{cachedLevelGraphPayload}\n").ConfigureAwait(false);
@@ -1269,7 +1311,7 @@ public sealed class NetNode : IDisposable
                 }
 
                 if (steamConnection != null)
-                    _ = Task.Run(() => SendSteamHandshakeToSteamClient(steamConnection));
+                    _ = Task.Run(() => SendInitialStateToSteamClient(steamConnection, forceSend: true));
             }
             return true;
         }
@@ -3222,26 +3264,51 @@ public sealed class NetNode : IDisposable
 
     public void SendLevelDesc(string json)
     {
+        var safeJson = (json ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
+        if (_role == NetRole.Host)
+        {
+            lock (_hostCacheSync)
+            {
+                _cachedHostLevelDescPayload = string.IsNullOrWhiteSpace(safeJson) ? null : safeJson;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(safeJson))
+            return;
+
         if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending level desc: no connected client");
             return;
         }
 
-        SendRaw("LDESC|" + json);
+        SendRaw("LDESC|" + safeJson);
         _log.Information("[NetNode] Sent LevelDesc payload");
     }
 
     public void SendLevelSeed(string levelId, double seed)
     {
+        var safeSeed = seed.ToString(CultureInfo.InvariantCulture);
+        var safeId = (levelId ?? string.Empty).Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
+        var payload = $"{safeId}|{safeSeed}";
+        if (_role == NetRole.Host)
+        {
+            lock (_hostCacheSync)
+            {
+                _cachedHostLevelSeedPayload = string.IsNullOrWhiteSpace(safeId) ? null : payload;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(safeId))
+            return;
+
         if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending level seed: no connected client");
             return;
         }
 
-        var safeId = (levelId ?? string.Empty).Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
-        SendRaw($"LSEED|{safeId}|{seed.ToString(CultureInfo.InvariantCulture)}");
+        SendRaw($"LSEED|{payload}");
         _log.Information("[NetNode] Sent level seed for {LevelId}", safeId);
     }
 
@@ -4191,6 +4258,8 @@ public sealed class NetNode : IDisposable
             _cachedHostSerializerUid = null;
             _cachedHostCountersPayload = null;
             _cachedHostBlueprintsPayload = null;
+            _cachedHostLevelDescPayload = null;
+            _cachedHostLevelSeedPayload = null;
             _cachedHostLevelGraphPayload = null;
         }
         lock (_sync)

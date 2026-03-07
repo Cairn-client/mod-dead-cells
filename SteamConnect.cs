@@ -738,6 +738,16 @@ namespace DeadCellsMultiplayerMod
             };
         }
 
+        internal static ProcessStartInfo BuildWorkerStartInfoForRuntime()
+        {
+            return BuildWorkerStartInfo();
+        }
+
+        internal static string[] BuildWorkerLoadAssembliesForRuntime(string mainAssemblyPath)
+        {
+            return BuildWorkerLoadAssemblies(mainAssemblyPath);
+        }
+
         public static void WorkerEntry()
         {
             var response = new WorkerResponse
@@ -1586,6 +1596,7 @@ namespace DeadCellsMultiplayerMod
     internal static class SteamWorkerBootstrap
     {
         private const string EnvResponsePath = "DCCM_STEAM_CONNECT_RESPONSE_PATH";
+        private const string EnvWorkerMode = "DCCM_STEAM_WORKER_MODE";
         private static readonly object ResolveSync = new();
         private static bool _resolverInstalled;
 
@@ -1595,6 +1606,14 @@ namespace DeadCellsMultiplayerMod
             {
                 InstallAssemblyResolver();
                 TryPreloadSteamworksAssembly();
+
+                var workerMode = Environment.GetEnvironmentVariable(EnvWorkerMode);
+                if (string.Equals(workerMode, SteamP2PWorkerEnvironment.WorkerModeP2P, StringComparison.OrdinalIgnoreCase))
+                {
+                    SteamP2PWorker.WorkerEntry();
+                    return;
+                }
+
                 SteamConnect.WorkerEntry();
             }
             catch (TargetInvocationException ex)
