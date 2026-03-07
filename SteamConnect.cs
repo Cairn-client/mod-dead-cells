@@ -33,6 +33,7 @@ namespace DeadCellsMultiplayerMod
         private static readonly object HostWorkerSync = new();
         private static Process? _hostWorkerProcess;
         private static string? _hostWorkerStopSignalPath;
+        private static ulong _inProcessHostLobbyId;
 
         private const uint CfUnicodeText = 13;
         private const uint GmemMoveable = 0x0002;
@@ -122,6 +123,8 @@ namespace DeadCellsMultiplayerMod
 
         internal static bool TryCreateHostLobby(int hostPort, out HostLobbyResult result)
         {
+            StopHostLobbyWorker();
+
             var request = new WorkerRequest
             {
                 Mode = "host",
@@ -129,6 +132,21 @@ namespace DeadCellsMultiplayerMod
                 HostIp = ResolveBestHostIp(),
                 StopSignalPath = Path.Combine(Path.GetTempPath(), $"dccm_steam_stop_{Guid.NewGuid():N}.sig")
             };
+
+            if (TryCreateHostLobbyInProcess(request.HostIp, request.HostPort, out var localResponse))
+            {
+                result = new HostLobbyResult
+                {
+                    Success = localResponse.Success,
+                    LobbyId = localResponse.LobbyId,
+                    HostIp = localResponse.HostIp ?? string.Empty,
+                    HostPort = localResponse.HostPort,
+                    PersonaName = localResponse.PersonaName ?? string.Empty,
+                    Error = localResponse.Error ?? string.Empty
+                };
+
+                return result.Success;
+            }
 
             if (!TryRunHostWorker(request, out var response))
             {
@@ -221,13 +239,21 @@ namespace DeadCellsMultiplayerMod
         {
             Process? worker;
             string? stopSignalPath;
+            ulong inProcessLobbyId;
 
             lock (HostWorkerSync)
             {
                 worker = _hostWorkerProcess;
                 stopSignalPath = _hostWorkerStopSignalPath;
+                inProcessLobbyId = _inProcessHostLobbyId;
                 _hostWorkerProcess = null;
                 _hostWorkerStopSignalPath = null;
+                _inProcessHostLobbyId = 0UL;
+            }
+
+            if (inProcessLobbyId != 0UL)
+            {
+                try { SteamMatchmaking.LeaveLobby(new CSteamID(inProcessLobbyId)); } catch { }
             }
 
             if (!string.IsNullOrWhiteSpace(stopSignalPath))
@@ -921,89 +947,34 @@ namespace DeadCellsMultiplayerMod
             }
 
             var lobby = new CSteamID(targetLobbyId);
-            var joinCall = SteamMatchmaking.JoinLobby(lobby);
-            if (!TryWaitForCallResult(
-                    joinCall,
-                    out LobbyEnter_t entered,
-                    out var ioFailure,
-                    out var waitError))
+            if (!TryReadLobbyHostData(lobby, out var hostSteamId, out var hostIp, out var hostPortRaw, out var readError))
             {
-                return new WorkerResponse
-                {
-                    Success = false,
-                    Error = waitError
-                };
-            }
-
-            if (ioFailure)
-            {
-                return new WorkerResponse
-                {
-                    Success = false,
-                    Error = "Steam lobby join failed (I/O failure)"
-                };
-            }
-
-            var enterResponse = (EChatRoomEnterResponse)entered.m_EChatRoomEnterResponse;
-            if (enterResponse != EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess)
-            {
-                if (enterResponse == EChatRoomEnterResponse.k_EChatRoomEnterResponseDoesntExist &&
-                    request.LobbyId != 0 &&
-                    request.LobbyId != targetLobbyId)
+                if (request.LobbyId != 0UL && request.LobbyId != targetLobbyId)
                 {
                     lobby = new CSteamID(request.LobbyId);
-                    joinCall = SteamMatchmaking.JoinLobby(lobby);
-                    if (TryWaitForCallResult(
-                            joinCall,
-                            out entered,
-                            out ioFailure,
-                            out waitError) &&
-                        !ioFailure)
+                    if (!TryReadLobbyHostData(lobby, out hostSteamId, out hostIp, out hostPortRaw, out readError))
                     {
-                        enterResponse = (EChatRoomEnterResponse)entered.m_EChatRoomEnterResponse;
-                        targetLobbyId = request.LobbyId;
+                        return new WorkerResponse
+                        {
+                            Success = false,
+                            Error = readError
+                        };
                     }
-                }
 
-                if (enterResponse != EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess)
-                {
-                return new WorkerResponse
-                {
-                    Success = false,
-                    Error = $"Steam lobby join failed ({enterResponse})"
-                };
+                    targetLobbyId = request.LobbyId;
                 }
-            }
-
-            var joinedLobby = new CSteamID(entered.m_ulSteamIDLobby);
-            ulong hostSteamId = 0UL;
-            var hostIp = string.Empty;
-            var hostPortRaw = string.Empty;
-
-            var start = Stopwatch.GetTimestamp();
-            var timeoutTicks = (long)(Stopwatch.Frequency * 4.0);
-            while (Stopwatch.GetTimestamp() - start < timeoutTicks)
-            {
-                try
+                else
                 {
-                    hostSteamId = SteamMatchmaking.GetLobbyOwner(joinedLobby).m_SteamID;
+                    return new WorkerResponse
+                    {
+                        Success = false,
+                        Error = readError
+                    };
                 }
-                catch
-                {
-                    hostSteamId = 0UL;
-                }
-                hostIp = SteamMatchmaking.GetLobbyData(joinedLobby, HostIpLobbyKey) ?? string.Empty;
-                hostPortRaw = SteamMatchmaking.GetLobbyData(joinedLobby, HostPortLobbyKey) ?? string.Empty;
-                if (hostSteamId != 0UL && !string.IsNullOrWhiteSpace(hostIp) && !string.IsNullOrWhiteSpace(hostPortRaw))
-                    break;
-
-                SteamAPI.RunCallbacks();
-                Thread.Sleep(20);
             }
 
             if (!IPAddress.TryParse(hostIp, out _))
             {
-                try { SteamMatchmaking.LeaveLobby(joinedLobby); } catch { }
                 return new WorkerResponse
                 {
                     Success = false,
@@ -1013,15 +984,12 @@ namespace DeadCellsMultiplayerMod
 
             if (!int.TryParse(hostPortRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var hostPort))
             {
-                try { SteamMatchmaking.LeaveLobby(joinedLobby); } catch { }
                 return new WorkerResponse
                 {
                     Success = false,
                     Error = "Steam lobby does not provide a valid host port"
                 };
             }
-
-            try { SteamMatchmaking.LeaveLobby(joinedLobby); } catch { }
 
             return new WorkerResponse
             {
@@ -1032,6 +1000,71 @@ namespace DeadCellsMultiplayerMod
                 HostPort = NormalizePort(hostPort),
                 PersonaName = SafeGetPersonaName()
             };
+        }
+
+        private static bool TryReadLobbyHostData(
+            CSteamID lobby,
+            out ulong hostSteamId,
+            out string hostIp,
+            out string hostPortRaw,
+            out string error)
+        {
+            hostSteamId = 0UL;
+            hostIp = string.Empty;
+            hostPortRaw = string.Empty;
+            error = string.Empty;
+
+            var requestSent = false;
+            try
+            {
+                requestSent = SteamMatchmaking.RequestLobbyData(lobby);
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+            }
+
+            var start = Stopwatch.GetTimestamp();
+            var timeoutTicks = (long)(Stopwatch.Frequency * 4.0);
+            while (Stopwatch.GetTimestamp() - start < timeoutTicks)
+            {
+                try
+                {
+                    hostSteamId = SteamMatchmaking.GetLobbyOwner(lobby).m_SteamID;
+                }
+                catch
+                {
+                    hostSteamId = 0UL;
+                }
+
+                hostIp = SteamMatchmaking.GetLobbyData(lobby, HostIpLobbyKey) ?? string.Empty;
+                hostPortRaw = SteamMatchmaking.GetLobbyData(lobby, HostPortLobbyKey) ?? string.Empty;
+                if (hostSteamId != 0UL &&
+                    !string.IsNullOrWhiteSpace(hostIp) &&
+                    !string.IsNullOrWhiteSpace(hostPortRaw))
+                {
+                    return true;
+                }
+
+                try
+                {
+                    SteamAPI.RunCallbacks();
+                }
+                catch
+                {
+                }
+
+                Thread.Sleep(20);
+            }
+
+            if (string.IsNullOrWhiteSpace(error))
+            {
+                error = requestSent
+                    ? "Steam lobby host data is unavailable"
+                    : "Steam lobby data request failed";
+            }
+
+            return false;
         }
 
         private static bool TryResolveLobbyIdByCode(string lobbyCode, out ulong lobbyId, out string error)
@@ -1199,6 +1232,118 @@ namespace DeadCellsMultiplayerMod
             }
 
             return "127.0.0.1";
+        }
+
+        private static bool TryCreateHostLobbyInProcess(string hostIp, int hostPort, out WorkerResponse response)
+        {
+            response = new WorkerResponse
+            {
+                Success = false,
+                Error = "Steam runtime is not available in game process"
+            };
+
+            if (!IsSteamRuntimeOperational())
+                return false;
+
+            var normalizedHostIp = string.IsNullOrWhiteSpace(hostIp) ? "127.0.0.1" : hostIp.Trim();
+            var normalizedHostPort = NormalizePort(hostPort);
+
+            try
+            {
+                var createCall = SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypePublic, 2);
+                if (!TryWaitForCallResult(
+                        createCall,
+                        out LobbyCreated_t created,
+                        out var ioFailure,
+                        out var waitError))
+                {
+                    response = new WorkerResponse
+                    {
+                        Success = false,
+                        Error = waitError
+                    };
+                    return false;
+                }
+
+                if (ioFailure)
+                {
+                    response = new WorkerResponse
+                    {
+                        Success = false,
+                        Error = "Steam lobby creation failed (I/O failure)"
+                    };
+                    return false;
+                }
+
+                if (created.m_eResult != EResult.k_EResultOK || created.m_ulSteamIDLobby == 0UL)
+                {
+                    response = new WorkerResponse
+                    {
+                        Success = false,
+                        Error = $"Steam lobby creation failed ({created.m_eResult})"
+                    };
+                    return false;
+                }
+
+                var lobbyId = created.m_ulSteamIDLobby;
+                var lobby = new CSteamID(lobbyId);
+                var lobbyCode = BuildLobbyCodeFromLobbyId(lobbyId);
+
+                SteamMatchmaking.SetLobbyJoinable(lobby, true);
+                SteamMatchmaking.SetLobbyType(lobby, ELobbyType.k_ELobbyTypePublic);
+                SteamMatchmaking.SetLobbyData(lobby, HostIpLobbyKey, normalizedHostIp);
+                SteamMatchmaking.SetLobbyData(lobby, HostPortLobbyKey, normalizedHostPort.ToString(CultureInfo.InvariantCulture));
+                SteamMatchmaking.SetLobbyData(lobby, ModMarkerLobbyKey, ModMarkerLobbyValue);
+                SteamMatchmaking.SetLobbyData(lobby, LobbyCodeLobbyKey, lobbyCode);
+
+                lock (HostWorkerSync)
+                {
+                    _inProcessHostLobbyId = lobbyId;
+                }
+
+                response = new WorkerResponse
+                {
+                    Success = true,
+                    LobbyId = lobbyId,
+                    HostIp = normalizedHostIp,
+                    HostPort = normalizedHostPort,
+                    PersonaName = SafeGetPersonaName()
+                };
+                return true;
+            }
+            catch (Exception ex)
+            {
+                response = new WorkerResponse
+                {
+                    Success = false,
+                    Error = ex.Message
+                };
+                return false;
+            }
+        }
+
+        private static bool IsSteamRuntimeOperational()
+        {
+            try
+            {
+                if (!SteamAPI.IsSteamRunning())
+                    return false;
+            }
+            catch
+            {
+                return false;
+            }
+
+            try
+            {
+                var user = SteamAPI.GetHSteamUser();
+                var pipe = SteamAPI.GetHSteamPipe();
+                return user.m_HSteamUser != 0 && pipe.m_HSteamPipe != 0;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         internal static void PrepareSteamNativePathForRuntime()

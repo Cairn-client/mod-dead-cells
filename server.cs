@@ -403,7 +403,10 @@ public sealed class NetNode : IDisposable
     private Task? _steamTransportTask;
     private readonly bool _useSteamTransport;
     private readonly CSteamID _steamHostId;
-    private const int SteamP2PChannel = 0;
+    private const int SteamP2PChannelClientToHost = 0;
+    private const int SteamP2PChannelHostToClient = 1;
+    private const uint SteamMaxPacketSizeBytes = 16u * 1024u * 1024u;
+    private const int SteamMinReceiveBufferBytes = 64 * 1024;
     private static readonly object SteamApiSync = new();
     private static bool SteamApiReady;
     private static bool SteamApiInitAttempted;
@@ -608,15 +611,20 @@ public sealed class NetNode : IDisposable
             GameMenu.EnqueueMainThread(() => GameMenu.NotifyClientConnectAttempt(attempt));
             _log.Information("[NetNode] Steam client connecting to hostSteamId={HostSteamId}", _steamHostId.m_SteamID);
 
-            await SendLineToSteamPeerSafe(_steamHostId, _sendLock, "HELLO\n").ConfigureAwait(false);
+            await SendLineToSteamPeerSafe(
+                _steamHostId,
+                _sendLock,
+                "HELLO\n",
+                EP2PSend.k_EP2PSendReliable,
+                SteamP2PChannelClientToHost).ConfigureAwait(false);
 
             var connected = false;
             var startedAt = DateTime.UtcNow;
-            while (!ct.IsCancellationRequested && DateTime.UtcNow - startedAt < TimeSpan.FromSeconds(4))
+            while (!ct.IsCancellationRequested && DateTime.UtcNow - startedAt < TimeSpan.FromSeconds(6))
             {
                 lock (_sync)
                 {
-                    connected = _hasRemote;
+                    connected = _hasRemote && ID > 0;
                 }
                 if (connected)
                     break;
@@ -626,12 +634,6 @@ public sealed class NetNode : IDisposable
 
             if (connected)
             {
-                if (ID <= 0)
-                {
-                    _log.Warning("[NetNode] Steam client connected without assigned ID yet; requesting handshake refresh");
-                    await SendLineToSteamPeerSafe(_steamHostId, _sendLock, "HELLO\n").ConfigureAwait(false);
-                }
-
                 GameMenu.EnqueueMainThread(() =>
                 {
                     GameMenu.NetRef = this;
@@ -653,6 +655,7 @@ public sealed class NetNode : IDisposable
 
     private async Task SteamHostLoop(CancellationToken ct)
     {
+        var receiveBuffer = new byte[SteamMinReceiveBufferBytes];
         while (!ct.IsCancellationRequested)
         {
             if (!TryEnsureSteamApiInitialized())
@@ -664,37 +667,24 @@ public sealed class NetNode : IDisposable
             var hasPacket = false;
             try
             {
-                while (SteamNetworking.IsP2PPacketAvailable(out uint packetSize, SteamP2PChannel))
+                while (SteamNetworking.IsP2PPacketAvailable(out uint packetSize, SteamP2PChannelClientToHost))
                 {
                     hasPacket = true;
-                    if (packetSize == 0 || packetSize > 1024 * 1024)
-                    {
-                        break;
-                    }
-
-                    var buffer = new byte[(int)packetSize];
-                    if (!SteamNetworking.ReadP2PPacket(buffer, packetSize, out uint bytesRead, out CSteamID remoteSteamId, SteamP2PChannel))
-                        break;
-
-                    if (bytesRead == 0)
+                    if (!TryReadSteamPacket(packetSize, "host", SteamP2PChannelClientToHost, ref receiveBuffer, out var remoteSteamId, out var payload))
                         continue;
-                    if (bytesRead > (uint)buffer.Length)
-                    {
-                        _log.Warning("[NetNode] Steam host packet bounds mismatch: bytesRead={BytesRead}, bufferLength={BufferLength}", bytesRead, buffer.Length);
-                        continue;
-                    }
 
                     try { SteamNetworking.AcceptP2PSessionWithUser(remoteSteamId); } catch { }
 
                     if (!TryGetOrRegisterSteamClient(remoteSteamId, out var connection) || connection == null)
                         continue;
 
-                    var payload = Encoding.UTF8.GetString(buffer, 0, (int)bytesRead);
                     ProcessIncomingSteamPayload(payload, connection.AssignedId, connection);
                 }
             }
             catch (Exception ex)
             {
+                if (IsSteamNotInitializedException(ex))
+                    ResetSteamApiState();
                 _log.Warning("[NetNode] Steam host loop error: {msg}", ex.Message);
             }
 
@@ -706,6 +696,7 @@ public sealed class NetNode : IDisposable
 
     private async Task SteamClientLoop(CancellationToken ct)
     {
+        var receiveBuffer = new byte[SteamMinReceiveBufferBytes];
         while (!ct.IsCancellationRequested)
         {
             if (!TryEnsureSteamApiInitialized())
@@ -717,33 +708,22 @@ public sealed class NetNode : IDisposable
             var hasPacket = false;
             try
             {
-                while (SteamNetworking.IsP2PPacketAvailable(out uint packetSize, SteamP2PChannel))
+                while (SteamNetworking.IsP2PPacketAvailable(out uint packetSize, SteamP2PChannelHostToClient))
                 {
                     hasPacket = true;
-                    if (packetSize == 0 || packetSize > 1024 * 1024)
-                        break;
-
-                    var buffer = new byte[(int)packetSize];
-                    if (!SteamNetworking.ReadP2PPacket(buffer, packetSize, out uint bytesRead, out CSteamID remoteSteamId, SteamP2PChannel))
-                        break;
-
-                    if (bytesRead == 0)
+                    if (!TryReadSteamPacket(packetSize, "client", SteamP2PChannelHostToClient, ref receiveBuffer, out var remoteSteamId, out var payload))
                         continue;
-                    if (bytesRead > (uint)buffer.Length)
-                    {
-                        _log.Warning("[NetNode] Steam client packet bounds mismatch: bytesRead={BytesRead}, bufferLength={BufferLength}", bytesRead, buffer.Length);
-                        continue;
-                    }
                     if (_steamHostId.m_SteamID != 0UL && remoteSteamId.m_SteamID != _steamHostId.m_SteamID)
                         continue;
 
                     try { SteamNetworking.AcceptP2PSessionWithUser(remoteSteamId); } catch { }
-                    var payload = Encoding.UTF8.GetString(buffer, 0, (int)bytesRead);
                     ProcessIncomingSteamPayload(payload, 1, null);
                 }
             }
             catch (Exception ex)
             {
+                if (IsSteamNotInitializedException(ex))
+                    ResetSteamApiState();
                 _log.Warning("[NetNode] Steam client loop error: {msg}", ex.Message);
             }
 
@@ -822,7 +802,7 @@ public sealed class NetNode : IDisposable
 
     private async Task SendInitialStateToSteamClient(SteamClientConnection connection)
     {
-        await SendLineToSteamClientSafe(connection, "WELCOME\n").ConfigureAwait(false);
+        await SendSteamHandshakeToSteamClient(connection).ConfigureAwait(false);
 
         int? cachedBossRune;
         int? cachedSeed;
@@ -854,11 +834,15 @@ public sealed class NetNode : IDisposable
             await SendLineToSteamClientSafe(connection, $"BLUEPRINTS|{cachedBlueprintsPayload}\n").ConfigureAwait(false);
         if (cachedLevelGraphPayload != null)
             await SendLineToSteamClientSafe(connection, $"LGRAPH|{cachedLevelGraphPayload}\n").ConfigureAwait(false);
-
-        await SendLineToSteamClientSafe(connection, $"ID|{connection.AssignedId}\n").ConfigureAwait(false);
         await SendKnownUsersToSteamClientSafe(connection).ConfigureAwait(false);
         if (_role == NetRole.Host && TryBuildLocalHpLine(out var localHpLine))
             await SendLineToSteamClientSafe(connection, localHpLine).ConfigureAwait(false);
+    }
+
+    private async Task SendSteamHandshakeToSteamClient(SteamClientConnection connection)
+    {
+        await SendLineToSteamClientSafe(connection, "WELCOME\n").ConfigureAwait(false);
+        await SendLineToSteamClientSafe(connection, $"ID|{connection.AssignedId}\n").ConfigureAwait(false);
     }
 
     private void ProcessIncomingSteamPayload(string payload, int senderId, SteamClientConnection? senderConnection)
@@ -1251,10 +1235,14 @@ public sealed class NetNode : IDisposable
 
         if (line.StartsWith("ID|"))
         {
+            if (_role == NetRole.Host)
+                return true;
+
             var part = line["ID|".Length..];
             if (int.TryParse(part, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedId))
             {
                 ID = parsedId;
+                lock (_sync) _hasRemote = true;
                 _log.Information("[NetNode] Assigned ID {Id}", ID);
             }
             return true;
@@ -1268,6 +1256,9 @@ public sealed class NetNode : IDisposable
 
         if (line.StartsWith("HELLO"))
         {
+            if (_role == NetRole.Client)
+                return true;
+
             lock (_sync) _hasRemote = true;
             if (_role == NetRole.Host && _useSteamTransport && senderId.HasValue)
             {
@@ -1278,7 +1269,7 @@ public sealed class NetNode : IDisposable
                 }
 
                 if (steamConnection != null)
-                    _ = Task.Run(() => SendInitialStateToSteamClient(steamConnection));
+                    _ = Task.Run(() => SendSteamHandshakeToSteamClient(steamConnection));
             }
             return true;
         }
@@ -2829,6 +2820,102 @@ public sealed class NetNode : IDisposable
         _client = null;
     }
 
+    private bool TryReadSteamPacket(uint packetSize, string side, int channel, ref byte[] receiveBuffer, out CSteamID remoteSteamId, out string payload)
+    {
+        remoteSteamId = default;
+        payload = string.Empty;
+
+        if (packetSize == 0)
+        {
+            _log.Warning("[NetNode] Steam {Side} packet with zero size was ignored", side);
+            return false;
+        }
+
+        if (packetSize > SteamMaxPacketSizeBytes || packetSize > int.MaxValue)
+        {
+            _log.Warning(
+                "[NetNode] Steam {Side} packet too large ({PacketSize} bytes, limit {Limit} bytes); ignored",
+                side,
+                packetSize,
+                SteamMaxPacketSizeBytes);
+            return false;
+        }
+
+        var required = (int)Math.Max(packetSize, SteamMinReceiveBufferBytes);
+        if (receiveBuffer.Length < required)
+            Array.Resize(ref receiveBuffer, required);
+
+        if (!SteamNetworking.ReadP2PPacket(receiveBuffer, (uint)receiveBuffer.Length, out var bytesRead, out remoteSteamId, channel))
+            return false;
+
+        if (bytesRead == 0)
+            return false;
+
+        if (bytesRead > (uint)receiveBuffer.Length)
+        {
+            _log.Warning(
+                "[NetNode] Steam {Side} packet bounds mismatch: bytesRead={BytesRead}, bufferLength={BufferLength}",
+                side,
+                bytesRead,
+                receiveBuffer.Length);
+            return false;
+        }
+
+        payload = Encoding.UTF8.GetString(receiveBuffer, 0, (int)bytesRead);
+        return true;
+    }
+
+    private static bool IsRealtimeSteamLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return false;
+
+        var trimmed = line.TrimStart();
+        if (trimmed.Length == 0)
+            return false;
+
+        if (IsPositionLine(trimmed))
+            return true;
+
+        return trimmed.StartsWith("ANIM|", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("HEADANIM|", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("HP|", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("MOBSTATE|", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("MOBDRAW|", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPositionLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return false;
+
+        var separatorIndex = line.IndexOf('|');
+        if (separatorIndex <= 0)
+            return false;
+
+        for (var i = 0; i < separatorIndex; i++)
+        {
+            if (!char.IsDigit(line[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static EP2PSend ResolveSteamSendType(string line)
+    {
+        return IsRealtimeSteamLine(line)
+            ? EP2PSend.k_EP2PSendUnreliable
+            : EP2PSend.k_EP2PSendReliable;
+    }
+
+    private int GetSteamOutgoingChannel()
+    {
+        return _role == NetRole.Host
+            ? SteamP2PChannelHostToClient
+            : SteamP2PChannelClientToHost;
+    }
+
     private bool HasAnyConnection()
     {
         if (_role == NetRole.Host)
@@ -2852,7 +2939,7 @@ public sealed class NetNode : IDisposable
             return BroadcastLineSafe(line);
 
         if (_useSteamTransport)
-            return SendLineToSteamPeerSafe(_steamHostId, _sendLock, line);
+            return SendLineToSteamPeerSafe(_steamHostId, _sendLock, line, ResolveSteamSendType(line), GetSteamOutgoingChannel());
 
         return SendLineToStreamSafe(_stream, _sendLock, line);
     }
@@ -2872,7 +2959,8 @@ public sealed class NetNode : IDisposable
                 steamSnapshot = _steamClients.Values.ToList();
             }
             if (steamSnapshot.Count == 0) return;
-            var steamTasks = steamSnapshot.Select(client => SendLineToSteamClientSafe(client, line));
+            var sendType = ResolveSteamSendType(line);
+            var steamTasks = steamSnapshot.Select(client => SendLineToSteamClientSafe(client, line, sendType));
             await Task.WhenAll(steamTasks).ConfigureAwait(false);
             return;
         }
@@ -2951,17 +3039,32 @@ public sealed class NetNode : IDisposable
         }
     }
 
-    private Task SendLineToSteamClientSafe(SteamClientConnection client, string line)
+    private Task SendLineToSteamClientSafe(SteamClientConnection client, string line, EP2PSend? sendType = null)
     {
-        return SendLineToSteamPeerSafe(client.SteamId, client.SendLock, line);
+        return SendLineToSteamPeerSafe(
+            client.SteamId,
+            client.SendLock,
+            line,
+            sendType ?? ResolveSteamSendType(line),
+            SteamP2PChannelHostToClient);
     }
 
-    private async Task SendLineToSteamPeerSafe(CSteamID steamId, SemaphoreSlim? sendLock, string line)
+    private async Task SendLineToSteamPeerSafe(CSteamID steamId, SemaphoreSlim? sendLock, string line, EP2PSend sendType, int channel)
     {
         if (!TryEnsureSteamApiInitialized() || sendLock == null || steamId.m_SteamID == 0UL)
             return;
 
         var bytes = Encoding.UTF8.GetBytes(line);
+        if (bytes.Length > SteamMaxPacketSizeBytes)
+        {
+            _log.Warning(
+                "[NetNode] Steam payload too large for {SteamId}: {PayloadSize} bytes (limit {Limit} bytes)",
+                steamId.m_SteamID,
+                bytes.Length,
+                SteamMaxPacketSizeBytes);
+            return;
+        }
+
         bool locked = false;
         try
         {
@@ -2971,14 +3074,16 @@ public sealed class NetNode : IDisposable
                 steamId,
                 bytes,
                 (uint)bytes.Length,
-                EP2PSend.k_EP2PSendReliable,
-                SteamP2PChannel);
+                sendType,
+                channel);
 
             if (!sent)
-                _log.Warning("[NetNode] Steam send failed to {SteamId}", steamId.m_SteamID);
+                _log.Warning("[NetNode] Steam send failed to {SteamId} ({SendType}, ch={Channel})", steamId.m_SteamID, sendType, channel);
         }
         catch (Exception ex)
         {
+            if (IsSteamNotInitializedException(ex))
+                ResetSteamApiState();
             _log.Warning("[NetNode] Steam send error: {msg}", ex.Message);
         }
         finally
@@ -3872,21 +3977,72 @@ public sealed class NetNode : IDisposable
         return false;
     }
 
+    private static bool IsSteamworksNetReady()
+    {
+        try
+        {
+            _ = SteamUtils.GetAppID();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsSteamNotInitializedException(Exception ex)
+    {
+        if (ex == null)
+            return false;
+
+        var current = ex;
+        while (current != null)
+        {
+            var message = current.Message;
+            if (!string.IsNullOrWhiteSpace(message) &&
+                message.IndexOf("not initialized", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+
+            current = current.InnerException;
+        }
+
+        return false;
+    }
+
+    private static void ResetSteamApiState()
+    {
+        lock (SteamApiSync)
+        {
+            if (SteamApiOwnedByMod)
+            {
+                try { SteamAPI.Shutdown(); } catch { }
+                SteamApiOwnedByMod = false;
+            }
+
+            SteamApiReady = false;
+            SteamApiInitAttempted = false;
+        }
+    }
+
     private bool TryEnsureSteamApiInitialized()
     {
         if (!_useSteamTransport)
             return true;
 
-        if (SteamApiReady)
+        if (SteamApiReady && IsSteamworksNetReady())
             return true;
 
         lock (SteamApiSync)
         {
-            if (SteamApiReady)
+            if (SteamApiReady && IsSteamworksNetReady())
                 return true;
 
+            SteamApiReady = false;
+
             // Prefer already-initialized runtime from the game process.
-            if (IsSteamRuntimeOperational())
+            if (IsSteamworksNetReady())
             {
                 SteamApiReady = true;
                 return true;
@@ -3921,6 +4077,15 @@ public sealed class NetNode : IDisposable
                 {
                     if (SteamAPI.Init())
                     {
+                        if (!IsSteamworksNetReady())
+                        {
+                            try { SteamAPI.Shutdown(); } catch { }
+                            SteamApiOwnedByMod = false;
+                            SteamApiReady = false;
+                            _log.Warning("[NetNode] Steam API init returned success but Steamworks.NET remains uninitialized");
+                            return false;
+                        }
+
                         SteamApiReady = true;
                         SteamApiOwnedByMod = true;
                         return true;
@@ -3934,7 +4099,7 @@ public sealed class NetNode : IDisposable
                 }
             }
 
-            if (IsSteamRuntimeOperational())
+            if (IsSteamworksNetReady())
             {
                 SteamApiReady = true;
                 return true;
