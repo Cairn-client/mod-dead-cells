@@ -60,6 +60,8 @@ internal static class KingWeaponHooks
         Hook_Weapon.prepare += Hook_Weapon_prepare;
         Hook_Weapon.get_shootX += Hook_Weapon_get_shootX;
         Hook_Weapon.get_shootY += Hook_Weapon_get_shootY;
+        Hook_Weapon.interrupt += Hook_Weapon_interrupt;
+        Hook_Weapon.dynOnInterrupt += Hook_Weapon_dynOnInterrupt;
         Hook_Weapon.fixedUpdate += Hook_Weapon_fixedUpdate;
         Hook_Weapon.postUpdate += Hook_Weapon_postUpdate;
         Hook_Weapon.dynOnAttackAnim += Hook_Weapon_dynOnAttackAnim;
@@ -388,6 +390,40 @@ internal static class KingWeaponHooks
         if(KingWeaponSupport.TryGetSource(self, out var source) && source != null)
             return source.get_shootY();
         return orig(self);
+    }
+
+    private static void Hook_Weapon_interrupt(Hook_Weapon.orig_interrupt orig, Weapon self)
+    {
+        if(KingWeaponSupport.IsKingWeapon(self))
+        {
+            KingWeaponSupport.PatchCurrentSkill(self);
+            KingWeaponSupport.WithKingContext(self, () =>
+            {
+                try { orig(self); } catch { }
+            });
+            KingWeaponSupport.SyncSource(self);
+            return;
+        }
+
+        var wasCharging = false;
+        try { wasCharging = self != null && self.isCharging(); } catch { }
+        orig(self);
+        if(wasCharging && self != null)
+            ModEntry.Instance?.NotifyLocalWeaponInterruptFromKingWeaponHooks(self);
+    }
+
+    private static void Hook_Weapon_dynOnInterrupt(Hook_Weapon.orig_dynOnInterrupt orig, Weapon self, WeaponSkill s, double r)
+    {
+        if(KingWeaponSupport.IsKingWeapon(self))
+        {
+            KingWeaponSupport.WithKingContext(self, () =>
+            {
+                try { orig(self, s, r); } catch { }
+            });
+            return;
+        }
+
+        orig(self, s, r);
     }
 
     private static void Hook_Weapon_fixedUpdate(Hook_Weapon.orig_fixedUpdate orig, Weapon self)

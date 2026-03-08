@@ -16,6 +16,7 @@ namespace DeadCellsMultiplayerMod.Ghost
         private Weapon weapon = null!;
         private InventItem weaponItem = null!;
         private int pendingAttacks;
+        private int pendingInterrupts;
         private int pendingSlot = -1;
         private long _shieldLastPulseTicks;
         private bool _shieldActive;
@@ -53,15 +54,23 @@ namespace DeadCellsMultiplayerMod.Ghost
                 _shieldActive = false;
                 _shieldLastPulseTicks = 0;
                 _shieldIgnorePulsesUntilTicks = 0;
+                pendingInterrupts = 0;
                 ClearShieldAffects();
             }
 
             var game = dc.pr.Game.Class.ME;
             if(game != null) weapon.cd.update(game.tmod);
+            var now = Stopwatch.GetTimestamp();
 
             if(weapon is BaseShield)
             {
-                var now = Stopwatch.GetTimestamp();
+                if(pendingInterrupts > 0)
+                {
+                    pendingInterrupts = 0;
+                    pendingAttacks = 0;
+                    if(_shieldActive || weapon.isCharging())
+                        ReleaseShield(now);
+                }
 
                 if(pendingAttacks > 0)
                 {
@@ -99,20 +108,7 @@ namespace DeadCellsMultiplayerMod.Ghost
                     var releaseAfter = (long)(Stopwatch.Frequency * 0.22);
                     if(_shieldLastPulseTicks != 0 && sincePulse > releaseAfter)
                     {
-                        if(weapon is BaseShield shieldToRelease)
-                        {
-                            try { shieldToRelease.tryToCancel(false); } catch { }
-                            try { shieldToRelease.onShieldReleased(); } catch { }
-                        }
-
-                        try { weapon.interrupt(); } catch { }
-                        try { weapon.fixedUpdate(); } catch { }
-                        try { weapon.postUpdate(); } catch { }
-                        _shieldActive = false;
-                        _shieldLastPulseTicks = 0;
-                        _shieldIgnorePulsesUntilTicks = now + (long)(Stopwatch.Frequency * 0.25);
-                        ClearShieldAffects();
-                        try { king.spr?._animManager?.play("idle".AsHaxeString(), null, null)?.loop(null); } catch { }
+                        ReleaseShield(now);
                     }
                 }
 
@@ -145,6 +141,17 @@ namespace DeadCellsMultiplayerMod.Ghost
                     weapon.postUpdate();
                 }
             }
+
+            if(pendingInterrupts > 0)
+            {
+                pendingInterrupts = 0;
+                if(!weapon.destroyed && weapon.isCharging())
+                {
+                    try { weapon.interrupt(); } catch { }
+                    try { weapon.fixedUpdate(); } catch { }
+                    try { weapon.postUpdate(); } catch { }
+                }
+            }
         }
 
         public void queueAttack(int slot = -1)
@@ -152,6 +159,13 @@ namespace DeadCellsMultiplayerMod.Ghost
             if(slot >= 0) pendingSlot = slot;
             if(pendingAttacks < 3)
                 pendingAttacks++;
+        }
+
+        public void queueInterrupt(int slot = -1)
+        {
+            if(slot >= 0) pendingSlot = slot;
+            if(pendingInterrupts < 3)
+                pendingInterrupts++;
         }
 
         private bool NeedsWeaponRebuild(InventItem item)
@@ -191,6 +205,24 @@ namespace DeadCellsMultiplayerMod.Ghost
             try { king.removeAllAffects(96); } catch { }
             try { king.removeAllAffects(98); } catch { }
             try { king.removeAllAffects(99); } catch { }
+        }
+
+        private void ReleaseShield(long now)
+        {
+            if(weapon is BaseShield shieldToRelease)
+            {
+                try { shieldToRelease.tryToCancel(false); } catch { }
+                try { shieldToRelease.onShieldReleased(); } catch { }
+            }
+
+            try { weapon.interrupt(); } catch { }
+            try { weapon.fixedUpdate(); } catch { }
+            try { weapon.postUpdate(); } catch { }
+            _shieldActive = false;
+            _shieldLastPulseTicks = 0;
+            _shieldIgnorePulsesUntilTicks = now + (long)(Stopwatch.Frequency * 0.25);
+            ClearShieldAffects();
+            try { king.spr?._animManager?.play("idle".AsHaxeString(), null, null)?.loop(null); } catch { }
         }
 
         private InventItem? GetWeaponItem(int slot)

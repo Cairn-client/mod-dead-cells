@@ -11,6 +11,7 @@ using Serilog;
 using Serilog.Core;
 
 public enum NetRole { None, Host, Client }
+public enum RemoteAttackAction { Attack, Interrupt }
 
 public sealed class NetNode : IDisposable
 {
@@ -157,14 +158,16 @@ public sealed class NetNode : IDisposable
         public readonly int Slot;
         public readonly int PermanentId;
         public readonly int? Ammo;
+        public readonly RemoteAttackAction Action;
 
-        public RemoteAttack(int id, string? kind, int slot, int permanentId, int? ammo)
+        public RemoteAttack(int id, string? kind, int slot, int permanentId, int? ammo, RemoteAttackAction action)
         {
             Id = id;
             Kind = kind;
             Slot = slot;
             PermanentId = permanentId;
             Ammo = ammo;
+            Action = action;
         }
     }
 
@@ -1261,7 +1264,7 @@ public sealed class NetNode : IDisposable
         if (line.StartsWith("ATK|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line[(line.IndexOf('|') + 1)..];
-            ParseWeaponPayload(payload, out var parsedId, out var kind, out var slot, out var permanentId, out var ammo);
+            ParseAttackPayload(payload, out var parsedId, out var kind, out var slot, out var permanentId, out var ammo, out var action);
             var effectiveId = parsedId ?? senderId;
             if (forceSenderId)
                 effectiveId = senderId;
@@ -1270,7 +1273,7 @@ public sealed class NetNode : IDisposable
                 lock (_sync)
                 {
                     var state = GetOrCreateRemoteLocked(effectiveId.Value);
-                    _pendingAttacks.Add(new RemoteAttack(effectiveId.Value, kind, slot, permanentId, ammo));
+                    _pendingAttacks.Add(new RemoteAttack(effectiveId.Value, kind, slot, permanentId, ammo, action));
                     state.HasRemote = true;
                     _hasRemote = true;
                     if (_primaryRemoteId == 0)
@@ -1278,7 +1281,7 @@ public sealed class NetNode : IDisposable
                 }
 
                 if (_role == NetRole.Host && senderId.HasValue)
-                    forwardLine = BuildWeaponLine("ATK", effectiveId.Value, kind, slot, permanentId, ammo);
+                    forwardLine = BuildAttackLine(effectiveId.Value, kind, slot, permanentId, ammo, action);
             }
             return true;
         }
@@ -1723,6 +1726,57 @@ public sealed class NetNode : IDisposable
         if (parts.Length > startIndex + 3 &&
             int.TryParse(parts[startIndex + 3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedAmmo))
             ammo = parsedAmmo;
+    }
+
+    private static void ParseAttackPayload(
+        string payload,
+        out int? parsedId,
+        out string kind,
+        out int slot,
+        out int permanentId,
+        out int? ammo,
+        out RemoteAttackAction action)
+    {
+        ParseWeaponPayload(payload, out parsedId, out kind, out slot, out permanentId, out ammo);
+        action = RemoteAttackAction.Attack;
+
+        var parts = payload.Split('|');
+        var startIndex = 0;
+        if (parts.Length >= 2 &&
+            int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+        {
+            startIndex = 1;
+        }
+
+        var firstOptionalIndex = startIndex + 3;
+        var actionIndex = -1;
+        if (parts.Length > firstOptionalIndex)
+        {
+            if (int.TryParse(parts[firstOptionalIndex], NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+                actionIndex = firstOptionalIndex + 1;
+            else
+                actionIndex = firstOptionalIndex;
+        }
+
+        if (actionIndex >= 0 && parts.Length > actionIndex)
+            action = ParseAttackActionToken(parts[actionIndex]);
+    }
+
+    private static RemoteAttackAction ParseAttackActionToken(string? rawAction)
+    {
+        if (string.IsNullOrWhiteSpace(rawAction))
+            return RemoteAttackAction.Attack;
+
+        var action = rawAction.Trim();
+        if (action.Equals("INT", StringComparison.OrdinalIgnoreCase) ||
+            action.Equals("INTERRUPT", StringComparison.OrdinalIgnoreCase) ||
+            action.Equals("I", StringComparison.OrdinalIgnoreCase) ||
+            action.Equals("1", StringComparison.OrdinalIgnoreCase))
+        {
+            return RemoteAttackAction.Interrupt;
+        }
+
+        return RemoteAttackAction.Attack;
     }
 
     private static void ParseHpPayload(string payload, out int? parsedId, out int life, out int maxLife, out int lif, out int bonusLife, out int recover)
@@ -2175,6 +2229,19 @@ public sealed class NetNode : IDisposable
         if (ammo.HasValue)
             return $"{tag}|{id}|{kind}|{slot}|{permanentId}|{ammo.Value}\n";
         return $"{tag}|{id}|{kind}|{slot}|{permanentId}\n";
+    }
+
+    private static string BuildAttackLine(int id, string kind, int slot, int permanentId, int? ammo, RemoteAttackAction action)
+    {
+        var actionToken = AttackActionToToken(action);
+        if (ammo.HasValue)
+            return $"ATK|{id}|{kind}|{slot}|{permanentId}|{ammo.Value}|{actionToken}\n";
+        return $"ATK|{id}|{kind}|{slot}|{permanentId}|{actionToken}\n";
+    }
+
+    private static string AttackActionToToken(RemoteAttackAction action)
+    {
+        return action == RemoteAttackAction.Interrupt ? "INT" : "ATK";
     }
 
     private static string BuildHpLine(int id, int life, int maxLife, int lif, int bonusLife, int recover)
@@ -2758,7 +2825,7 @@ public sealed class NetNode : IDisposable
             SendRaw($"INV|{idPart}{safe}|{slot}|{permanentId}");
     }
 
-    public void SendAttack(string kind, int slot, int permanentId, int? ammo = null)
+    public void SendAttack(string kind, int slot, int permanentId, int? ammo = null, RemoteAttackAction action = RemoteAttackAction.Attack)
     {
         if (!HasAnyConnection())
         {
@@ -2769,10 +2836,11 @@ public sealed class NetNode : IDisposable
         if (safe.Length == 0) return;
 
         var idPart = ID > 0 ? $"{ID}|" : string.Empty;
+        var actionToken = AttackActionToToken(action);
         if (ammo.HasValue)
-            SendRaw($"ATK|{idPart}{safe}|{slot}|{permanentId}|{ammo.Value}");
+            SendRaw($"ATK|{idPart}{safe}|{slot}|{permanentId}|{ammo.Value}|{actionToken}");
         else
-            SendRaw($"ATK|{idPart}{safe}|{slot}|{permanentId}");
+            SendRaw($"ATK|{idPart}{safe}|{slot}|{permanentId}|{actionToken}");
     }
 
     public void SendHeroSkin(string skin)

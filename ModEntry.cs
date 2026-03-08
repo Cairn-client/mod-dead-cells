@@ -1562,7 +1562,10 @@ namespace DeadCellsMultiplayerMod
 
                 var client = clients[index];
                 if (client?.kingWeaponsManager == null) continue;
-                client.kingWeaponsManager.queueAttack(attack.Slot);
+                if (attack.Action == RemoteAttackAction.Interrupt)
+                    client.kingWeaponsManager.queueInterrupt(attack.Slot);
+                else
+                    client.kingWeaponsManager.queueAttack(attack.Slot);
             }
         }
 
