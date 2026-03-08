@@ -432,6 +432,8 @@ public sealed class NetNode : IDisposable
     private int? _cachedHostSerializerUid;
     private string? _cachedHostCountersPayload;
     private string? _cachedHostBlueprintsPayload;
+    private string? _cachedHostHeroSkin;
+    private string? _cachedHostHeroHeadSkin;
     private string? _cachedHostLevelGraphPayload;
 
     public bool HasRemote
@@ -551,6 +553,8 @@ public sealed class NetNode : IDisposable
                     int? cachedSerializerUid;
                     string? cachedCountersPayload;
                     string? cachedBlueprintsPayload;
+                    string? cachedHeroSkin;
+                    string? cachedHeroHeadSkin;
                     string? cachedLevelGraphPayload;
                     lock (_hostCacheSync)
                     {
@@ -560,6 +564,8 @@ public sealed class NetNode : IDisposable
                         cachedSerializerUid = _cachedHostSerializerUid;
                         cachedCountersPayload = _cachedHostCountersPayload;
                         cachedBlueprintsPayload = _cachedHostBlueprintsPayload;
+                        cachedHeroSkin = _cachedHostHeroSkin;
+                        cachedHeroHeadSkin = _cachedHostHeroHeadSkin;
                         cachedLevelGraphPayload = _cachedHostLevelGraphPayload;
                     }
 
@@ -577,6 +583,12 @@ public sealed class NetNode : IDisposable
 
                     if (cachedBlueprintsPayload != null)
                         await SendLineToClientSafe(connection, $"BLUEPRINTS|{cachedBlueprintsPayload}\n").ConfigureAwait(false);
+
+                    if (!string.IsNullOrWhiteSpace(cachedHeroSkin))
+                        await SendLineToClientSafe(connection, BuildTaggedLine("SKIN", 1, cachedHeroSkin)).ConfigureAwait(false);
+
+                    if (!string.IsNullOrWhiteSpace(cachedHeroHeadSkin))
+                        await SendLineToClientSafe(connection, BuildTaggedLine("HEAD", 1, cachedHeroHeadSkin)).ConfigureAwait(false);
 
                     if (cachedLevelGraphPayload != null)
                         await SendLineToClientSafe(connection, $"LGRAPH|{cachedLevelGraphPayload}\n").ConfigureAwait(false);
@@ -2409,6 +2421,18 @@ public sealed class NetNode : IDisposable
                 continue;
             var line = BuildTaggedLine("USER", state.Id, username);
             await SendLineToClientSafe(connection, line).ConfigureAwait(false);
+
+            if (!string.IsNullOrWhiteSpace(state.Skin))
+            {
+                var skinLine = BuildTaggedLine("SKIN", state.Id, state.Skin);
+                await SendLineToClientSafe(connection, skinLine).ConfigureAwait(false);
+            }
+
+            if (!string.IsNullOrWhiteSpace(state.Head))
+            {
+                var headLine = BuildTaggedLine("HEAD", state.Id, state.Head);
+                await SendLineToClientSafe(connection, headLine).ConfigureAwait(false);
+            }
         }
     }
 
@@ -2753,15 +2777,23 @@ public sealed class NetNode : IDisposable
 
     public void SendHeroSkin(string skin)
     {
+        var safe = (skin ?? "PrisonerDefault").Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
+        if (string.IsNullOrWhiteSpace(safe))
+            safe = "PrisonerDefault";
+
+        if (_role == NetRole.Host)
+        {
+            lock (_hostCacheSync)
+            {
+                _cachedHostHeroSkin = safe;
+            }
+        }
+
         if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending hero skin: no connected client");
             return;
         }
-
-        var safe = (skin ?? "PrisonerDefault").Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
-        if (string.IsNullOrWhiteSpace(safe))
-            safe = "PrisonerDefault";
 
         var idPart = ID > 0 ? $"{ID}|" : string.Empty;
         SendRaw("SKIN|" + idPart + safe);
@@ -2770,15 +2802,23 @@ public sealed class NetNode : IDisposable
 
     public void SendHeroHeadSkin(string skin)
     {
+        var safe = (skin ?? "PrisonerDefault").Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
+        if (string.IsNullOrWhiteSpace(safe))
+            safe = "BaseFlame";
+
+        if (_role == NetRole.Host)
+        {
+            lock (_hostCacheSync)
+            {
+                _cachedHostHeroHeadSkin = safe;
+            }
+        }
+
         if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending hero skin: no connected client");
             return;
         }
-
-        var safe = (skin ?? "PrisonerDefault").Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
-        if (string.IsNullOrWhiteSpace(safe))
-            safe = "BaseFlame";
 
         var idPart = ID > 0 ? $"{ID}|" : string.Empty;
         SendRaw("HEAD|" + idPart + safe);
@@ -3355,6 +3395,8 @@ public sealed class NetNode : IDisposable
             _cachedHostSerializerUid = null;
             _cachedHostCountersPayload = null;
             _cachedHostBlueprintsPayload = null;
+            _cachedHostHeroSkin = null;
+            _cachedHostHeroHeadSkin = null;
             _cachedHostLevelGraphPayload = null;
         }
         lock (_sync)

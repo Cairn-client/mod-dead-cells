@@ -42,6 +42,21 @@ namespace DeadCellsMultiplayerMod.KingHead
             king = _kingSkin;
             lvl = level;
             _log = log;
+            TryBindHeroField(_me);
+        }
+
+        private void TryBindHeroField(Hero? heroRef)
+        {
+            if (heroRef == null)
+                return;
+
+            try
+            {
+                ((dynamic)this).hero = heroRef;
+            }
+            catch
+            {
+            }
         }
 
         object IHxbitSerializable<object>.GetData()
@@ -74,8 +89,12 @@ namespace DeadCellsMultiplayerMod.KingHead
 
         public override void init(Level parent, dc.h2d.Object fromUI, Ref<bool> fromUI1)
         {
+            if (me == null)
+                me = ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+            TryBindHeroField(me);
+
             var headSprite = king?.spr;
-            var remoteHeadSkin = ModEntry.Instance!.remoteHeadSkin;
+            var remoteHeadSkin = ModEntry.Instance?.remoteHeadSkin;
             if (remoteHeadSkin == null) remoteHeadSkin = "BaseFlame";
             for(int i=0; i < ModEntry.customHeads.array.length; i++)
             {

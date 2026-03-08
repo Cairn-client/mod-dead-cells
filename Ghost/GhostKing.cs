@@ -23,15 +23,16 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 {
     public class GhostKing : KingSkin, IHxbitSerializable<object>
     {
+        private const string DefaultBodySkinId = "PrisonerDefault";
         public StringMap? animationTracks;
 
-        public Inventory inventory;
-        public HeroHead head;
+        public Inventory? inventory;
+        public HeroHead? head;
         public string? RemoteSkinId;
         public string? RemoteHeadSkinId;
-        public KingWeaponsManager kingWeaponsManager = null!;
+        public KingWeaponsManager? kingWeaponsManager;
 
-        ScarfManager scarf;
+        ScarfManager? scarf;
 
         public GhostKing() : base(null, 0, 0)
         {
@@ -52,25 +53,101 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 
         public override void init()
         {
-            this.inventory = ModEntry.me.inventory.clone();
-            kingWeaponsManager = new KingWeaponsManager(ModEntry.me, this);
-            kingWeaponsManager.init();
+            EnsureRuntimeDependencies();
             base.init();
+        }
+
+        private static Hero? ResolveLocalHero()
+        {
+            var hero = ModEntry.me;
+            if (hero != null)
+                return hero;
+
+            try
+            {
+                return ModCore.Modules.Game.Instance?.HeroInstance;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void EnsureRuntimeDependencies()
+        {
+            var localHero = ResolveLocalHero();
+            if (localHero?.inventory != null && inventory == null)
+            {
+                try
+                {
+                    inventory = localHero.inventory.clone();
+                }
+                catch
+                {
+                    inventory = localHero.inventory;
+                }
+            }
+
+            if (kingWeaponsManager == null && localHero != null)
+            {
+                try
+                {
+                    kingWeaponsManager = new KingWeaponsManager(localHero, this);
+                    kingWeaponsManager.init();
+                }
+                catch
+                {
+                    kingWeaponsManager = null;
+                }
+            }
+        }
+
+        private static string NormalizeBodySkinId(string? skin)
+        {
+            return string.IsNullOrWhiteSpace(skin)
+                ? DefaultBodySkinId
+                : skin.Replace("|", "/").Trim();
+        }
+
+        private static virtual_colorMap_consoleCmdId_glowData_group_head_incompatibleHeads_item_model_onlyDefaultHead_scarfBlendMode_scarfs_? ResolveBodySkinInfo(string? skin, out string resolvedSkinId)
+        {
+            resolvedSkinId = NormalizeBodySkinId(skin);
+
+            virtual_colorMap_consoleCmdId_glowData_group_head_incompatibleHeads_item_model_onlyDefaultHead_scarfBlendMode_scarfs_? info = null;
+            try { info = Cdb.Class.getSkinInfo(resolvedSkinId.AsHaxeString()); } catch { }
+            if (info != null)
+                return info;
+
+            resolvedSkinId = DefaultBodySkinId;
+            try { return Cdb.Class.getSkinInfo(DefaultBodySkinId.AsHaxeString()); } catch { return null; }
         }
 
 
         public void initScarf()
         {
-            var remoteSkin = RemoteSkinId ?? ModEntry.Instance?.remoteSkin;
-            if(remoteSkin == null) remoteSkin = "PrisonerDefault";
-            var skinInfo = Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString());
-            if(skinInfo == null) return;
+            var skinInfo = ResolveBodySkinInfo(RemoteSkinId ?? ModEntry.Instance?.remoteSkin, out var resolvedSkinId);
+            if (skinInfo == null)
+            {
+                DisposeScarf();
+                return;
+            }
+            RemoteSkinId = resolvedSkinId;
 
             if(scarf != null)
                 scarf.dispose();
 
             var item = skinInfo.item;
+            if (item == null)
+            {
+                DisposeScarf();
+                return;
+            }
             var newScarf = ScarfManager.Class.create(this, item);
+            if (newScarf == null)
+            {
+                DisposeScarf();
+                return;
+            }
             newScarf.owner = this;
             scarf = newScarf;
         }
@@ -100,19 +177,23 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         public override void initGfx()
         {
             base.initGfx();
-            var remoteSkin = RemoteSkinId ?? ModEntry.Instance?.remoteSkin;
-            if (remoteSkin == null) remoteSkin = "PrisonerDefault";
-            virtual_colorMap_consoleCmdId_glowData_group_head_incompatibleHeads_item_model_onlyDefaultHead_scarfBlendMode_scarfs_ skinInfo =
-                Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString());
+            var skinInfo = ResolveBodySkinInfo(RemoteSkinId ?? ModEntry.Instance?.remoteSkin, out var resolvedSkinId);
+            if (skinInfo == null)
+                return;
+
+            RemoteSkinId = resolvedSkinId;
             animationTracks = ResolveAnimationTracks(skinInfo);
             dc.String group = "idle".AsHaxeString();
             SpriteLib heroLib = Assets.Class.getHeroLib(skinInfo);
+            if (heroLib == null)
+                return;
+
             Texture normalMapFromGroup = heroLib.getNormalMapFromGroup(group);
             int? dp_ROOM_MAIN_HERO = Const.Class.DP_ROOM_MAIN_HERO;
             this.initSprite(heroLib, group, 0.5, 0.5, dp_ROOM_MAIN_HERO, true, null, normalMapFromGroup);
             this.initColorMap(skinInfo);
 
-            ArrayObj glowData = CdbTypeConverter.Class.getGlowData(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
+            ArrayObj glowData = CdbTypeConverter.Class.getGlowData(skinInfo);
             if (glowData != null && glowData.length > 0)
             {
                 GlowKey glowKey = (GlowKey)this.spr.getShader(GlowKey.Class);
@@ -143,17 +224,30 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 
         public void ApplyRemoteSkin(string? skin)
         {
-            var cleaned = string.IsNullOrWhiteSpace(skin)
-                ? "PrisonerDefault"
-                : skin.Replace("|", "/").Trim();
+            var cleaned = NormalizeBodySkinId(skin);
             if (string.Equals(RemoteSkinId, cleaned, StringComparison.Ordinal))
                 return;
 
             RemoteSkinId = cleaned;
             if (this.spr != null)
             {
-                this.disposeGfx();
-                this.initGfx();
+                try
+                {
+                    this.disposeGfx();
+                    this.initGfx();
+                }
+                catch
+                {
+                    RemoteSkinId = DefaultBodySkinId;
+                    try
+                    {
+                        this.disposeGfx();
+                        this.initGfx();
+                    }
+                    catch
+                    {
+                    }
+                }
             }
         }
 
@@ -183,6 +277,7 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 
         public override void fixedUpdate()
         {
+            EnsureRuntimeDependencies();
             base.fixedUpdate();
             scarf?.push(0.0, Ref<bool>.Null);
         }
