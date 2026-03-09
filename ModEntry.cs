@@ -46,6 +46,7 @@ using DeadCellsMultiplayerMod.KingHead;
 using dc.steam.ugc;
 using DeadCellsMultiplayerMod.Mobs.Levelinit;
 using dc.en.inter.door;
+using Steamworks;
 
 
 namespace DeadCellsMultiplayerMod
@@ -61,6 +62,7 @@ namespace DeadCellsMultiplayerMod
         public static ModEntry? Instance { get; private set; }
         private bool _ready;
         private static bool s_hooksInstalled;
+        private static IDisposable? s_steamOverlayJoinCallback;
         private const int MaxClientSlots = 3;
 
         private NetRole _netRole = NetRole.None;
@@ -304,6 +306,40 @@ namespace DeadCellsMultiplayerMod
         {
             _ready = true;
             GameMenu.SetRole(NetRole.None);
+            TryRegisterSteamOverlayJoinCallback();
+        }
+
+        private static void TryRegisterSteamOverlayJoinCallback()
+        {
+            if (s_steamOverlayJoinCallback != null)
+                return;
+            try
+            {
+                s_steamOverlayJoinCallback = Callback<GameLobbyJoinRequested_t>.Create(OnGameLobbyJoinRequested);
+            }
+            catch (Exception ex)
+            {
+                Instance?.Logger.Warning("[NetMod] Steam overlay join callback not registered: {Error}", ex.Message);
+            }
+        }
+
+        private static void OnGameLobbyJoinRequested(GameLobbyJoinRequested_t data)
+        {
+            var lobbyId = data.m_steamIDLobby.m_SteamID;
+            if (lobbyId == 0UL)
+                return;
+            GameMenu.EnqueueMainThread(() => GameMenu.HandleSteamOverlayJoinRequest(lobbyId));
+        }
+
+        private static void TryRunSteamCallbacks()
+        {
+            try
+            {
+                SteamAPI.RunCallbacks();
+            }
+            catch
+            {
+            }
         }
 
         public override void Initialize()
@@ -851,6 +887,7 @@ namespace DeadCellsMultiplayerMod
         public void OnFrameUpdate(double dt)
         {
             if (!_ready) return;
+            TryRunSteamCallbacks();
             GameMenu.TickMenu(dt);
         }
 

@@ -1050,6 +1050,70 @@ namespace DeadCellsMultiplayerMod
             screen.ShouldAutoHideConnectionUI(true);
         }
 
+        internal static void HandleSteamOverlayJoinRequest(ulong lobbyId)
+        {
+            var screen = GetTitleScreen();
+            if (screen == null)
+            {
+                _log?.Information("[NetMod][Steam] Overlay join request ignored: not at main menu (lobbyId={LobbyId})", lobbyId);
+                return;
+            }
+
+            _menuSelection = NetRole.Client;
+            _menuTransport = ConnectionTransport.Steam;
+            _steamLobbyActive = false;
+            _steamLobbyId = 0;
+            _steamLobbyCode = string.Empty;
+            _steamHostSteamId = 0UL;
+            ConnectionUI.NotifyConnectionsChanged();
+            ApplySteamPersonaUsername();
+
+            if (!SteamConnect.TryResolveJoinEndpointFromLobbyId(lobbyId, out var join))
+            {
+                _log?.Warning("[NetMod][SteamWorkerError] {Error}", join.Error);
+                ShowConnectionErrorPopup(
+                    screen,
+                    GetText.Instance.GetString("Steam join failed"),
+                    GetText.Instance.GetString("Steam join failed. Check console logs."),
+                    () => ShowJoinTransportMenu(screen));
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(join.PersonaName))
+                ApplySteamPersonaUsername(join.PersonaName);
+
+            if (join.HostSteamId == 0UL && join.Endpoint == null)
+            {
+                _log?.Warning("[NetMod][Steam] Join failed: lobby endpoint and host Steam id are missing");
+                ShowConnectionErrorPopup(
+                    screen,
+                    GetText.Instance.GetString("Steam join failed"),
+                    GetText.Instance.GetString("Steam lobby endpoint is invalid. Check console logs."),
+                    () => ShowJoinTransportMenu(screen));
+                return;
+            }
+
+            if (join.Endpoint != null)
+            {
+                _mpIp = join.Endpoint.Address.ToString();
+                _mpPort = join.Endpoint.Port;
+                SaveConfig();
+            }
+            else if (join.HostSteamId != 0UL)
+            {
+                _log?.Information("[NetMod][Steam] Overlay join: P2P-only (hostSteamId={HostSteamId})", join.HostSteamId);
+            }
+            _steamLobbyId = join.LobbyId;
+            _steamLobbyCode = SteamConnect.BuildLobbyCodeFromLobbyId(_steamLobbyId);
+            _steamHostSteamId = join.HostSteamId;
+            ConnectionUI.NotifyConnectionsChanged();
+            _log?.Information("[NetMod][Steam] Overlay join: id={LobbyId} code={LobbyCode} hostSteamId={HostSteamId}", _steamLobbyId, _steamLobbyCode, _steamHostSteamId);
+
+            StartNetwork(NetRole.Client, screen);
+            ShowClientWaitingMenu(screen);
+            screen.ShouldAutoHideConnectionUI(true);
+        }
+
         private static void ApplySteamPersonaUsername(string? preferredPersona = null)
         {
             var candidate = string.IsNullOrWhiteSpace(preferredPersona)

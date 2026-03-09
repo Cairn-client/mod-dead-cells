@@ -233,6 +233,81 @@ namespace DeadCellsMultiplayerMod
             return true;
         }
 
+        internal static bool TryResolveJoinEndpointFromLobbyId(ulong lobbyId, out JoinLobbyResult result)
+        {
+            result = new JoinLobbyResult
+            {
+                Success = false,
+                Error = "Steam lobby id is invalid"
+            };
+
+            if (lobbyId == 0UL)
+                return false;
+
+            var request = new WorkerRequest
+            {
+                Mode = "join",
+                LobbyId = lobbyId,
+                LobbyCode = string.Empty
+            };
+
+            var workerSucceeded = TryRunWorker(request, out var response);
+            if (!workerSucceeded && IsTransientJoinWorkerError(response.Error))
+            {
+                for (var attempt = 0; attempt < JoinWorkerRetryCount; attempt++)
+                {
+                    Thread.Sleep(JoinWorkerRetryDelayMs);
+                    workerSucceeded = TryRunWorker(request, out response);
+                    if (workerSucceeded || !IsTransientJoinWorkerError(response.Error))
+                        break;
+                }
+            }
+
+            if (!workerSucceeded)
+            {
+                result = new JoinLobbyResult
+                {
+                    Success = false,
+                    LobbyId = lobbyId,
+                    HostSteamId = response.HostSteamId,
+                    PersonaName = response.PersonaName ?? string.Empty,
+                    Error = string.IsNullOrWhiteSpace(response.Error)
+                        ? "Steam worker process failed"
+                        : response.Error
+                };
+                return false;
+            }
+
+            IPEndPoint? endpoint = null;
+            if (IPAddress.TryParse(response.HostIp, out var hostIp))
+                endpoint = new IPEndPoint(hostIp, NormalizePort(response.HostPort));
+
+            if (endpoint == null && response.HostSteamId == 0UL)
+            {
+                result = new JoinLobbyResult
+                {
+                    Success = false,
+                    LobbyId = response.LobbyId,
+                    HostSteamId = response.HostSteamId,
+                    PersonaName = response.PersonaName ?? string.Empty,
+                    Error = "Lobby host IP is invalid"
+                };
+                return false;
+            }
+
+            result = new JoinLobbyResult
+            {
+                Success = true,
+                LobbyId = response.LobbyId,
+                HostSteamId = response.HostSteamId,
+                PersonaName = response.PersonaName ?? string.Empty,
+                Endpoint = endpoint,
+                Error = string.Empty
+            };
+
+            return true;
+        }
+
         private static bool IsTransientJoinWorkerError(string? error)
         {
             if (string.IsNullOrWhiteSpace(error))
