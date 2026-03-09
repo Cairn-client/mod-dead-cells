@@ -8,6 +8,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using dc.pr;
 using dc.ui;
 using HaxeProxy.Runtime;
@@ -1003,51 +1004,12 @@ namespace DeadCellsMultiplayerMod
             ConnectionUI.NotifyConnectionsChanged();
             ApplySteamPersonaUsername();
 
-            if (!SteamConnect.TryResolveJoinEndpointFromClipboard(out var join))
+            ShowSteamConnectingMenu(screen);
+            _ = Task.Run(() =>
             {
-                _log?.Warning("[NetMod][SteamWorkerError] {Error}", join.Error);
-                ShowConnectionErrorPopup(
-                    screen,
-                    GetText.Instance.GetString("Steam join failed"),
-                    GetText.Instance.GetString("Steam join failed. Check console logs."),
-                    () => ShowJoinTransportMenu(screen));
-                return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(join.PersonaName))
-                ApplySteamPersonaUsername(join.PersonaName);
-
-            var endpoint = join.Endpoint;
-            if (join.HostSteamId == 0UL && endpoint == null)
-            {
-                _log?.Warning("[NetMod][Steam] Join failed: lobby endpoint and host Steam id are missing");
-                ShowConnectionErrorPopup(
-                    screen,
-                    GetText.Instance.GetString("Steam join failed"),
-                    GetText.Instance.GetString("Steam lobby endpoint is invalid. Check console logs."),
-                    () => ShowJoinTransportMenu(screen));
-                return;
-            }
-
-            if (endpoint != null)
-            {
-                _mpIp = endpoint.Address.ToString();
-                _mpPort = endpoint.Port;
-                SaveConfig();
-            }
-            else if (join.HostSteamId != 0UL)
-            {
-                _log?.Information("[NetMod][Steam] Using P2P-only join (no direct IP, hostSteamId={HostSteamId})", join.HostSteamId);
-            }
-            _steamLobbyId = join.LobbyId;
-            _steamLobbyCode = SteamConnect.BuildLobbyCodeFromLobbyId(_steamLobbyId);
-            _steamHostSteamId = join.HostSteamId;
-            ConnectionUI.NotifyConnectionsChanged();
-            _log?.Information("[NetMod][Steam] Joined lobby: id={LobbyId} code={LobbyCode} hostSteamId={HostSteamId}", _steamLobbyId, _steamLobbyCode, _steamHostSteamId);
-
-            StartNetwork(NetRole.Client, screen);
-            ShowClientWaitingMenu(screen);
-            screen.ShouldAutoHideConnectionUI(true);
+                var ok = SteamConnect.TryResolveJoinEndpointFromClipboard(out var join);
+                EnqueueMainThread(() => ApplySteamJoinResult(screen, ok, join, fromOverlay: false));
+            });
         }
 
         internal static void HandleSteamOverlayJoinRequest(ulong lobbyId)
@@ -1068,7 +1030,57 @@ namespace DeadCellsMultiplayerMod
             ConnectionUI.NotifyConnectionsChanged();
             ApplySteamPersonaUsername();
 
-            if (!SteamConnect.TryResolveJoinEndpointFromLobbyId(lobbyId, out var join))
+            ShowSteamConnectingMenu(screen);
+            _ = Task.Run(() =>
+            {
+                var ok = SteamConnect.TryResolveJoinEndpointFromLobbyId(lobbyId, out var join);
+                EnqueueMainThread(() => ApplySteamJoinResult(screen, ok, join, fromOverlay: true));
+            });
+        }
+
+        private static void ApplySteamPersonaUsername(string? preferredPersona = null)
+        {
+            var candidate = string.IsNullOrWhiteSpace(preferredPersona)
+                ? GetDefaultUsername()
+                : preferredPersona;
+
+            var cleaned = CleanUsername(candidate);
+            if (string.IsNullOrWhiteSpace(cleaned))
+                return;
+
+            _username = cleaned;
+            SaveConfig();
+            SendUsernameToRemote();
+        }
+
+        private static void ShowSteamConnectingMenu(TitleScreen screen)
+        {
+            var prevSuppress = _suppressAutoButton;
+            _suppressAutoButton = true;
+            var prevIsMain = GetIsMainMenu(screen);
+            try
+            {
+                SetIsMainMenu(screen, false);
+                screen.clearMenu();
+                AddInfoLine(screen, GetText.Instance.GetString("Connecting to Steam lobby..."), infoColor: 0xE0E0E0);
+                RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
+                _inClientWaitingMenu = false;
+                _inHostStatusMenu = false;
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod] Failed to show Steam connecting menu: {Message}", ex.Message);
+            }
+            finally
+            {
+                SetIsMainMenu(screen, prevIsMain);
+                _suppressAutoButton = prevSuppress;
+            }
+        }
+
+        private static void ApplySteamJoinResult(TitleScreen screen, bool ok, SteamConnect.JoinLobbyResult join, bool fromOverlay)
+        {
+            if (!ok)
             {
                 _log?.Warning("[NetMod][SteamWorkerError] {Error}", join.Error);
                 ShowConnectionErrorPopup(
@@ -1101,32 +1113,17 @@ namespace DeadCellsMultiplayerMod
             }
             else if (join.HostSteamId != 0UL)
             {
-                _log?.Information("[NetMod][Steam] Overlay join: P2P-only (hostSteamId={HostSteamId})", join.HostSteamId);
+                _log?.Information("[NetMod][Steam] {Source} join: P2P-only (hostSteamId={HostSteamId})", fromOverlay ? "Overlay" : "Clipboard", join.HostSteamId);
             }
             _steamLobbyId = join.LobbyId;
             _steamLobbyCode = SteamConnect.BuildLobbyCodeFromLobbyId(_steamLobbyId);
             _steamHostSteamId = join.HostSteamId;
             ConnectionUI.NotifyConnectionsChanged();
-            _log?.Information("[NetMod][Steam] Overlay join: id={LobbyId} code={LobbyCode} hostSteamId={HostSteamId}", _steamLobbyId, _steamLobbyCode, _steamHostSteamId);
+            _log?.Information("[NetMod][Steam] Joined lobby: id={LobbyId} code={LobbyCode} hostSteamId={HostSteamId}", _steamLobbyId, _steamLobbyCode, _steamHostSteamId);
 
             StartNetwork(NetRole.Client, screen);
             ShowClientWaitingMenu(screen);
             screen.ShouldAutoHideConnectionUI(true);
-        }
-
-        private static void ApplySteamPersonaUsername(string? preferredPersona = null)
-        {
-            var candidate = string.IsNullOrWhiteSpace(preferredPersona)
-                ? GetDefaultUsername()
-                : preferredPersona;
-
-            var cleaned = CleanUsername(candidate);
-            if (string.IsNullOrWhiteSpace(cleaned))
-                return;
-
-            _username = cleaned;
-            SaveConfig();
-            SendUsernameToRemote();
         }
 
         private static void ShowConnectionErrorPopup(TitleScreen screen, string title, string details, Action onOk)

@@ -1100,11 +1100,13 @@ namespace DeadCellsMultiplayerMod
             }
 
             var lobby = new CSteamID(targetLobbyId);
+            TryJoinLobbyForDataFetch(lobby);
             if (!TryReadLobbyHostData(lobby, out var hostSteamId, out var hostIp, out var hostPortRaw, out var readError))
             {
                 if (request.LobbyId != 0UL && request.LobbyId != targetLobbyId)
                 {
                     lobby = new CSteamID(request.LobbyId);
+                    TryJoinLobbyForDataFetch(lobby);
                     if (!TryReadLobbyHostData(lobby, out hostSteamId, out hostIp, out hostPortRaw, out readError))
                     {
                         return new WorkerResponse
@@ -1152,6 +1154,29 @@ namespace DeadCellsMultiplayerMod
                 HostPort = hasValidEndpoint ? NormalizePort(hostPort) : 0,
                 PersonaName = SafeGetPersonaName()
             };
+        }
+
+        private static void TryJoinLobbyForDataFetch(CSteamID lobby)
+        {
+            if (lobby.m_SteamID == 0UL)
+                return;
+            try
+            {
+                SteamMatchmaking.JoinLobby(lobby);
+                Thread.Sleep(300);
+                for (var i = 0; i < 20; i++)
+                {
+                    try
+                    {
+                        SteamAPI.RunCallbacks();
+                    }
+                    catch { }
+                    Thread.Sleep(50);
+                }
+            }
+            catch
+            {
+            }
         }
 
         private static bool TryReadLobbyHostData(

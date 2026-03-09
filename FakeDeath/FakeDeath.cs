@@ -1332,6 +1332,8 @@ namespace DeadCellsMultiplayerMod
             _localDownedY = corpseY;
             _localHeldX = _localDownedX;
             _localHeldY = _localDownedY;
+            _localDownedAnchorX = corpseX;
+            _localDownedAnchorY = corpseY;
             return true;
         }
 
