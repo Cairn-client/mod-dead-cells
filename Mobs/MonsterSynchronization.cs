@@ -217,7 +217,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             s_hooksInstalled = true;
-            entry.Logger.Information("\x1b[32m[[ModEntry.MobsSynchronization] Initializing MobsSynchronization hooks...]\x1b[0m ");
+            entry.Logger.Information("\x1b[32m[[ModEntry.MobsSynchronization] Initializing MobsSynchronization...]\x1b[0m ");
 
             Hook_Level.entitiesPostCreate += Hook_Level_entitiesPostCreate;
             Hook_Level.registerEntity += Hook_Level_registerEntity;

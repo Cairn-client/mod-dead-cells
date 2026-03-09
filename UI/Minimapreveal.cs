@@ -25,7 +25,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Minimap
 
         void IOnAdvancedModuleInitializing.OnAdvancedModuleInitializing(ModEntry entry)
         {
-            entry.Logger.Information("\x1b[32m[[ModEntry.Minimapreveal] Initializing Minimapreveal hooks...]\x1b[0m ");
+            entry.Logger.Information("\x1b[32m[[ModEntry.Minimapreveal] Initializing Minimapreveal...]\x1b[0m ");
             Hook_MiniMap.postUpdate += Hook_MiniMap_postUpdate;
             Hook_MiniMap.initContainers += Hook_MiniMap_initContainers;
         }

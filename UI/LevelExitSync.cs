@@ -82,7 +82,7 @@ public class LevelExitSync :
 
     void IOnAdvancedModuleInitializing.OnAdvancedModuleInitializing(ModEntry entry)
     {
-        entry.Logger.Information("\x1b[32m[[ModEntry.LevelExitSync] Initializing LevelExitSync hooks...]\x1b[0m ");
+        entry.Logger.Information("\x1b[32m[[ModEntry.LevelExitSync] Initializing LevelExitSync...]\x1b[0m ");
         Hook_Exit.postUpdate += Hook_Exit_postUpdate;
         Hook_Exit.onActivate += Hook_Exit_onActivate;
     }

@@ -458,6 +458,7 @@ public sealed partial class NetNode : IDisposable
     private readonly List<ExitReadyState> _pendingExitReadyStates = new();
     private readonly List<PlayerDownState> _pendingPlayerDownStates = new();
     private readonly List<PlayerReviveRequest> _pendingPlayerReviveRequests = new();
+    private readonly List<string> _pendingBossCineLevelIds = new();
     private int _primaryRemoteId;
 
     private readonly IPEndPoint _bindEp;   // host bind
@@ -1591,6 +1592,27 @@ public sealed partial class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("BOSSCINE|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["BOSSCINE|".Length..].Trim();
+            if (!string.IsNullOrWhiteSpace(payload))
+            {
+                var levelId = payload.Replace("\r", string.Empty).Replace("\n", string.Empty).Trim();
+                if (!string.IsNullOrWhiteSpace(levelId))
+                {
+                    lock (_sync)
+                    {
+                        _pendingBossCineLevelIds.Add(levelId);
+                        _hasRemote = true;
+                    }
+
+                    if (_role == NetRole.Host && senderId.HasValue)
+                        forwardLine = $"BOSSCINE|{levelId}\n";
+                }
+            }
+            return true;
+        }
+
         if (line.StartsWith("MOBATK|", StringComparison.OrdinalIgnoreCase))
         {
             if (_role == NetRole.Host)
@@ -1732,6 +1754,7 @@ public sealed partial class NetNode : IDisposable
             _pendingMobAttacks.Clear();
             _pendingMobDraws.Clear();
             _pendingExitReadyStates.Clear();
+            _pendingBossCineLevelIds.Clear();
             _pendingPlayerDownStates.Clear();
             _pendingPlayerReviveRequests.Clear();
         }
@@ -3371,6 +3394,20 @@ public sealed partial class NetNode : IDisposable
         _ = SendLineSafe(line);
     }
 
+    public void SendBossCine(string levelId)
+    {
+        if (!HasAnyConnection())
+            return;
+        if (string.IsNullOrWhiteSpace(levelId))
+            return;
+
+        var safe = levelId.Replace("\r", string.Empty).Replace("\n", string.Empty).Trim();
+        if (string.IsNullOrEmpty(safe))
+            return;
+
+        SendRaw($"BOSSCINE|{safe}");
+    }
+
     private void SendRaw(string payload)
     {
         var line = payload.EndsWith('\n') ? payload : payload + "\n";
@@ -3613,6 +3650,22 @@ public sealed partial class NetNode : IDisposable
         }
     }
 
+    public bool TryConsumeBossCineLevelIds(out List<string> levelIds)
+    {
+        lock (_sync)
+        {
+            if (_pendingBossCineLevelIds.Count == 0)
+            {
+                levelIds = new List<string>();
+                return false;
+            }
+
+            levelIds = new List<string>(_pendingBossCineLevelIds);
+            _pendingBossCineLevelIds.Clear();
+            return levelIds.Count > 0;
+        }
+    }
+
     public bool TryConsumePlayerDownStates(out List<PlayerDownState> states)
     {
         lock (_sync)
@@ -3847,6 +3900,7 @@ public sealed partial class NetNode : IDisposable
             _pendingMobAttacks.Clear();
             _pendingMobDraws.Clear();
             _pendingExitReadyStates.Clear();
+            _pendingBossCineLevelIds.Clear();
             _pendingPlayerDownStates.Clear();
             _pendingPlayerReviveRequests.Clear();
         }

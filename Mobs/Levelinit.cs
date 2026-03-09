@@ -1,4 +1,6 @@
-﻿using dc;
+using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
+using ModCore.Events;
+using dc;
 using dc.h2d;
 using dc.libs;
 using dc.level;
@@ -23,12 +25,17 @@ using Hashlink.Virtuals;
 
 namespace DeadCellsMultiplayerMod.Mobs.Levelinit;
 
-public class Levelinit : ModBase
+public class Levelinit : ModBase, IEventReceiver, IOnAdvancedModuleInitializing
 {
     public Levelinit(ModInfo info) : base(info)
     {
+        EventSystem.AddReceiver(this);
     }
 
+    void IOnAdvancedModuleInitializing.OnAdvancedModuleInitializing(ModEntry entry)
+    {
+        entry.Logger.Information("\x1b[32m[[ModEntry.Levelinit] Initializing Levelinit...]\x1b[0m ");
+    }
 
     public override void Initialize()
     {

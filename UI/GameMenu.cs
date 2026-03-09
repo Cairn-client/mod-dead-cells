@@ -157,6 +157,7 @@ namespace DeadCellsMultiplayerMod
 
         public static void Initialize(ILogger logger)
         {
+            logger.Information("\x1b[32m[[ModEntry.GameMenu] Initializing GameMenu...]\x1b[0m ");
             lock (Sync)
             {
                 _log = logger;

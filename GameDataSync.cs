@@ -1,4 +1,5 @@
-
+using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
+using ModCore.Events;
 using dc;
 using dc.haxe.ds;
 using dc.level;
@@ -20,7 +21,7 @@ using Rand = dc.libs.Rand;
 
 namespace DeadCellsMultiplayerMod
 {
-    internal partial class GameDataSync
+    internal partial class GameDataSync : IEventReceiver, IOnAdvancedModuleInitializing
     {
         static Serilog.ILogger _log;
         static public int Seed;
@@ -90,6 +91,12 @@ namespace DeadCellsMultiplayerMod
         public GameDataSync(Serilog.ILogger log)
         {
             _log = log;
+            EventSystem.AddReceiver(this);
+        }
+
+        void IOnAdvancedModuleInitializing.OnAdvancedModuleInitializing(ModEntry entry)
+        {
+            entry.Logger.Information("\x1b[32m[[ModEntry.GameDataSync] Initializing GameDataSync...]\x1b[0m ");
         }
 
 

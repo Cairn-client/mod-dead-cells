@@ -47,6 +47,8 @@ using dc.steam.ugc;
 using DeadCellsMultiplayerMod.Mobs.Levelinit;
 using dc.en.inter.door;
 using Steamworks;
+using System.Collections.Generic;
+using System.Reflection;
 
 
 namespace DeadCellsMultiplayerMod
@@ -166,6 +168,16 @@ namespace DeadCellsMultiplayerMod
         private readonly Dictionary<int, long> _pendingClientDisposeTicks = new();
         private const double ClientDisposeTransitionSeconds = 0.28;
         private const double PendingDoorMarkerHideMaxSeconds = 1.5;
+
+        private static readonly HashSet<string> BossLevelIds = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "BeholderPit", "Throne", "DeathArena", "DookuArena", "QueenArena", "Observatory",
+            "SwampHeart", "CastleAlchemy", "LighthouseTop", "LighthouseBottom", "Giant",
+            "DookuCastle", "RichterCastle", "BossRushZone"
+        };
+        private string? _lastBossCineSentLevelId;
+        private long _lastBossCineSentTick;
+        private const double BossCineSendCooldownSeconds = 2.0;
 
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
@@ -366,7 +378,7 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             s_hooksInstalled = true;
-            entry.Logger.Information("\x1b[32m[[ModEntry] Mod Initializing Hooks...]\x1b[0m ");
+            entry.Logger.Information("\x1b[32m[[ModEntry] Initializing ModEntry...]\x1b[0m ");
             Hook_Game.init += Hook_gameinit;
             Hook_Hero.wakeup += hook_hero_wakeup;
             Hook_Hero.onLevelChanged += hook_level_changed;
@@ -891,6 +903,116 @@ namespace DeadCellsMultiplayerMod
             TryRunSteamCallbacks();
             GameMenu.ProcessMainThreadQueue();
             GameMenu.TickMenu(dt);
+            DetectAndSendBossCine();
+            ApplyReceivedBossCine();
+        }
+
+        private void DetectAndSendBossCine()
+        {
+            if (_netRole == NetRole.None || _net == null || !_net.IsAlive)
+                return;
+
+            var currentLevelId = string.IsNullOrWhiteSpace(levelId) ? null : levelId.Trim();
+            if (string.IsNullOrEmpty(currentLevelId) || !BossLevelIds.Contains(currentLevelId))
+                return;
+
+            try
+            {
+                var game = dc.pr.Game.Class.ME;
+                var cine = game?.curCine;
+                if (cine == null || cine.destroyed)
+                    return;
+
+                if (cine is DeadBase || cine is RemoteDownedCorpse)
+                    return;
+
+                try
+                {
+                    if (cine is HeroDeath || cine is HeroDeathBase || cine is HeroDeathContinue ||
+                        cine is HeroDeathRespawn || cine is HeroDeathDLCP)
+                        return;
+                }
+                catch
+                {
+                    var typeName = cine.GetType().FullName ?? string.Empty;
+                    if (typeName.IndexOf("HeroDeath", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return;
+                }
+
+                var now = Stopwatch.GetTimestamp();
+                var cooldownTicks = (long)(Stopwatch.Frequency * BossCineSendCooldownSeconds);
+                if (_lastBossCineSentLevelId == currentLevelId && now - _lastBossCineSentTick < cooldownTicks)
+                    return;
+
+                _lastBossCineSentLevelId = currentLevelId;
+                _lastBossCineSentTick = now;
+                _net.SendBossCine(currentLevelId);
+            }
+            catch
+            {
+            }
+        }
+
+        private void ApplyReceivedBossCine()
+        {
+            var net = _net;
+            if (net == null || !net.TryConsumeBossCineLevelIds(out var levelIds) || levelIds.Count == 0)
+                return;
+
+            var currentLevelId = string.IsNullOrWhiteSpace(levelId) ? null : levelId.Trim();
+            if (string.IsNullOrEmpty(currentLevelId))
+                return;
+
+            foreach (var receivedLevelId in levelIds)
+            {
+                if (!string.Equals(receivedLevelId, currentLevelId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                TryTriggerBossCinematic(receivedLevelId);
+            }
+        }
+
+        private static void TryTriggerBossCinematic(string levelId)
+        {
+            try
+            {
+                var game = dc.pr.Game.Class.ME;
+                var hero = game?.hero ?? ModEntry.me;
+                var level = hero?._level;
+                if (game == null || level == null)
+                    return;
+
+                if (game.curCine != null && !game.curCine.destroyed)
+                    return;
+
+                var cm = level.cm;
+                if (cm == null)
+                    return;
+                var cmType = cm.GetType();
+                var playMethod = cmType.GetMethod("play", BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(string) }, null)
+                    ?? cmType.GetMethod("play", BindingFlags.Public | BindingFlags.Instance, null, System.Type.EmptyTypes, null)
+                    ?? cmType.GetMethod("run", BindingFlags.Public | BindingFlags.Instance, null, System.Type.EmptyTypes, null);
+
+                if (playMethod != null)
+                {
+                    if (playMethod.GetParameters().Length == 0)
+                        playMethod.Invoke(cm, null);
+                    else
+                        playMethod.Invoke(cm, new object[] { levelId });
+                    return;
+                }
+
+                var triggerMethod = cmType.GetMethod("triggerBossIntro", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic, null, System.Type.EmptyTypes, null)
+                    ?? cmType.GetMethod("startBossCine", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic, null, System.Type.EmptyTypes, null);
+
+                if (triggerMethod != null)
+                {
+                    triggerMethod.Invoke(cm, null);
+                }
+            }
+            catch
+            {
+            }
         }
 
 

@@ -526,7 +526,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         public static void Initialize(ModEntry entry)
         {
-            entry.Logger.Information("\x1b[36m[[ConnectionUI] Initializing...]\x1b[0m");
+            entry.Logger.Information("\x1b[32m[[ModEntry.ConnectionUI] Initializing ConnectionUI...]\x1b[0m ");
         }
 
 

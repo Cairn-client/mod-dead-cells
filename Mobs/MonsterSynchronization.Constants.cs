@@ -43,7 +43,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const string OldSkillChargeCompletePacketPrefix = "@oldcc:";
         private const string OldSkillExecutePacketPrefix = "@oldexec:";
         private const string NewSkillExecutePacketPrefix = "@newexec:";
-        private const bool DisableBossSyncTemporarily = true;
+        private const bool DisableBossSyncTemporarily = false;
         private const double HostQueuedOldSkillMarkerSeconds = 3.0;
         private const double ClientQueuedOldSkillMarkerSeconds = 0.4;
         private const double HostContactRetargetLockSeconds = 0.25;
