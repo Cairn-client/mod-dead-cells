@@ -16,6 +16,7 @@ using Hashlink.Virtuals;
 using ModCore.Events;
 using ModCore.Events.Interfaces.Game;
 using ModCore.Utilities;
+using Serilog;
 
 namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 {
@@ -36,6 +37,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<int, long> clientAttackUnlockUntilTick = new();
         private static readonly Dictionary<int, int> clientAttackForcedDir = new();
         private static readonly Dictionary<int, long> clientAttackForcedDirUntilTick = new();
+        private static readonly Dictionary<int, Entity?> clientCachedAttackTargetByLocalIndex = new();
         private static readonly Dictionary<int, long> hostContactAttackSendTick = new();
         private static readonly Dictionary<int, QueuedOldSkillMarker> clientQueuedOldSkillMarkers = new();
         private static readonly Dictionary<int, int> clientLastReportedMobLife = new();
@@ -79,6 +81,26 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 SkillId = skillId ?? string.Empty;
                 Tick = tick;
+            }
+        }
+
+        private readonly struct ClientMobAttackIntent
+        {
+            public readonly string SkillId;
+            public readonly bool RequiresTargetInArea;
+            public readonly int? Data;
+            public readonly int TargetUserId;
+            public readonly int AttackDir;
+            public readonly long Timestamp;
+
+            public ClientMobAttackIntent(string skillId, bool requiresTargetInArea, int? data, int targetUserId, int attackDir)
+            {
+                SkillId = skillId ?? string.Empty;
+                RequiresTargetInArea = requiresTargetInArea;
+                Data = data;
+                TargetUserId = targetUserId;
+                AttackDir = attackDir;
+                Timestamp = Stopwatch.GetTimestamp();
             }
         }
 
@@ -368,7 +390,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     orig(self);
 
                 ApplyInterpolatedState(self);
-                ApplyClientAnimationStateBeforeUpdate(self);
                 return;
             }
 
@@ -1340,6 +1361,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             clientAttackUnlockUntilTick.Clear();
             clientAttackForcedDir.Clear();
             clientAttackForcedDirUntilTick.Clear();
+            clientCachedAttackTargetByLocalIndex.Clear();
             clientQueuedOldSkillMarkers.Clear();
             hostContactAttackSendTick.Clear();
             hostAttackRetargetLockUntilTick.Clear();
@@ -1422,6 +1444,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             ShiftDictionaryKeysLocked(clientAttackUnlockUntilTick, deletedIndex);
             ShiftDictionaryKeysLocked(clientAttackForcedDir, deletedIndex);
             ShiftDictionaryKeysLocked(clientAttackForcedDirUntilTick, deletedIndex);
+            ShiftDictionaryKeysLocked(clientCachedAttackTargetByLocalIndex, deletedIndex);
             ShiftDictionaryKeysLocked(clientQueuedOldSkillMarkers, deletedIndex);
             ShiftDictionaryKeysLocked(hostContactAttackSendTick, deletedIndex);
             ShiftDictionaryKeysLocked(hostAttackRetargetLockUntilTick, deletedIndex);
@@ -2438,6 +2461,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return true;
 
             clientAttackUnlockUntilTick.Remove(localIndex);
+            clientCachedAttackTargetByLocalIndex.Remove(localIndex);
             return false;
         }
 
@@ -2704,63 +2728,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return true;
         }
 
-        private static void ApplyAnimPayload(int localIndex, Mob mob, string? payload)
-        {
-            if (mob == null || mob.life <= 0 || mob.destroyed)
-                return;
-
-            var safePayload = payload ?? string.Empty;
-            var nowTick = Stopwatch.GetTimestamp();
-            var refreshTicks = (long)(Stopwatch.Frequency * ClientAnimPayloadRefreshSeconds);
-            lock (Sync)
-            {
-                if (clientLastAppliedAnimPayloadByLocalIndex.TryGetValue(localIndex, out var lastApplied) &&
-                    string.Equals(lastApplied.Payload, safePayload, StringComparison.Ordinal) &&
-                    nowTick - lastApplied.Tick < refreshTicks)
-                {
-                    return;
-                }
-
-                clientLastAppliedAnimPayloadByLocalIndex[localIndex] = new TimedStringPayload(safePayload, nowTick);
-            }
-
-            if (!TryGetParsedAnimPayloadCached(safePayload, out var parsed))
-                return;
-
-            var spr = mob.spr;
-            if (spr == null)
-                return;
-
-            var animManager = GetMobAnimManager(mob);
-            if (animManager == null)
-                return;
-
-            try
-            {
-                var top = GetTopAnimInstance(animManager);
-                var currentGroup = top?.group?.ToString() ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(currentGroup))
-                    currentGroup = spr.groupName?.ToString() ?? string.Empty;
-
-                if (!string.Equals(currentGroup, parsed.Group, StringComparison.Ordinal))
-                {
-                    animManager.play(parsed.Group.AsHaxeString(), null, null).loop(null);
-                    top = GetTopAnimInstance(animManager);
-                }
-
-                if (top != null)
-                {
-                    if (top.reverse != parsed.Reverse)
-                        top.reverse = parsed.Reverse;
-                    if (System.Math.Abs(top.speed - parsed.Speed) > ClientAnimSpeedEpsilon)
-                        top.speed = parsed.Speed;
-                }
-            }
-            catch
-            {
-            }
-        }
-
         private static void ConsumeIncomingHostMobStates(NetNode net)
         {
             if (!net.TryConsumeMobStates(out var states))
@@ -2824,7 +2791,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (states == null || states.Count == 0)
                 return;
 
-            List<(int syncId, Mob mob, int life, int maxLife, string statePayload)> stateApplies = new(states.Count);
+            List<(int syncId, Mob mob, int life, int maxLife, int dir, string statePayload)> stateApplies = new(states.Count);
             lock (Sync)
             {
                 PruneInvalidTrackedMobsLocked();
@@ -2843,27 +2810,20 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     Mob? mob = null;
                     if (localIndex >= 0 && localIndex < trackedMobs.Count)
                         mob = trackedMobs[localIndex];
+                    var incomingDir = NormalizeDir(state.Dir);
                     if (mob != null)
                     {
-                        var incomingDir = NormalizeDir(state.Dir);
-                        if (incomingDir != 0)
-                        {
-                            try { mob.dir = incomingDir; } catch { }
-                        }
-
-                        // Keep a fresh baseline for local hit-delta reporting.
                         clientLastReportedMobLife[localIndex] = state.Life;
-                        stateApplies.Add((state.Index, mob, state.Life, state.MaxLife, state.StatePayload ?? string.Empty));
+                        stateApplies.Add((state.Index, mob, state.Life, state.MaxLife, incomingDir, state.StatePayload ?? string.Empty));
                     }
 
-                    var animPayload = state.AnimPayload;
                     clientMobTargets[localIndex] = new ClientMobState(
                         state.X,
                         state.Y,
-                        NormalizeDir(state.Dir),
+                        incomingDir,
                         state.Life,
                         state.MaxLife,
-                        animPayload,
+                        state.AnimPayload,
                         state.StatePayload ?? string.Empty);
                 }
             }
@@ -2871,6 +2831,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             for (int i = 0; i < stateApplies.Count; i++)
             {
                 var entry = stateApplies[i];
+                if (entry.dir != 0)
+                {
+                    try { entry.mob.dir = entry.dir; } catch { }
+                }
                 ApplyAuthoritativeLifeState(entry.mob, entry.life, entry.maxLife);
                 ApplyAuthoritativeAffectState(entry.syncId, entry.mob, entry.statePayload);
             }
@@ -3329,77 +3293,92 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (mob == null || string.IsNullOrWhiteSpace(skillId))
                 return;
 
+            var intent = new ClientMobAttackIntent(skillId, requiresTargetInArea, data, targetUserId, attackDir);
+            ProcessClientMobAttackIntent(mob, intent);
+        }
+
+        private static void ProcessClientMobAttackIntent(Mob mob, ClientMobAttackIntent intent)
+        {
+            if (mob == null || string.IsNullOrWhiteSpace(intent.SkillId))
+                return;
+
+            var skillId = intent.SkillId;
+
             if (string.Equals(skillId, ContactAttackPacketSkillId, StringComparison.Ordinal))
             {
-                TryApplyClientContactAttack(mob, targetUserId, attackDir);
+                ProcessClientContactAttack(mob, intent);
                 return;
             }
 
             if (skillId.StartsWith(OldSkillExecutePacketPrefix, StringComparison.Ordinal))
             {
-                TryExecuteClientOldSkill(mob, skillId[OldSkillExecutePacketPrefix.Length..], data, targetUserId, attackDir);
+                ProcessClientOldSkillExecute(mob, skillId[OldSkillExecutePacketPrefix.Length..], intent);
                 return;
             }
 
             if (skillId.StartsWith(OldSkillPreparePacketPrefix, StringComparison.Ordinal))
             {
-                TryPrepareClientOldSkill(mob, skillId[OldSkillPreparePacketPrefix.Length..], data, targetUserId, attackDir);
+                ProcessClientOldSkillPrepare(mob, skillId[OldSkillPreparePacketPrefix.Length..], intent);
                 return;
             }
 
             if (skillId.StartsWith(OldSkillChargeCompletePacketPrefix, StringComparison.Ordinal))
             {
-                TryExecuteClientOldSkill(mob, skillId[OldSkillChargeCompletePacketPrefix.Length..], data, targetUserId, attackDir);
+                ProcessClientOldSkillExecute(mob, skillId[OldSkillChargeCompletePacketPrefix.Length..], intent);
                 return;
             }
 
             if (skillId.StartsWith(NewSkillExecutePacketPrefix, StringComparison.Ordinal))
             {
-                TryExecuteClientNewSkill(mob, skillId[NewSkillExecutePacketPrefix.Length..], data, targetUserId, attackDir);
+                ProcessClientNewSkillExecute(mob, skillId[NewSkillExecutePacketPrefix.Length..], intent);
                 return;
+            }
+
+            ProcessClientOldSkillQueue(mob, intent);
+        }
+
+        private static void ProcessClientContactAttack(Mob mob, ClientMobAttackIntent intent)
+        {
+            TrySetClientMobAttackTarget(mob, intent.TargetUserId, intent.AttackDir, forceRetarget: true);
+            TryWakeMobForForcedSimulation(mob);
+
+            var target = ResolveClientAttackTargetEntity(mob, intent.TargetUserId);
+            if (target == null)
+                return;
+
+            try
+            {
+                mob.contactAttack(target);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[MobsSync] Client contactAttack failed for mob");
             }
 
             try
             {
-                if (IsQueuedOrChargingOldSkillId(mob, skillId))
-                    return;
-
-                TrySetClientMobAttackTarget(mob, targetUserId, attackDir, forceRetarget: true);
-
-                var haxeSkillId = skillId.AsHaxeString();
-                if (!mob.hasOldSkill(haxeSkillId))
-                    return;
-
-                var oldSkill = mob.getOldSkill(haxeSkillId) as OldMobSkill;
-                if (oldSkill == null)
-                    return;
-
-                WithClientNetworkQueuedAttackContext(mob, () =>
-                {
-                    mob.queueAttack(oldSkill, requiresTargetInArea, data);
-                });
+                mob.onTouch(target);
             }
-            catch
+            catch (Exception ex)
             {
-                // Queue packet represents early intent (prepare window).
-                // Avoid forcing immediate execute here to prevent duplicate visual-only attacks.
+                Log.Warning(ex, "[MobsSync] Client onTouch failed for mob");
             }
         }
 
-        private static void TryExecuteClientOldSkill(Mob mob, string rawSkillId, int? data, int targetUserId, int attackDir)
+        private static void ProcessClientOldSkillExecute(Mob mob, string rawSkillId, ClientMobAttackIntent intent)
         {
-            if (mob == null || string.IsNullOrWhiteSpace(rawSkillId))
+            if (string.IsNullOrWhiteSpace(rawSkillId))
+                return;
+
+            var normalizedSkillId = rawSkillId.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedSkillId))
+                return;
+
+            if (ShouldSkipClientOldSkillExecuteFromMarker(mob, normalizedSkillId))
                 return;
 
             try
             {
-                var normalizedSkillId = rawSkillId.Trim();
-                if (string.IsNullOrWhiteSpace(normalizedSkillId))
-                    return;
-
-                if (ShouldSkipClientOldSkillExecuteFromMarker(mob, normalizedSkillId))
-                    return;
-
                 var skillId = normalizedSkillId.AsHaxeString();
                 if (!mob.hasOldSkill(skillId))
                     return;
@@ -3414,27 +3393,28 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                         return;
                 }
 
-                TrySetClientMobAttackTarget(mob, targetUserId, attackDir, forceRetarget: true);
+                TrySetClientMobAttackTarget(mob, intent.TargetUserId, intent.AttackDir, forceRetarget: true);
                 TryWakeMobForForcedSimulation(mob);
                 TryInvokeOldSkillChargeComplete(oldSkill);
                 oldSkill.execute(null);
             }
-            catch
+            catch (Exception ex)
             {
+                Log.Warning(ex, "[MobsSync] Client oldSkill execute failed: {SkillId}", normalizedSkillId);
             }
         }
 
-        private static void TryPrepareClientOldSkill(Mob mob, string rawSkillId, int? data, int targetUserId, int attackDir)
+        private static void ProcessClientOldSkillPrepare(Mob mob, string rawSkillId, ClientMobAttackIntent intent)
         {
-            if (mob == null || string.IsNullOrWhiteSpace(rawSkillId))
+            if (string.IsNullOrWhiteSpace(rawSkillId))
+                return;
+
+            var normalizedSkillId = rawSkillId.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedSkillId))
                 return;
 
             try
             {
-                var normalizedSkillId = rawSkillId.Trim();
-                if (string.IsNullOrWhiteSpace(normalizedSkillId))
-                    return;
-
                 var skillId = normalizedSkillId.AsHaxeString();
                 if (!mob.hasOldSkill(skillId))
                     return;
@@ -3443,16 +3423,85 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (oldSkill == null)
                     return;
 
-                TrySetClientMobAttackFacingOnly(mob, targetUserId, attackDir);
+                TrySetClientMobAttackFacingOnly(mob, intent.TargetUserId, intent.AttackDir);
                 TryWakeMobForForcedSimulation(mob);
 
-                if (!TryExecuteClientOldSkillNativeLike(oldSkill, data))
+                if (!TryExecuteClientOldSkillNativeLike(oldSkill, intent.Data))
                 {
-                    oldSkill.prepare(data);
+                    oldSkill.prepare(intent.Data);
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                Log.Warning(ex, "[MobsSync] Client oldSkill prepare failed: {SkillId}", normalizedSkillId);
+            }
+        }
+
+        private static void ProcessClientNewSkillExecute(Mob mob, string rawSkillId, ClientMobAttackIntent intent)
+        {
+            if (string.IsNullOrWhiteSpace(rawSkillId))
+                return;
+
+            var normalizedSkillId = rawSkillId.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedSkillId))
+                return;
+
+            try
+            {
+                if (TryGetChargingNewSkillId(mob, out var chargingNewSkillId))
+                {
+                    if (!string.Equals(chargingNewSkillId, normalizedSkillId, StringComparison.Ordinal))
+                        return;
+
+                    var chargingSkill = mob.getChargingNewSkill() as MobSkill;
+                    if (chargingSkill == null)
+                        return;
+
+                    chargingSkill.execute(null);
+                    return;
+                }
+
+                TrySetClientMobAttackTarget(mob, intent.TargetUserId, intent.AttackDir, forceRetarget: true);
+
+                var skillId = normalizedSkillId.AsHaxeString();
+                var skill = mob.getSkill(skillId) as MobSkill;
+                if (skill == null)
+                    return;
+
+                skill.prepare(intent.Data);
+                skill.execute(null);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[MobsSync] Client newSkill execute failed: {SkillId}", normalizedSkillId);
+            }
+        }
+
+        private static void ProcessClientOldSkillQueue(Mob mob, ClientMobAttackIntent intent)
+        {
+            try
+            {
+                if (IsQueuedOrChargingOldSkillId(mob, intent.SkillId))
+                    return;
+
+                TrySetClientMobAttackTarget(mob, intent.TargetUserId, intent.AttackDir, forceRetarget: true);
+
+                var haxeSkillId = intent.SkillId.AsHaxeString();
+                if (!mob.hasOldSkill(haxeSkillId))
+                    return;
+
+                var oldSkill = mob.getOldSkill(haxeSkillId) as OldMobSkill;
+                if (oldSkill == null)
+                    return;
+
+                WithClientNetworkQueuedAttackContext(mob, () =>
+                {
+                    mob.queueAttack(oldSkill, intent.RequiresTargetInArea, intent.Data);
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[MobsSync] Client oldSkill queue failed: {SkillId}", intent.SkillId);
             }
         }
 
@@ -3469,47 +3518,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     cb.Invoke();
                 }
             }
-            catch
+            catch (Exception ex)
             {
-            }
-        }
-
-        private static void TryExecuteClientNewSkill(Mob mob, string rawSkillId, int? data, int targetUserId, int attackDir)
-        {
-            if (mob == null || string.IsNullOrWhiteSpace(rawSkillId))
-                return;
-
-            try
-            {
-                var normalizedSkillId = rawSkillId.Trim();
-                if (string.IsNullOrWhiteSpace(normalizedSkillId))
-                    return;
-
-                if (TryGetChargingNewSkillId(mob, out var chargingNewSkillId))
-                {
-                    if (!string.Equals(chargingNewSkillId, normalizedSkillId, StringComparison.Ordinal))
-                        return;
-
-                    var chargingSkill = mob.getChargingNewSkill() as MobSkill;
-                    if (chargingSkill == null)
-                        return;
-
-                    chargingSkill.execute(null);
-                    return;
-                }
-
-                TrySetClientMobAttackTarget(mob, targetUserId, attackDir, forceRetarget: true);
-
-                var skillId = normalizedSkillId.AsHaxeString();
-                var skill = mob.getSkill(skillId) as MobSkill;
-                if (skill == null)
-                    return;
-
-                skill.prepare(data);
-                skill.execute(null);
-            }
-            catch
-            {
+                Log.Warning(ex, "[MobsSync] OldSkill dynOnChargeComplete invoke failed");
             }
         }
 
@@ -3526,34 +3537,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             catch
             {
                 return false;
-            }
-        }
-
-        private static void TryApplyClientContactAttack(Mob mob, int targetUserId, int attackDir)
-        {
-            var target = ResolveClientAttackTargetEntity(mob, targetUserId);
-            if (target == null)
-                return;
-
-            TrySetClientMobAttackTarget(mob, targetUserId, attackDir, forceRetarget: true);
-            TryWakeMobForForcedSimulation(mob);
-
-            try
-            {
-                // Use native contact pipeline to keep melee timing/fx consistent with host.
-                mob.contactAttack(target);
-                return;
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                mob.onTouch(target);
-            }
-            catch
-            {
             }
         }
 
@@ -3690,11 +3673,51 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return false;
         }
 
+        private static bool IsEntityValidForAttack(Entity? e)
+        {
+            if (e == null)
+                return false;
+            try
+            {
+                return !e.destroyed && e.life > 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static void TrySetClientMobAttackTarget(Mob mob, int targetUserId, int attackDir, bool forceRetarget = false)
         {
-            var target = ResolveClientAttackTargetEntity(mob, targetUserId);
+            Entity? target = null;
+
+            if (TryGetTrackedIndex(mob, out var localIndex))
+            {
+                lock (Sync)
+                {
+                    if (!forceRetarget &&
+                        clientCachedAttackTargetByLocalIndex.TryGetValue(localIndex, out var cached) &&
+                        IsEntityValidForAttack(cached))
+                    {
+                        target = cached;
+                    }
+                }
+            }
+
             if (target == null)
-                return;
+            {
+                target = ResolveClientAttackTargetEntity(mob, targetUserId);
+                if (target == null)
+                    return;
+
+                if (TryGetTrackedIndex(mob, out localIndex))
+                {
+                    lock (Sync)
+                    {
+                        clientCachedAttackTargetByLocalIndex[localIndex] = target;
+                    }
+                }
+            }
 
             var normalizedAttackDir = NormalizeDir(attackDir);
             if (!forceRetarget)
@@ -3872,227 +3895,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             return best;
-        }
-
-        private static void ApplyInterpolatedState(Mob self)
-        {
-            if (!TryGetTrackedIndex(self, out var localIndex))
-                return;
-
-            ClientMobState target;
-            var forcedDir = 0;
-            var useForcedDir = false;
-            var preserveLocalMotion = false;
-            lock (Sync)
-            {
-                if (!clientMobTargets.TryGetValue(localIndex, out target))
-                    return;
-
-                var nowTick = Stopwatch.GetTimestamp();
-                var attackUnlock = IsClientAttackUnlockActiveLocked(localIndex, nowTick);
-                if (attackUnlock &&
-                    TryGetClientForcedDirLocked(localIndex, nowTick, out var attackDir))
-                {
-                    forcedDir = NormalizeDir(attackDir);
-                    useForcedDir = forcedDir != 0;
-                }
-
-                preserveLocalMotion = attackUnlock && ShouldPreserveClientAttackMotion(self);
-            }
-
-            if (!preserveLocalMotion)
-            {
-                var currentX = GetWorldX(self);
-                var currentY = GetWorldY(self);
-                var lerpedX = currentX + (target.X - currentX) * ClientInterpolationAlpha;
-                var lerpedY = ClientSyncVerticalPosition
-                    ? currentY + (target.Y - currentY) * ClientInterpolationAlpha
-                    : currentY;
-
-                try
-                {
-                    if (ClientSyncVerticalPosition)
-                        self.setPosPixel(lerpedX, lerpedY);
-                    else
-                        SetWorldXKeepingY(self, lerpedX);
-                }
-                catch
-                {
-                    if (self.spr != null)
-                    {
-                        self.spr.x = lerpedX;
-                        if (ClientSyncVerticalPosition)
-                            self.spr.y = lerpedY;
-                    }
-                }
-
-                try
-                {
-                    self.dx = 0;
-                    self.bdx = 0;
-                    if (ClientSyncVerticalPosition)
-                    {
-                        self.dy = 0;
-                        self.bdy = 0;
-                        self.fallStartY = lerpedY;
-                    }
-                    self.hasGravity = true;
-                }
-                catch
-                {
-                }
-            }
-
-            if (useForcedDir)
-                self.dir = forcedDir;
-            else
-            {
-                var responsiveDir = ComputeResponsiveFacingDir(self, target);
-                if (responsiveDir != 0)
-                    self.dir = responsiveDir;
-            }
-
-            ApplyAuthoritativeLifeState(self, target.Life, target.MaxLife);
-        }
-
-        private static bool ShouldPreserveClientAttackMotion(Mob mob)
-        {
-            if (mob == null)
-                return false;
-
-            if (HasLocalQueuedOrChargingSkill(mob))
-                return true;
-
-            try
-            {
-                var motion =
-                    System.Math.Abs(mob.dx) +
-                    System.Math.Abs(mob.bdx) +
-                    System.Math.Abs(mob.dy) +
-                    System.Math.Abs(mob.bdy);
-                return motion > 0.02;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private static void ApplyAuthoritativeLifeState(Mob mob, int targetLife, int targetMaxLife)
-        {
-            if (mob == null)
-                return;
-
-            if (targetMaxLife > 0 && mob.maxLife != targetMaxLife)
-                mob.maxLife = targetMaxLife;
-
-            var clampedLife = targetLife;
-            if (mob.maxLife > 0)
-                clampedLife = System.Math.Clamp(clampedLife, 0, mob.maxLife);
-            else if (clampedLife < 0)
-                clampedLife = 0;
-
-            if (mob.life == clampedLife)
-                return;
-
-            var wasAlive = mob.life > 0;
-            mob.life = clampedLife;
-
-            if (mob.life <= 0 && wasAlive)
-            {
-                try
-                {
-                    if (!mob.destroyed)
-                    {
-                        RunWithSuppressedMobDieSend(() =>
-                        {
-                            mob.life = 0;
-                            mob.onDie();
-                        });
-                    }
-
-                    var animManager = GetMobAnimManager(mob);
-                    if (animManager?.stack != null)
-                    {
-                        while (animManager.stack.length > 0)
-                            animManager.stack.pop();
-                    }
-                }
-                catch
-                {
-                }
-            }
-        }
-
-        private static void ApplyClientAnimationStateBeforeUpdate(Mob self)
-        {
-            if (!TryGetTrackedIndex(self, out var localIndex))
-                return;
-
-            ClientMobState target;
-            var forcedDir = 0;
-            var useForcedDir = false;
-            var attackUnlock = false;
-            var shouldApplyAnimThisFrame = true;
-            lock (Sync)
-            {
-                if (!clientMobTargets.TryGetValue(localIndex, out target))
-                    return;
-
-                var nowTick = Stopwatch.GetTimestamp();
-                attackUnlock = IsClientAttackUnlockActiveLocked(localIndex, nowTick);
-                if (attackUnlock && TryGetClientForcedDirLocked(localIndex, nowTick, out var attackDir))
-                {
-                    forcedDir = NormalizeDir(attackDir);
-                    useForcedDir = forcedDir != 0;
-                }
-
-                shouldApplyAnimThisFrame = ShouldApplyClientAnimationForFrameLocked(self, localIndex);
-            }
-
-            if (useForcedDir)
-                self.dir = forcedDir;
-            else
-            {
-                var responsiveDir = ComputeResponsiveFacingDir(self, target);
-                if (responsiveDir != 0)
-                    self.dir = responsiveDir;
-            }
-
-            if (attackUnlock && HasLocalQueuedOrChargingSkill(self))
-                return;
-
-            if (!shouldApplyAnimThisFrame)
-                return;
-
-            ApplyAnimPayload(localIndex, self, target.AnimPayload);
-        }
-
-        private static bool ShouldApplyClientAnimationForFrameLocked(Mob mob, int localIndex)
-        {
-            if (mob == null)
-                return true;
-
-            try
-            {
-                var level = mob._level ?? currentLevel;
-                if (level == null)
-                    return true;
-
-                var frame = level.ftime;
-                if (clientLastAnimationApplyFrameByLocalIndex.TryGetValue(localIndex, out var lastFrame) &&
-                    lastFrame == frame)
-                {
-                    return false;
-                }
-
-                clientLastAnimationApplyFrameByLocalIndex[localIndex] = frame;
-                return true;
-            }
-            catch
-            {
-                return true;
-            }
         }
 
         private static bool HasLocalQueuedOrChargingSkill(Mob mob)
