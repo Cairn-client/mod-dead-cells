@@ -3233,18 +3233,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (mob == null)
                 return;
 
-            if (!draw.IsOnScreen && draw.IsOutOfGame)
-                return;
-
-            var refreshFrames = 1200.0; // 20 seconds at 60fps to keep it very awake
+            var refreshFrames = 1200.0;
             try
             {
-                if (draw.IsOnScreen)
-                    mob.isOnScreen = true;
+                mob.isOnScreen = true;
                 if (mob.onScreenRecent < refreshFrames)
                     mob.onScreenRecent = refreshFrames;
                 
-                // Keep 'lastOutOfGame' false to prevent immediate re-culling
                 mob.lastOutOfGame = false;
             }
             catch
@@ -3395,6 +3390,17 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 TrySetClientMobAttackTarget(mob, intent.TargetUserId, intent.AttackDir, forceRetarget: true);
                 TryWakeMobForForcedSimulation(mob);
+
+                if (!TryGetChargingOldSkillId(mob, out _))
+                {
+                    if (TryExecuteClientOldSkillNativeLike(oldSkill, intent.Data))
+                    { }
+                    else
+                    {
+                        oldSkill.prepare(intent.Data);
+                    }
+                }
+
                 TryInvokeOldSkillChargeComplete(oldSkill);
                 oldSkill.execute(null);
             }
@@ -3423,7 +3429,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (oldSkill == null)
                     return;
 
-                TrySetClientMobAttackFacingOnly(mob, intent.TargetUserId, intent.AttackDir);
+                TrySetClientMobAttackTarget(mob, intent.TargetUserId, intent.AttackDir, forceRetarget: true);
                 TryWakeMobForForcedSimulation(mob);
 
                 if (!TryExecuteClientOldSkillNativeLike(oldSkill, intent.Data))
