@@ -1,4 +1,4 @@
-﻿
+
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -239,7 +239,7 @@ namespace DeadCellsMultiplayerMod
 
             var command = new WorkerCommand
             {
-                Type = WorkerCommandTypeSend,
+                Type = WorkerCommandTypes.Send,
                 SteamId = steamId,
                 Channel = channel,
                 SendType = sendType.ToString(),
@@ -253,7 +253,7 @@ namespace DeadCellsMultiplayerMod
         {
             var command = new WorkerCommand
             {
-                Type = WorkerCommandTypeClosePeer,
+                Type = WorkerCommandTypes.ClosePeer,
                 SteamId = steamId
             };
 
@@ -277,7 +277,7 @@ namespace DeadCellsMultiplayerMod
 
             try
             {
-                TryWriteCommand(new WorkerCommand { Type = WorkerCommandTypeStop }, out _);
+                TryWriteCommand(new WorkerCommand { Type = WorkerCommandTypes.Stop }, out _);
             }
             catch
             {
@@ -349,7 +349,7 @@ namespace DeadCellsMultiplayerMod
                     if (evt == null || string.IsNullOrWhiteSpace(evt.Type))
                         continue;
 
-                    if (string.Equals(evt.Type, WorkerEventTypePacket, StringComparison.Ordinal))
+                    if (string.Equals(evt.Type, WorkerEventTypes.Packet, StringComparison.Ordinal))
                     {
                         if (string.IsNullOrWhiteSpace(evt.Payload))
                             continue;
@@ -369,8 +369,8 @@ namespace DeadCellsMultiplayerMod
                         continue;
                     }
 
-                    if (string.Equals(evt.Type, WorkerEventTypeWarning, StringComparison.Ordinal) ||
-                        string.Equals(evt.Type, WorkerEventTypeError, StringComparison.Ordinal))
+                    if (string.Equals(evt.Type, WorkerEventTypes.Warning, StringComparison.Ordinal) ||
+                        string.Equals(evt.Type, WorkerEventTypes.Error, StringComparison.Ordinal))
                     {
                         if (!string.IsNullOrWhiteSpace(evt.Error))
                             _warnings.Enqueue(evt.Error);
@@ -489,7 +489,7 @@ namespace DeadCellsMultiplayerMod
                     return null;
                 }
 
-                if (!string.Equals(evt.Type, WorkerEventTypeReady, StringComparison.Ordinal))
+                if (!string.Equals(evt.Type, WorkerEventTypes.Ready, StringComparison.Ordinal))
                 {
                     error = "Steam P2P worker did not return ready event";
                     return null;
@@ -583,32 +583,6 @@ namespace DeadCellsMultiplayerMod
             public string Error { get; set; } = string.Empty;
         }
 
-        private const string WorkerCommandTypeSend = "send";
-        private const string WorkerCommandTypeClosePeer = "closePeer";
-        private const string WorkerCommandTypeStop = "stop";
-        private const string WorkerEventTypeReady = "ready";
-        private const string WorkerEventTypePacket = "packet";
-        private const string WorkerEventTypeWarning = "warn";
-        private const string WorkerEventTypeError = "error";
-
-        private sealed class WorkerCommand
-        {
-            public string Type { get; set; } = string.Empty;
-            public ulong SteamId { get; set; }
-            public int Channel { get; set; }
-            public string SendType { get; set; } = string.Empty;
-            public string Payload { get; set; } = string.Empty;
-        }
-
-        private sealed class WorkerEvent
-        {
-            public string Type { get; set; } = string.Empty;
-            public bool Success { get; set; }
-            public string Error { get; set; } = string.Empty;
-            public ulong SteamId { get; set; }
-            public int Channel { get; set; }
-            public string Payload { get; set; } = string.Empty;
-        }
     }
 
     internal static class SteamP2PWorker
@@ -620,14 +594,6 @@ namespace DeadCellsMultiplayerMod
         private const int SteamP2PChannelHostToClient = 1;
         private const uint SteamMaxPacketSizeBytes = 16u * 1024u * 1024u;
         private const int SteamMinReceiveBufferBytes = 64 * 1024;
-
-        private const string WorkerCommandTypeSend = "send";
-        private const string WorkerCommandTypeClosePeer = "closePeer";
-        private const string WorkerCommandTypeStop = "stop";
-        private const string WorkerEventTypeReady = "ready";
-        private const string WorkerEventTypePacket = "packet";
-        private const string WorkerEventTypeWarning = "warn";
-        private const string WorkerEventTypeError = "error";
 
         public static void WorkerEntry()
         {
@@ -680,7 +646,7 @@ namespace DeadCellsMultiplayerMod
 
                     WriteEvent(eventWriter, new WorkerEvent
                     {
-                        Type = WorkerEventTypeReady,
+                        Type = WorkerEventTypes.Ready,
                         Success = true,
                         Error = string.Empty,
                         SteamId = localSteamId
@@ -713,7 +679,7 @@ namespace DeadCellsMultiplayerMod
                         {
                             WriteEvent(eventWriter, new WorkerEvent
                             {
-                                Type = WorkerEventTypeWarning,
+                                Type = WorkerEventTypes.Warning,
                                 Error = $"Steam callbacks error: {ex.Message}"
                             });
                         }
@@ -791,13 +757,13 @@ namespace DeadCellsMultiplayerMod
             if (command == null || string.IsNullOrWhiteSpace(command.Type))
                 return false;
 
-            if (string.Equals(command.Type, WorkerCommandTypeStop, StringComparison.Ordinal))
+            if (string.Equals(command.Type, WorkerCommandTypes.Stop, StringComparison.Ordinal))
             {
                 running = false;
                 return true;
             }
 
-            if (string.Equals(command.Type, WorkerCommandTypeClosePeer, StringComparison.Ordinal))
+            if (string.Equals(command.Type, WorkerCommandTypes.ClosePeer, StringComparison.Ordinal))
             {
                 if (command.SteamId != 0UL)
                 {
@@ -806,7 +772,7 @@ namespace DeadCellsMultiplayerMod
                 return true;
             }
 
-            if (!string.Equals(command.Type, WorkerCommandTypeSend, StringComparison.Ordinal))
+            if (!string.Equals(command.Type, WorkerCommandTypes.Send, StringComparison.Ordinal))
                 return false;
 
             if (command.SteamId == 0UL || string.IsNullOrWhiteSpace(command.Payload))
@@ -832,7 +798,7 @@ namespace DeadCellsMultiplayerMod
             {
                 WriteEvent(eventWriter, new WorkerEvent
                 {
-                    Type = WorkerEventTypeWarning,
+                    Type = WorkerEventTypes.Warning,
                     Error = $"Steam client attempted send to unexpected peer {targetSteamId}"
                 });
                 return true;
@@ -852,7 +818,7 @@ namespace DeadCellsMultiplayerMod
             {
                 WriteEvent(eventWriter, new WorkerEvent
                 {
-                    Type = WorkerEventTypeWarning,
+                    Type = WorkerEventTypes.Warning,
                     Error = $"Steam send error: {ex.Message}"
                 });
                 return true;
@@ -862,7 +828,7 @@ namespace DeadCellsMultiplayerMod
             {
                 WriteEvent(eventWriter, new WorkerEvent
                 {
-                    Type = WorkerEventTypeWarning,
+                    Type = WorkerEventTypes.Warning,
                     Error = $"Steam send failed to {targetSteamId} ({sendType}, ch={command.Channel})"
                 });
             }
@@ -906,7 +872,7 @@ namespace DeadCellsMultiplayerMod
                         var payloadBase64 = Convert.ToBase64String(receiveBuffer, 0, (int)bytesRead);
                         WriteEvent(eventWriter, new WorkerEvent
                         {
-                            Type = WorkerEventTypePacket,
+                            Type = WorkerEventTypes.Packet,
                             SteamId = remoteSteamId.m_SteamID,
                             Channel = channel,
                             Payload = payloadBase64
@@ -917,7 +883,7 @@ namespace DeadCellsMultiplayerMod
                 {
                     WriteEvent(eventWriter, new WorkerEvent
                     {
-                        Type = WorkerEventTypeWarning,
+                        Type = WorkerEventTypes.Warning,
                         Error = $"Steam packet read error: {ex.Message}"
                     });
                 }
@@ -957,25 +923,6 @@ namespace DeadCellsMultiplayerMod
             catch
             {
             }
-        }
-
-        private sealed class WorkerCommand
-        {
-            public string Type { get; set; } = string.Empty;
-            public ulong SteamId { get; set; }
-            public int Channel { get; set; }
-            public string SendType { get; set; } = string.Empty;
-            public string Payload { get; set; } = string.Empty;
-        }
-
-        private sealed class WorkerEvent
-        {
-            public string Type { get; set; } = string.Empty;
-            public bool Success { get; set; }
-            public string Error { get; set; } = string.Empty;
-            public ulong SteamId { get; set; }
-            public int Channel { get; set; }
-            public string Payload { get; set; } = string.Empty;
         }
     }
 }

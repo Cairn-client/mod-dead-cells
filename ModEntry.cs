@@ -190,7 +190,7 @@ namespace DeadCellsMultiplayerMod
             if (instance == null)
                 return;
 
-            instance.remoteHeadSkin = NormalizeHeadSkin(skin);
+            instance.remoteHeadSkin = NormalizeSkin(skin, "BaseFlame");
         }
 
         public static string GetClientLabel(int slotIndex)
@@ -377,7 +377,7 @@ namespace DeadCellsMultiplayerMod
                     try { rawSkin = self.getSkinInfo()?.consoleCmdId?.ToString(); } catch { }
                 }
 
-                var skin = NormalizeBodySkin(rawSkin);
+                var skin = NormalizeSkin(rawSkin, "PrisonerDefault");
 
                 if (string.Equals(_lastSentHeroSkin, skin, StringComparison.Ordinal))
                     return;
@@ -408,7 +408,7 @@ namespace DeadCellsMultiplayerMod
 
             try
             {
-                var skin = NormalizeHeadSkin(dc.Main.Class.ME?.user?.heroHeadSkin?.ToString());
+                var skin = NormalizeSkin(dc.Main.Class.ME?.user?.heroHeadSkin?.ToString(), "BaseFlame");
                 if (string.Equals(_lastSentHeroHeadSkin, skin, StringComparison.Ordinal))
                     return;
 
@@ -444,7 +444,7 @@ namespace DeadCellsMultiplayerMod
 
             if (shouldRefresh)
             {
-                try { ReceiveGhostCoords(); } catch { }
+                try { ReceiveGhostCoords(); } catch (Exception ex) { Logger.Warning(ex, "[NetMod] ReceiveGhostCoords failed"); }
             }
         }
 
@@ -467,7 +467,7 @@ namespace DeadCellsMultiplayerMod
                     levelId,
                     bossRushType ?? "null",
                     ex.Message);
-                try { self.spr = null; } catch { }
+                try { self.spr = null; } catch (Exception ex2) { Logger.Warning(ex2, "[NetMod] BossRushDoor spr=null failed"); }
                 return;
             }
         }
@@ -800,13 +800,13 @@ namespace DeadCellsMultiplayerMod
         {
             kingInitialized = false;
             DeadCellsMultiplayerMod.Mobs.MobsSynchronization.MobsSynchronization.ClearTrackingForLevelChange();
-            try { _net?.ClearMobSyncQueues(); } catch { }
+            try { _net?.ClearMobSyncQueues(); } catch (Exception ex) { Logger.Warning(ex, "[NetMod] ClearMobSyncQueues failed"); }
             ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false, clearRemoteDownedTracking: false, clearDownedAnnouncements: false);
             me = self;
             try { me._targetable = true; } catch { }
             SendLevel(levelId);
             orig(self, oldLevel);
-            try { _net?.ClearMobSyncQueues(); } catch { }
+            try { _net?.ClearMobSyncQueues(); } catch (Exception ex) { Logger.Warning(ex, "[NetMod] ClearMobSyncQueues failed"); }
             EnsureHeroVisibilityAfterRoomChange(me);
             if (_netRole == NetRole.None) return;
             var net = _net;
@@ -852,7 +852,6 @@ namespace DeadCellsMultiplayerMod
         {
             if (!_ready) return;
             GameMenu.TickMenu(dt);
-
         }
 
 
@@ -860,6 +859,8 @@ namespace DeadCellsMultiplayerMod
         {
             if (me == null) return;
             TryRecoverMissedFakeDeathFromLife();
+            if (_netRole == NetRole.None || _net == null)
+                return;
             if (!_localFakeDead)
                 SendHeroCoords();
             ReceiveGhostCoords();
@@ -1079,7 +1080,7 @@ namespace DeadCellsMultiplayerMod
             if (!TryGetClientIndex(localId, remoteId, out var index))
                 return;
 
-            var cleaned = NormalizeBodySkin(skin);
+            var cleaned = NormalizeSkin(skin, "PrisonerDefault");
             var prev = clientSkins[index];
             clientSkins[index] = cleaned;
 
@@ -1109,7 +1110,7 @@ namespace DeadCellsMultiplayerMod
             if (!TryGetClientIndex(localId, remoteId, out var index))
                 return;
 
-            var cleaned = NormalizeHeadSkin(skin);
+            var cleaned = NormalizeSkin(skin, "BaseFlame");
             var prev = clientHeadSkins[index];
             clientHeadSkins[index] = cleaned;
 
@@ -1121,18 +1122,9 @@ namespace DeadCellsMultiplayerMod
                 instance.RecreateClientHead(index);
         }
 
-        private static string NormalizeHeadSkin(string? skin)
+        private static string NormalizeSkin(string? skin, string defaultSkin)
         {
-            return string.IsNullOrWhiteSpace(skin)
-                ? "BaseFlame"
-                : skin.Replace("|", "/").Trim();
-        }
-
-        private static string NormalizeBodySkin(string? skin)
-        {
-            return string.IsNullOrWhiteSpace(skin)
-                ? "PrisonerDefault"
-                : skin.Replace("|", "/").Trim();
+            return string.IsNullOrWhiteSpace(skin) ? defaultSkin : skin.Replace("|", "/").Trim();
         }
 
         private bool RecreateClientKing(int slot)
@@ -1192,7 +1184,7 @@ namespace DeadCellsMultiplayerMod
                 clientHeads[slot] = null;
             }
 
-            var desiredHead = NormalizeHeadSkin(client.RemoteHeadSkinId);
+            var desiredHead = NormalizeSkin(client.RemoteHeadSkinId, "BaseFlame");
             var previousGlobalHead = remoteHeadSkin;
             remoteHeadSkin = desiredHead;
             try
@@ -1431,9 +1423,9 @@ namespace DeadCellsMultiplayerMod
                 created.ApplyRemoteSkin(knownSkin);
 
             var knownHead = clientHeadSkins[slot];
-            created.RemoteHeadSkinId = NormalizeHeadSkin(
-                !string.IsNullOrWhiteSpace(knownHead) ? knownHead : remoteHeadSkin
-            );
+            created.RemoteHeadSkinId = NormalizeSkin(
+                !string.IsNullOrWhiteSpace(knownHead) ? knownHead : remoteHeadSkin,
+                "BaseFlame");
             RecreateClientHead(slot);
 
             if (!string.IsNullOrWhiteSpace(clientLabels[slot]))
@@ -1832,6 +1824,12 @@ namespace DeadCellsMultiplayerMod
             _pendingClientDisposeTicks.Clear();
         }
 
+        private void ResetNetworkState()
+        {
+            ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+            ResetLocalSkinSendCache();
+            ResetDoorMarkerState();
+        }
 
         private IPEndPoint BuildEndpoint(string ipText, int port)
         {
@@ -1865,58 +1863,61 @@ namespace DeadCellsMultiplayerMod
             StartClientWithSteamTransport(hostSteamId);
         }
 
+        private void StartHostCore(Action createHost)
+        {
+            _net?.Dispose();
+            ResetNetworkState();
+            createHost();
+            _netRole = NetRole.Host;
+            GameMenu.SetRole(_netRole);
+            GameMenu.NetRef = _net;
+            ConnectionUI.NotifyConnectionsChanged();
+        }
+
         private void StartHostWithEndpoint(IPEndPoint ep)
         {
             try
             {
-                _net?.Dispose();
-                ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
-                ResetLocalSkinSendCache();
-                ResetDoorMarkerState();
-
-                _net = NetNode.CreateHost(Logger, ep);
-                _netRole = NetRole.Host;
-                GameMenu.SetRole(_netRole);
-                GameMenu.NetRef = _net;
-                ConnectionUI.NotifyConnectionsChanged();
-
-                var lep = _net.ListenerEndpoint;
+                StartHostCore(() => _net = NetNode.CreateHost(Logger, ep));
+                var lep = _net?.ListenerEndpoint;
                 if (lep != null)
                     Logger.Information($"[NetMod] Host listening at {lep.Address}:{lep.Port}");
-                }
-                catch (Exception ex)
-                {
-                    Logger.Error($"[NetMod] Host start failed: {ex.Message}");
-                    _netRole = NetRole.None;
-                    _net = null;
-                    GameMenu.SetRole(_netRole);
             }
+            catch (Exception ex)
+            {
+                Logger.Error($"[NetMod] Host start failed: {ex.Message}");
+                _netRole = NetRole.None;
+                _net = null;
+                GameMenu.SetRole(_netRole);
+            }
+        }
+
+        private void StartClientCore(Action createClient)
+        {
+            _net?.Dispose();
+            try
+            {
+                var main = dc.Main.Class.ME;
+                if (main?.user != null)
+                    GameDataSync.RestoreOriginalUserState(main.user, true);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning(ex, "[NetMod] RestoreOriginalUserState failed before client start");
+            }
+            ResetNetworkState();
+            createClient();
+            _netRole = NetRole.Client;
+            GameMenu.SetRole(_netRole);
+            GameMenu.NetRef = _net;
+            ConnectionUI.NotifyConnectionsChanged();
         }
 
         private void StartClientWithEndpoint(IPEndPoint ep)
         {
             try
             {
-                _net?.Dispose();
-                try
-                {
-                    var main = dc.Main.Class.ME;
-                    if (main?.user != null)
-                        GameDataSync.RestoreOriginalUserState(main.user, true);
-                }
-                catch
-                {
-                }
-                ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
-                ResetLocalSkinSendCache();
-                ResetDoorMarkerState();
-
-                _net = NetNode.CreateClient(Logger, ep);
-                _netRole = NetRole.Client;
-                GameMenu.SetRole(_netRole);
-                GameMenu.NetRef = _net;
-                ConnectionUI.NotifyConnectionsChanged();
-
+                StartClientCore(() => _net = NetNode.CreateClient(Logger, ep));
                 Logger.Information($"[NetMod] Client connecting to {ep.Address}:{ep.Port}");
             }
             catch (Exception ex)
@@ -1932,17 +1933,7 @@ namespace DeadCellsMultiplayerMod
         {
             try
             {
-                _net?.Dispose();
-                ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
-                ResetLocalSkinSendCache();
-                ResetDoorMarkerState();
-
-                _net = NetNode.CreateSteamHost(Logger);
-                _netRole = NetRole.Host;
-                GameMenu.SetRole(_netRole);
-                GameMenu.NetRef = _net;
-                ConnectionUI.NotifyConnectionsChanged();
-
+                StartHostCore(() => _net = NetNode.CreateSteamHost(Logger));
                 Logger.Information("[NetMod] Host started with Steam P2P transport");
             }
             catch (Exception ex)
@@ -1958,26 +1949,7 @@ namespace DeadCellsMultiplayerMod
         {
             try
             {
-                _net?.Dispose();
-                try
-                {
-                    var main = dc.Main.Class.ME;
-                    if (main?.user != null)
-                        GameDataSync.RestoreOriginalUserState(main.user, true);
-                }
-                catch
-                {
-                }
-                ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
-                ResetLocalSkinSendCache();
-                ResetDoorMarkerState();
-
-                _net = NetNode.CreateSteamClient(Logger, hostSteamId);
-                _netRole = NetRole.Client;
-                GameMenu.SetRole(_netRole);
-                GameMenu.NetRef = _net;
-                ConnectionUI.NotifyConnectionsChanged();
-
+                StartClientCore(() => _net = NetNode.CreateSteamClient(Logger, hostSteamId));
                 Logger.Information("[NetMod] Client connecting via Steam P2P to hostSteamId={HostSteamId}", hostSteamId);
             }
             catch (Exception ex)
@@ -2007,10 +1979,11 @@ namespace DeadCellsMultiplayerMod
 
                 _net?.Dispose();
             }
-            catch { }
-            ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
-            ResetLocalSkinSendCache();
-            ResetDoorMarkerState();
+            catch (Exception ex)
+            {
+                Logger.Warning(ex, "[NetMod] Error during network stop/dispose");
+            }
+            ResetNetworkState();
             _net = null;
             _netRole = NetRole.None;
             GameMenu.NetRef = null;
