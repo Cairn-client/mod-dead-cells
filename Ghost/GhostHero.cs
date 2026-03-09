@@ -198,7 +198,6 @@ namespace DeadCellsMultiplayerMod
         {
             if (_labels.Count == 0) 
             {
-                _log.Debug($"{_labels.Count}");
                 return;
             } 
             var targetScale = GetNicknameScale();
