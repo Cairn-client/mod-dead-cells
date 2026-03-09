@@ -491,6 +491,7 @@ public sealed partial class NetNode : IDisposable
     private string? _cachedHostHeroSkin;
     private string? _cachedHostHeroHeadSkin;
     private string? _cachedHostLevelGraphPayload;
+    private readonly Dictionary<string, string> _cachedHostLevelGraphsByLevelId = new(StringComparer.Ordinal);
 
     public bool HasRemote
     {
@@ -1294,7 +1295,10 @@ public sealed partial class NetNode : IDisposable
                 }
 
                 if (_role == NetRole.Host && senderId.HasValue)
+                {
                     forwardLine = BuildTaggedLine("LEVEL", effectiveId.Value, levelValue);
+                    TrySendLevelGraphForLevelOnClientEntry(levelValue);
+                }
             }
             return true;
         }
@@ -2971,13 +2975,17 @@ public sealed partial class NetNode : IDisposable
         _log.Information("[NetNode] Sent level seed for {LevelId}", safeId);
     }
 
-    public void SendLevelGraph(string json)
+    public void SendLevelGraph(string levelId, string json)
     {
         if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending level graph: no connected client");
             lock (_hostCacheSync)
+            {
                 _cachedHostLevelGraphPayload = string.IsNullOrWhiteSpace(json) ? null : json;
+                if (!string.IsNullOrWhiteSpace(levelId) && !string.IsNullOrWhiteSpace(json))
+                    _cachedHostLevelGraphsByLevelId[levelId] = json;
+            }
             return;
         }
 
@@ -2985,10 +2993,30 @@ public sealed partial class NetNode : IDisposable
             return;
 
         lock (_hostCacheSync)
+        {
             _cachedHostLevelGraphPayload = json;
+            if (!string.IsNullOrWhiteSpace(levelId))
+                _cachedHostLevelGraphsByLevelId[levelId] = json;
+        }
 
         SendRaw("LGRAPH|" + json);
         _log.Information("[NetNode] Sent level graph ({Length} bytes)", json.Length);
+    }
+
+    private void TrySendLevelGraphForLevelOnClientEntry(string levelId)
+    {
+        if (string.IsNullOrWhiteSpace(levelId))
+            return;
+
+        string? graphJson;
+        lock (_hostCacheSync)
+        {
+            if (!_cachedHostLevelGraphsByLevelId.TryGetValue(levelId, out graphJson) || string.IsNullOrWhiteSpace(graphJson))
+                return;
+        }
+
+        SendRaw("LGRAPH|" + graphJson);
+        _log.Information("[NetNode] Sent level graph for {LevelId} on client entry (proactive)", levelId);
     }
 
     public void SendGeneratePayload(string json)
@@ -3804,6 +3832,7 @@ public sealed partial class NetNode : IDisposable
             _cachedHostHeroSkin = null;
             _cachedHostHeroHeadSkin = null;
             _cachedHostLevelGraphPayload = null;
+            _cachedHostLevelGraphsByLevelId.Clear();
         }
         lock (_sync)
         {

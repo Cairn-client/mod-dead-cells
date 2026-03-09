@@ -146,7 +146,7 @@ namespace DeadCellsMultiplayerMod
                 }
 
                 var json = JsonSerializer.Serialize(sync);
-                net.SendLevelGraph(json);
+                net.SendLevelGraph(levelId, json);
                 _log?.Information("[NetNode] Sent level graph for {LevelId} ({Count} nodes, postRand={PostRand})",
                     levelId,
                     sync.Nodes.Count,
@@ -213,6 +213,7 @@ namespace DeadCellsMultiplayerMod
             var deadline = Environment.TickCount64 + timeoutMs;
             while (Environment.TickCount64 < deadline)
             {
+                GameMenu.ProcessMainThreadQueue();
                 Thread.Sleep(2);
                 if (TryGetRemoteLevelGraph(levelId, out graph))
                     return true;

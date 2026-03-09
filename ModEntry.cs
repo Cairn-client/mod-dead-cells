@@ -328,6 +328,7 @@ namespace DeadCellsMultiplayerMod
             var lobbyId = data.m_steamIDLobby.m_SteamID;
             if (lobbyId == 0UL)
                 return;
+            Instance?.Logger.Information("[NetMod][Steam] Overlay join requested lobbyId={LobbyId}", lobbyId);
             GameMenu.EnqueueMainThread(() => GameMenu.HandleSteamOverlayJoinRequest(lobbyId));
         }
 
@@ -758,7 +759,7 @@ namespace DeadCellsMultiplayerMod
             {
                 try
                 {
-                    const int graphSyncWaitMs = 6000;
+                    const int graphSyncWaitMs = 10000;
                     if (GameDataSync.TryApplyRemoteLevelGraph(graphLevelId, graph, rng, graphSyncWaitMs, out var remoteRoot, out var reason))
                     {
                         Logger.Information("[NetMod] Applied remote level graph+rand for {LevelId}", graphLevelId);
@@ -888,6 +889,7 @@ namespace DeadCellsMultiplayerMod
         {
             if (!_ready) return;
             TryRunSteamCallbacks();
+            GameMenu.ProcessMainThreadQueue();
             GameMenu.TickMenu(dt);
         }
 
