@@ -1995,9 +1995,15 @@ namespace DeadCellsMultiplayerMod
             try
             {
                 if (roleBeforeStop == NetRole.Client)
+                {
                     Logger.Information("[NetMod] Disconnecting client from host...");
+                    _net?.SendControlAndFlush("BYE", 260);
+                }
                 else if (roleBeforeStop == NetRole.Host)
+                {
                     Logger.Information("[NetMod] Disposing host server...");
+                    _net?.SendControlAndFlush("KICK", 320);
+                }
 
                 _net?.Dispose();
             }

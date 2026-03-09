@@ -1233,7 +1233,7 @@ namespace DeadCellsMultiplayerMod
             var roleBefore = _role;
             if (roleBefore == NetRole.Host)
             {
-                try { NetRef?.SendKick(); } catch { }
+                try { NetRef?.SendControlAndFlush("KICK", 320); } catch { }
             }
 
             try
@@ -1584,6 +1584,11 @@ namespace DeadCellsMultiplayerMod
 
         private static void ResetSteamState()
         {
+            var lobbyId = _steamLobbyId;
+            if (lobbyId != 0UL)
+            {
+                try { SteamConnect.LeaveLobby(lobbyId); } catch { }
+            }
             try { SteamConnect.StopHostLobbyWorker(); } catch { }
             _steamLobbyActive = false;
             _steamLobbyId = 0;

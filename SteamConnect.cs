@@ -20,6 +20,8 @@ namespace DeadCellsMultiplayerMod
         private const int DeadCellsAppId = 588650;
         private const int WorkerTimeoutMs = 25000;
         private const int SteamCallTimeoutMs = 15000;
+        private const int JoinWorkerRetryCount = 3;
+        private const int JoinWorkerRetryDelayMs = 400;
         private const string HostIpLobbyKey = "dccm_host_ip";
         private const string HostPortLobbyKey = "dccm_host_port";
         private const string ModMarkerLobbyKey = "dccm_mod";
@@ -190,7 +192,19 @@ namespace DeadCellsMultiplayerMod
                 LobbyCode = lobbyCode
             };
 
-            if (!TryRunWorker(request, out var response))
+            var workerSucceeded = TryRunWorker(request, out var response);
+            if (!workerSucceeded && IsTransientJoinWorkerError(response.Error))
+            {
+                for (var attempt = 0; attempt < JoinWorkerRetryCount; attempt++)
+                {
+                    Thread.Sleep(JoinWorkerRetryDelayMs);
+                    workerSucceeded = TryRunWorker(request, out response);
+                    if (workerSucceeded || !IsTransientJoinWorkerError(response.Error))
+                        break;
+                }
+            }
+
+            if (!workerSucceeded)
             {
                 result = new JoinLobbyResult
                 {
@@ -233,6 +247,16 @@ namespace DeadCellsMultiplayerMod
             };
 
             return true;
+        }
+
+        private static bool IsTransientJoinWorkerError(string? error)
+        {
+            if (string.IsNullOrWhiteSpace(error))
+                return false;
+
+            return error.IndexOf("host data is unavailable", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   error.IndexOf("data request failed", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   error.IndexOf("callback timeout", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         internal static void StopHostLobbyWorker()
@@ -296,6 +320,20 @@ namespace DeadCellsMultiplayerMod
                 catch
                 {
                 }
+            }
+        }
+
+        internal static void LeaveLobby(ulong lobbyId)
+        {
+            if (lobbyId == 0UL)
+                return;
+
+            try
+            {
+                SteamMatchmaking.LeaveLobby(new CSteamID(lobbyId));
+            }
+            catch
+            {
             }
         }
 
@@ -983,21 +1021,20 @@ namespace DeadCellsMultiplayerMod
                 }
             }
 
-            if (!IPAddress.TryParse(hostIp, out _))
+            var hostPort = 0;
+            var hasValidEndpoint = false;
+            if (IPAddress.TryParse(hostIp, out _) &&
+                int.TryParse(hostPortRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out hostPort))
             {
-                return new WorkerResponse
-                {
-                    Success = false,
-                    Error = "Steam lobby does not provide a valid host IP"
-                };
+                hasValidEndpoint = true;
             }
 
-            if (!int.TryParse(hostPortRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var hostPort))
+            if (hostSteamId == 0UL && !hasValidEndpoint)
             {
                 return new WorkerResponse
                 {
                     Success = false,
-                    Error = "Steam lobby does not provide a valid host port"
+                    Error = "Steam lobby host data is unavailable"
                 };
             }
 
@@ -1006,8 +1043,8 @@ namespace DeadCellsMultiplayerMod
                 Success = true,
                 LobbyId = targetLobbyId,
                 HostSteamId = hostSteamId,
-                HostIp = hostIp,
-                HostPort = NormalizePort(hostPort),
+                HostIp = hasValidEndpoint ? hostIp : string.Empty,
+                HostPort = hasValidEndpoint ? NormalizePort(hostPort) : 0,
                 PersonaName = SafeGetPersonaName()
             };
         }
@@ -1035,7 +1072,7 @@ namespace DeadCellsMultiplayerMod
             }
 
             var start = Stopwatch.GetTimestamp();
-            var timeoutTicks = (long)(Stopwatch.Frequency * 4.0);
+            var timeoutTicks = (long)(Stopwatch.Frequency * 8.0);
             while (Stopwatch.GetTimestamp() - start < timeoutTicks)
             {
                 try
@@ -1065,6 +1102,24 @@ namespace DeadCellsMultiplayerMod
                 }
 
                 Thread.Sleep(20);
+            }
+
+            // Steam lobby data propagation can lag, but lobby owner is enough for P2P transport.
+            try
+            {
+                if (hostSteamId == 0UL)
+                    hostSteamId = SteamMatchmaking.GetLobbyOwner(lobby).m_SteamID;
+            }
+            catch
+            {
+                hostSteamId = 0UL;
+            }
+
+            if (hostSteamId != 0UL)
+            {
+                hostIp = SteamMatchmaking.GetLobbyData(lobby, HostIpLobbyKey) ?? string.Empty;
+                hostPortRaw = SteamMatchmaking.GetLobbyData(lobby, HostPortLobbyKey) ?? string.Empty;
+                return true;
             }
 
             if (string.IsNullOrWhiteSpace(error))

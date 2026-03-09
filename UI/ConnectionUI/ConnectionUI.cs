@@ -455,10 +455,10 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             }
 
             var leftPadding = 10.0 * uiScale;
-            var bottomPadding = 8.0 * uiScale;
+            var topPadding = 8.0 * uiScale;
             this.lobbyCodeFlow.reflow();
             this.lobbyCodeFlow.x = System.Math.Max(2.0, leftPadding);
-            this.lobbyCodeFlow.y = System.Math.Max(2.0, this.bg.hei - this.lobbyCodeFlow.get_innerHeight() - bottomPadding);
+            this.lobbyCodeFlow.y = System.Math.Max(2.0, topPadding);
             this.lobbyCodeFlow.set_visible(true);
         }
 

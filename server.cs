@@ -1897,6 +1897,11 @@ public sealed class NetNode : IDisposable
             return false;
         }
 
+        if (line.StartsWith("BYE", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
         if (TryParsePositionLine(line, senderId, out var remoteId, out var cx, out var cy, out var dir, out var hasDir))
         {
             if (forceSenderId && senderId.HasValue)
@@ -3410,6 +3415,27 @@ public sealed class NetNode : IDisposable
     {
         if (!HasAnyConnection()) return;
         SendRaw("KICK");
+    }
+
+    public void SendControlAndFlush(string payload, int timeoutMs = 250)
+    {
+        if (!HasAnyConnection())
+            return;
+
+        if (string.IsNullOrWhiteSpace(payload))
+            return;
+
+        var line = payload.EndsWith('\n') ? payload : payload + "\n";
+        try
+        {
+            var task = SendLineSafe(line);
+            if (!task.Wait(timeoutMs))
+                _log.Warning("[NetNode] Timed out sending control line \"{Payload}\"", payload);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning("[NetNode] Failed to send control line \"{Payload}\": {Message}", payload, ex.Message);
+        }
     }
 
 
