@@ -8,9 +8,12 @@ namespace DeadCellsMultiplayerMod;
 public partial class ModEntry
 {
     private const double LocalAttackRepeatBlockSeconds = 0.06;
+    private const double LocalInterruptRepeatBlockSeconds = 0.06;
     private const double LocalShieldPulseSeconds = 0.08;
     private long _lastLocalAttackSendTicks;
     private string _lastLocalAttackKey = string.Empty;
+    private long _lastLocalInterruptSendTicks;
+    private string _lastLocalInterruptKey = string.Empty;
     private long _lastLocalShieldPulseTicks;
 
     internal InventItem NotifyInventoryAddFromKingWeaponHooks(Hook_Inventory.orig_add orig, Inventory self, InventItem i)
@@ -127,6 +130,37 @@ public partial class ModEntry
         var ammo = GetWeaponAmmoForSync(item);
         _net?.SendAttack(kindId!, slot, item.permanentId, ammo);
         _lastLocalShieldPulseTicks = now;
+    }
+
+    internal void NotifyLocalWeaponInterruptFromKingWeaponHooks(Weapon self)
+    {
+        if(_netRole == NetRole.None || self == null || me == null)
+            return;
+
+        if(!ReferenceEquals(self.owner, me))
+            return;
+
+        var item = self.item;
+        if(item == null || !TryGetWeaponKindId(item, out var kindId) || string.IsNullOrWhiteSpace(kindId))
+            return;
+
+        var slot = ResolveWeaponSlotForSend(me.inventory, item, kindId!);
+        if(slot < 0)
+            slot = 0;
+
+        var now = Stopwatch.GetTimestamp();
+        var interruptKey = $"{kindId}|{slot}|{item.permanentId}";
+        var minRepeatTicks = (long)(Stopwatch.Frequency * LocalInterruptRepeatBlockSeconds);
+        if(_lastLocalInterruptSendTicks != 0 &&
+           now - _lastLocalInterruptSendTicks < minRepeatTicks &&
+           string.Equals(_lastLocalInterruptKey, interruptKey, StringComparison.Ordinal))
+            return;
+
+        _lastLocalInterruptSendTicks = now;
+        _lastLocalInterruptKey = interruptKey;
+
+        var ammo = GetWeaponAmmoForSync(item);
+        _net?.SendAttack(kindId!, slot, item.permanentId, ammo, RemoteAttackAction.Interrupt);
     }
 
     internal void NotifyLocalBowShotFromKingWeaponHooks(BaseBow self)

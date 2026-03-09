@@ -63,19 +63,18 @@ namespace DeadCellsMultiplayerMod
         private bool _ready;
         private static bool s_hooksInstalled;
         private static IDisposable? s_steamOverlayJoinCallback;
-        private const int MaxClientSlots = 3;
-
         private NetRole _netRole = NetRole.None;
         public static NetNode? _net;
 
         public dc.pr.Game? game;
 
-        public static GhostKing[] clients = new GhostKing[MaxClientSlots];
-        public static Kinghead?[] clientHeads = new Kinghead?[MaxClientSlots];
-        public static string?[] clientLabels = new string?[MaxClientSlots];
-        public static int[] clientIds = new int[MaxClientSlots];
-        public static string?[] clientSkins = new string?[MaxClientSlots];
-        public static string?[] clientHeadSkins = new string?[MaxClientSlots];
+        public static GhostKing[] clients = new GhostKing[NetNode.MaxClientSlots];
+        public static Kinghead?[] clientHeads = new Kinghead?[NetNode.MaxClientSlots];
+        public static string?[] clientLabels = new string?[NetNode.MaxClientSlots];
+        public static int[] clientIds = new int[NetNode.MaxClientSlots];
+        public static string?[] clientSkins = new string?[NetNode.MaxClientSlots];
+        public static string?[] clientHeadSkins = new string?[NetNode.MaxClientSlots];
+        private static bool[] pendingClientHeadRecreate = new bool[NetNode.MaxClientSlots];
         public static Hero me = null;
         public static GhostHero _ghost = null;
 
@@ -288,6 +287,7 @@ namespace DeadCellsMultiplayerMod
                 clientIds[i] = 0;
                 clientSkins[i] = null;
                 clientHeadSkins[i] = null;
+                pendingClientHeadRecreate[i] = false;
                 rLastX[i] = 0;
                 rLastY[i] = 0;
             }
@@ -919,10 +919,31 @@ namespace DeadCellsMultiplayerMod
             var ftime = dc.pr.Game.Class.ME.ftime;
             for (int i = 0; i < clientHeads.Length; i++)
             {
+                var client = clients[i];
+                if (client == null)
+                {
+                    pendingClientHeadRecreate[i] = false;
+                    continue;
+                }
+
                 var head = clientHeads[i];
-                if (head != null)
+                if (head == null)
+                {
+                    var hasKnownHead = !string.IsNullOrWhiteSpace(client.RemoteHeadSkinId) ||
+                                       !string.IsNullOrWhiteSpace(clientHeadSkins[i]);
+                    if (pendingClientHeadRecreate[i] || hasKnownHead)
+                        RecreateClientHead(i);
+                    continue;
+                }
+
+                try
                 {
                     head.updateHeadFx(ftime);
+                }
+                catch
+                {
+                    pendingClientHeadRecreate[i] = true;
+                    RecreateClientHead(i);
                 }
             }
         }
@@ -1089,8 +1110,8 @@ namespace DeadCellsMultiplayerMod
             lastDir = dir;
         }
 
-        public static double[] rLastX = new double[MaxClientSlots];
-        public static double[] rLastY = new double[MaxClientSlots];
+        public static double[] rLastX = new double[NetNode.MaxClientSlots];
+        public static double[] rLastY = new double[NetNode.MaxClientSlots];
 
         internal static bool TryGetClientIndex(int localId, int remoteId, out int index)
         {
@@ -1124,14 +1145,32 @@ namespace DeadCellsMultiplayerMod
             var client = clients[index];
             if (client != null)
             {
-                if (!string.Equals(prev, cleaned, StringComparison.Ordinal))
+                if (!string.Equals(prev, cleaned, StringComparison.Ordinal) || client.spr == null)
                 {
-                    if (!instance.RecreateClientKing(index))
+                    try
+                    {
                         client.ApplyRemoteSkin(cleaned);
-                }
-                else if (client.spr == null)
-                {
-                    client.ApplyRemoteSkin(cleaned);
+                    }
+                    catch (Exception ex)
+                    {
+                        instance.Logger.Warning(
+                            "[NetMod] Failed to apply client skin remoteId={RemoteId} slot={Slot}: {Message}",
+                            remoteId,
+                            index,
+                            ex.Message);
+
+                        if (!string.Equals(cleaned, "PrisonerDefault", StringComparison.Ordinal))
+                        {
+                            try
+                            {
+                                client.ApplyRemoteSkin("PrisonerDefault");
+                                clientSkins[index] = "PrisonerDefault";
+                            }
+                            catch
+                            {
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1211,13 +1250,18 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             var client = clients[slot];
-            if (client == null || me == null || me._level == null)
+            var localHero = me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+            var localLevel = localHero?._level;
+            if (client == null || localHero == null || localLevel == null || client.spr == null)
+            {
+                pendingClientHeadRecreate[slot] = true;
                 return;
+            }
 
             var existing = clientHeads[slot];
             if (existing != null)
             {
-                existing.dispose();
+                try { existing.dispose(); } catch { }
                 clientHeads[slot] = null;
             }
 
@@ -1227,13 +1271,16 @@ namespace DeadCellsMultiplayerMod
             try
             {
                 bool fromUI = false;
-                var newHead = new Kinghead(me, client, me._level, Logger);
-                newHead.init(me._level, null, Ref<bool>.From(ref fromUI));
+                var attachRoot = new dc.h2d.Object(client.spr);
+                var newHead = new Kinghead(localHero, client, localLevel, Logger);
+                newHead.init(localLevel, attachRoot, Ref<bool>.From(ref fromUI));
                 clientHeads[slot] = newHead;
                 client.head = newHead;
+                pendingClientHeadRecreate[slot] = false;
             }
             catch (Exception ex)
             {
+                pendingClientHeadRecreate[slot] = true;
                 Logger.Warning("[NetMod] Failed to recreate client head slot {slot}: {msg}", slot, ex.Message);
             }
             finally
@@ -1486,6 +1533,7 @@ namespace DeadCellsMultiplayerMod
                 try { head.dispose(); } catch { }
                 clientHeads[slot] = null;
             }
+            pendingClientHeadRecreate[slot] = false;
 
             var client = clients[slot];
             if (client != null)
@@ -1542,7 +1590,10 @@ namespace DeadCellsMultiplayerMod
 
                 var client = clients[index];
                 if (client?.kingWeaponsManager == null) continue;
-                client.kingWeaponsManager.queueAttack(attack.Slot);
+                if (attack.Action == RemoteAttackAction.Interrupt)
+                    client.kingWeaponsManager.queueInterrupt(attack.Slot);
+                else
+                    client.kingWeaponsManager.queueAttack(attack.Slot);
             }
         }
 

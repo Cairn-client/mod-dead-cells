@@ -13,6 +13,7 @@ using Serilog.Core;
 using Steamworks;
 
 public enum NetRole { None, Host, Client }
+public enum RemoteAttackAction { Attack, Interrupt }
 
 public sealed partial class NetNode : IDisposable
 {
@@ -196,14 +197,16 @@ public sealed partial class NetNode : IDisposable
         public readonly int Slot;
         public readonly int PermanentId;
         public readonly int? Ammo;
+        public readonly RemoteAttackAction Action;
 
-        public RemoteAttack(int id, string? kind, int slot, int permanentId, int? ammo)
+        public RemoteAttack(int id, string? kind, int slot, int permanentId, int? ammo, RemoteAttackAction action)
         {
             Id = id;
             Kind = kind;
             Slot = slot;
             PermanentId = permanentId;
             Ammo = ammo;
+            Action = action;
         }
     }
 
@@ -485,6 +488,8 @@ public sealed partial class NetNode : IDisposable
     private string? _cachedHostBlueprintsPayload;
     private string? _cachedHostLevelDescPayload;
     private string? _cachedHostLevelSeedPayload;
+    private string? _cachedHostHeroSkin;
+    private string? _cachedHostHeroHeadSkin;
     private string? _cachedHostLevelGraphPayload;
 
     public bool HasRemote
@@ -849,6 +854,8 @@ public sealed partial class NetNode : IDisposable
         string? cachedLevelDescPayload;
         string? cachedLevelSeedPayload;
         string? cachedLevelGraphPayload;
+        string? cachedHeroSkin;
+        string? cachedHeroHeadSkin;
         lock (_hostCacheSync)
         {
             cachedBossRune = _cachedHostBossRune;
@@ -860,6 +867,8 @@ public sealed partial class NetNode : IDisposable
             cachedLevelDescPayload = _cachedHostLevelDescPayload;
             cachedLevelSeedPayload = _cachedHostLevelSeedPayload;
             cachedLevelGraphPayload = _cachedHostLevelGraphPayload;
+            cachedHeroSkin = _cachedHostHeroSkin;
+            cachedHeroHeadSkin = _cachedHostHeroHeadSkin;
         }
 
         if (cachedSerializerSeq.HasValue && cachedSerializerUid.HasValue)
@@ -878,6 +887,10 @@ public sealed partial class NetNode : IDisposable
             await SendLineToSteamClientSafe(connection, $"LSEED|{cachedLevelSeedPayload}\n").ConfigureAwait(false);
         if (cachedLevelGraphPayload != null)
             await SendLineToSteamClientSafe(connection, $"LGRAPH|{cachedLevelGraphPayload}\n").ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(cachedHeroSkin))
+            await SendLineToSteamClientSafe(connection, BuildTaggedLine("SKIN", 1, cachedHeroSkin)).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(cachedHeroHeadSkin))
+            await SendLineToSteamClientSafe(connection, BuildTaggedLine("HEAD", 1, cachedHeroHeadSkin)).ConfigureAwait(false);
         await SendKnownUsersToSteamClientSafe(connection).ConfigureAwait(false);
         if (_role == NetRole.Host && TryBuildLocalHpLine(out var localHpLine))
             await SendLineToSteamClientSafe(connection, localHpLine).ConfigureAwait(false);
@@ -1401,7 +1414,7 @@ public sealed partial class NetNode : IDisposable
         if (line.StartsWith("ATK|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line[(line.IndexOf('|') + 1)..];
-            ParseWeaponPayload(payload, out var parsedId, out var kind, out var slot, out var permanentId, out var ammo);
+            ParseAttackPayload(payload, out var parsedId, out var kind, out var slot, out var permanentId, out var ammo, out var action);
             var effectiveId = parsedId ?? senderId;
             if (forceSenderId)
                 effectiveId = senderId;
@@ -1410,7 +1423,7 @@ public sealed partial class NetNode : IDisposable
                 lock (_sync)
                 {
                     var state = GetOrCreateRemoteLocked(effectiveId.Value);
-                    _pendingAttacks.Add(new RemoteAttack(effectiveId.Value, kind, slot, permanentId, ammo));
+                    _pendingAttacks.Add(new RemoteAttack(effectiveId.Value, kind, slot, permanentId, ammo, action));
                     state.HasRemote = true;
                     _hasRemote = true;
                     if (_primaryRemoteId == 0)
@@ -1418,7 +1431,7 @@ public sealed partial class NetNode : IDisposable
                 }
 
                 if (_role == NetRole.Host && senderId.HasValue)
-                    forwardLine = BuildWeaponLine("ATK", effectiveId.Value, kind, slot, permanentId, ammo);
+                    forwardLine = BuildAttackLine(effectiveId.Value, kind, slot, permanentId, ammo, action);
             }
             return true;
         }
@@ -1870,6 +1883,57 @@ public sealed partial class NetNode : IDisposable
         if (parts.Length > startIndex + 3 &&
             int.TryParse(parts[startIndex + 3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedAmmo))
             ammo = parsedAmmo;
+    }
+
+    private static void ParseAttackPayload(
+        string payload,
+        out int? parsedId,
+        out string kind,
+        out int slot,
+        out int permanentId,
+        out int? ammo,
+        out RemoteAttackAction action)
+    {
+        ParseWeaponPayload(payload, out parsedId, out kind, out slot, out permanentId, out ammo);
+        action = RemoteAttackAction.Attack;
+
+        var parts = payload.Split('|');
+        var startIndex = 0;
+        if (parts.Length >= 2 &&
+            int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+        {
+            startIndex = 1;
+        }
+
+        var firstOptionalIndex = startIndex + 3;
+        var actionIndex = -1;
+        if (parts.Length > firstOptionalIndex)
+        {
+            if (int.TryParse(parts[firstOptionalIndex], NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+                actionIndex = firstOptionalIndex + 1;
+            else
+                actionIndex = firstOptionalIndex;
+        }
+
+        if (actionIndex >= 0 && parts.Length > actionIndex)
+            action = ParseAttackActionToken(parts[actionIndex]);
+    }
+
+    private static RemoteAttackAction ParseAttackActionToken(string? rawAction)
+    {
+        if (string.IsNullOrWhiteSpace(rawAction))
+            return RemoteAttackAction.Attack;
+
+        var action = rawAction.Trim();
+        if (action.Equals("INT", StringComparison.OrdinalIgnoreCase) ||
+            action.Equals("INTERRUPT", StringComparison.OrdinalIgnoreCase) ||
+            action.Equals("I", StringComparison.OrdinalIgnoreCase) ||
+            action.Equals("1", StringComparison.OrdinalIgnoreCase))
+        {
+            return RemoteAttackAction.Interrupt;
+        }
+
+        return RemoteAttackAction.Attack;
     }
 
     private static void ParseHpPayload(string payload, out int? parsedId, out int life, out int maxLife, out int lif, out int bonusLife, out int recover)
@@ -2324,6 +2388,19 @@ public sealed partial class NetNode : IDisposable
         return $"{tag}|{id}|{kind}|{slot}|{permanentId}\n";
     }
 
+    private static string BuildAttackLine(int id, string kind, int slot, int permanentId, int? ammo, RemoteAttackAction action)
+    {
+        var actionToken = AttackActionToToken(action);
+        if (ammo.HasValue)
+            return $"ATK|{id}|{kind}|{slot}|{permanentId}|{ammo.Value}|{actionToken}\n";
+        return $"ATK|{id}|{kind}|{slot}|{permanentId}|{actionToken}\n";
+    }
+
+    private static string AttackActionToToken(RemoteAttackAction action)
+    {
+        return action == RemoteAttackAction.Interrupt ? "INT" : "ATK";
+    }
+
     private static string BuildHpLine(int id, int life, int maxLife, int lif, int bonusLife, int recover)
     {
         return $"HP|{id}|{life}|{maxLife}|{lif}|{bonusLife}|{recover}\n";
@@ -2643,6 +2720,18 @@ public sealed partial class NetNode : IDisposable
                 continue;
             var line = BuildTaggedLine("USER", state.Id, username);
             await SendLineToSteamClientSafe(connection, line).ConfigureAwait(false);
+
+            if (!string.IsNullOrWhiteSpace(state.Skin))
+            {
+                var skinLine = BuildTaggedLine("SKIN", state.Id, state.Skin);
+                await SendLineToSteamClientSafe(connection, skinLine).ConfigureAwait(false);
+            }
+
+            if (!string.IsNullOrWhiteSpace(state.Head))
+            {
+                var headLine = BuildTaggedLine("HEAD", state.Id, state.Head);
+                await SendLineToSteamClientSafe(connection, headLine).ConfigureAwait(false);
+            }
         }
     }
 
@@ -3049,7 +3138,7 @@ public sealed partial class NetNode : IDisposable
             SendRaw($"INV|{idPart}{safe}|{slot}|{permanentId}");
     }
 
-    public void SendAttack(string kind, int slot, int permanentId, int? ammo = null)
+    public void SendAttack(string kind, int slot, int permanentId, int? ammo = null, RemoteAttackAction action = RemoteAttackAction.Attack)
     {
         if (!HasAnyConnection())
         {
@@ -3060,23 +3149,32 @@ public sealed partial class NetNode : IDisposable
         if (safe.Length == 0) return;
 
         var idPart = ID > 0 ? $"{ID}|" : string.Empty;
+        var actionToken = AttackActionToToken(action);
         if (ammo.HasValue)
-            SendRaw($"ATK|{idPart}{safe}|{slot}|{permanentId}|{ammo.Value}");
+            SendRaw($"ATK|{idPart}{safe}|{slot}|{permanentId}|{ammo.Value}|{actionToken}");
         else
-            SendRaw($"ATK|{idPart}{safe}|{slot}|{permanentId}");
+            SendRaw($"ATK|{idPart}{safe}|{slot}|{permanentId}|{actionToken}");
     }
 
     public void SendHeroSkin(string skin)
     {
+        var safe = (skin ?? "PrisonerDefault").Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
+        if (string.IsNullOrWhiteSpace(safe))
+            safe = "PrisonerDefault";
+
+        if (_role == NetRole.Host)
+        {
+            lock (_hostCacheSync)
+            {
+                _cachedHostHeroSkin = safe;
+            }
+        }
+
         if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending hero skin: no connected client");
             return;
         }
-
-        var safe = (skin ?? "PrisonerDefault").Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
-        if (string.IsNullOrWhiteSpace(safe))
-            safe = "PrisonerDefault";
 
         var idPart = ID > 0 ? $"{ID}|" : string.Empty;
         SendRaw("SKIN|" + idPart + safe);
@@ -3085,15 +3183,23 @@ public sealed partial class NetNode : IDisposable
 
     public void SendHeroHeadSkin(string skin)
     {
+        var safe = (skin ?? "PrisonerDefault").Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
+        if (string.IsNullOrWhiteSpace(safe))
+            safe = "BaseFlame";
+
+        if (_role == NetRole.Host)
+        {
+            lock (_hostCacheSync)
+            {
+                _cachedHostHeroHeadSkin = safe;
+            }
+        }
+
         if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending hero skin: no connected client");
             return;
         }
-
-        var safe = (skin ?? "PrisonerDefault").Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
-        if (string.IsNullOrWhiteSpace(safe))
-            safe = "BaseFlame";
 
         var idPart = ID > 0 ? $"{ID}|" : string.Empty;
         SendRaw("HEAD|" + idPart + safe);
@@ -3695,6 +3801,8 @@ public sealed partial class NetNode : IDisposable
             _cachedHostBlueprintsPayload = null;
             _cachedHostLevelDescPayload = null;
             _cachedHostLevelSeedPayload = null;
+            _cachedHostHeroSkin = null;
+            _cachedHostHeroHeadSkin = null;
             _cachedHostLevelGraphPayload = null;
         }
         lock (_sync)

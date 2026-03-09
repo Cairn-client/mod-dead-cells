@@ -52,8 +52,8 @@ This method will automatically install and keep DCCM up to date.
 
 ---
 
-### 🔹 Non-Steam version
-
+### 🔹 ~~Non-Steam version~~
+## DCCM works only on Steam currently!
 If you are using a **non-Steam version** of Dead Cells:
 
 1. Download the latest release of **DCCM** from the official repository:
@@ -124,9 +124,10 @@ On the first launch, required configuration files will be generated automaticall
 - [x] Add player ghost animations  
 - [x] Improve ghost animation quality  
 - [x] Synchronize level generation  
-- [x] Synchronize enemies  
+- [x] Synchronize enemies
+- [x] Implement death handling for ghost player
+- [ ] Implement more interactions
 - [ ] Synchronize bosses  
-- [ ] Implement death handling for ghost player  
 
 ---
 
