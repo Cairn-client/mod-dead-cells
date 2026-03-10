@@ -390,7 +390,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         private void EnsureLobbyCodeFlow(double uiScale)
         {
-            if (this.bg == null)
+            if (this.bg == null || base.root == null)
                 return;
 
             if (this.lobbyCodeFlow == null)
@@ -398,11 +398,12 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 this.lobbyCodeFlow = new Flow(null);
                 this.lobbyCodeFlow.isVertical = true;
                 this.lobbyCodeFlow.set_horizontalAlign(new FlowAlign.Left());
-                this.lobbyCodeFlow.set_verticalAlign(new FlowAlign.Top());
+                this.lobbyCodeFlow.set_verticalAlign(new FlowAlign.Bottom());
+                this.lobbyCodeFlow.set_verticalSpacing((int)(2 * uiScale));
+                this.lobbyCodeFlow.x += 10;
+                this.lobbyCodeFlow.y += 80;
                 this.bg.addChild(this.lobbyCodeFlow);
             }
-
-            this.lobbyCodeFlow.set_verticalSpacing((int)(2 * uiScale));
 
             if (this.lobbyCodeTitleLabel == null)
             {
@@ -424,8 +425,18 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 this.lobbyCodeFlow.addChild(this.lobbyIdLabel);
             }
 
-            this.lobbyCodeTitleLabel.scaleX = 0.44 * uiScale;
-            this.lobbyCodeTitleLabel.scaleY = 0.44 * uiScale;
+            var lobbyCodeScale = 0.55 * uiScale;
+            this.lobbyCodeTitleLabel.scaleX = lobbyCodeScale;
+            this.lobbyCodeTitleLabel.scaleY = lobbyCodeScale;
+            this.lobbyIdLabel.scaleX = lobbyCodeScale;
+            this.lobbyIdLabel.scaleY = lobbyCodeScale;
+
+            try
+            {
+                this.lobbyCodeTitleLabel.font.size = 14;
+                this.lobbyIdLabel.font.size = 16;
+            }
+            catch { /* font may not be available on dc.ui.Text */ }
         }
 
         private void UpdateLobbyIdLabel(bool forceRefreshText)
@@ -455,10 +466,11 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             }
 
             var leftPadding = 10.0 * uiScale;
-            var topPadding = 8.0 * uiScale;
+            var bottomPadding = 8.0 * uiScale;
             this.lobbyCodeFlow.reflow();
-            this.lobbyCodeFlow.x = System.Math.Max(2.0, leftPadding);
-            this.lobbyCodeFlow.y = System.Math.Max(2.0, topPadding);
+            var flowHeight = this.lobbyCodeFlow.get_innerHeight();
+            this.lobbyCodeFlow.x = this.bg.x + leftPadding;
+            this.lobbyCodeFlow.y = this.bg.y + this.bg.hei - flowHeight - bottomPadding;
             this.lobbyCodeFlow.set_visible(true);
         }
 
@@ -503,15 +515,15 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         private void OnClick(Event e)
         {
-            if (this.lobbyCodeFlow == null || !this.lobbyCodeFlow.visible)
+            if (this.lobbyCodeFlow == null || !this.lobbyCodeFlow.visible || this.bg == null)
                 return;
 
             var x = e.relX;
             var y = e.relY;
             var width = this.lobbyCodeFlow.get_innerWidth();
             var height = this.lobbyCodeFlow.get_innerHeight();
-            var minX = this.lobbyCodeFlow.x;
-            var minY = this.lobbyCodeFlow.y;
+            var minX = this.lobbyCodeFlow.x - this.bg.x;
+            var minY = this.lobbyCodeFlow.y - this.bg.y;
             var maxX = minX + width;
             var maxY = minY + height;
 
