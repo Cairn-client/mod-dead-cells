@@ -49,6 +49,7 @@ using dc.en.inter.door;
 using Steamworks;
 using System.Collections.Generic;
 using System.Reflection;
+using DeadCellsMultiplayerMod.Interaction;
 
 
 namespace DeadCellsMultiplayerMod
@@ -367,6 +368,7 @@ namespace DeadCellsMultiplayerMod
             MobsSynchronization mobs = new MobsSynchronization(this);
             Minimapreveal minimapreveal = new Minimapreveal();
             LevelExitSync levelExitSync = new LevelExitSync(this);
+            InteractionSync interactionSync = new InteractionSync(this);
             ConnectionUI.Initialize(this);
             GameMenu.Initialize(Logger);
             EventSystem.BroadcastEvent<IOnAdvancedModuleInitializing, ModEntry>(this);

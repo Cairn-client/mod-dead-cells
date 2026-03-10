@@ -8,6 +8,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Globalization;
 using DeadCellsMultiplayerMod;
+using DeadCellsMultiplayerMod.Interaction;
 using Serilog;
 using Serilog.Core;
 using Steamworks;
@@ -459,6 +460,9 @@ public sealed partial class NetNode : IDisposable
     private readonly List<PlayerDownState> _pendingPlayerDownStates = new();
     private readonly List<PlayerReviveRequest> _pendingPlayerReviveRequests = new();
     private readonly List<string> _pendingBossCineLevelIds = new();
+    private readonly List<InterDoorEvent> _pendingInterDoorEvents = new();
+    private readonly List<InterElevatorEvent> _pendingInterElevatorEvents = new();
+    private readonly List<InterPressurePlateEvent> _pendingInterPressurePlateEvents = new();
     private int _primaryRemoteId;
 
     private readonly IPEndPoint _bindEp;   // host bind
@@ -1613,6 +1617,57 @@ public sealed partial class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("INTERDOOR|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["INTERDOOR|".Length..];
+            if (TryParseInterDoorPayload(payload, out var ev))
+            {
+                lock (_sync)
+                {
+                    _pendingInterDoorEvents.Add(ev);
+                    _hasRemote = true;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = $"INTERDOOR|{ev.X.ToString(CultureInfo.InvariantCulture)}|{ev.Y.ToString(CultureInfo.InvariantCulture)}|{ev.Action}|{(ev.Broken ? 1 : 0)}\n";
+            }
+            return true;
+        }
+
+        if (line.StartsWith("INTERELEV|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["INTERELEV|".Length..];
+            if (TryParseInterElevatorPayload(payload, out var ev))
+            {
+                lock (_sync)
+                {
+                    _pendingInterElevatorEvents.Add(ev);
+                    _hasRemote = true;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = $"INTERELEV|{ev.X.ToString(CultureInfo.InvariantCulture)}|{ev.Y.ToString(CultureInfo.InvariantCulture)}\n";
+            }
+            return true;
+        }
+
+        if (line.StartsWith("INTERPLATE|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["INTERPLATE|".Length..];
+            if (TryParseInterPressurePlatePayload(payload, out var ev))
+            {
+                lock (_sync)
+                {
+                    _pendingInterPressurePlateEvents.Add(ev);
+                    _hasRemote = true;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = $"INTERPLATE|{ev.X.ToString(CultureInfo.InvariantCulture)}|{ev.Y.ToString(CultureInfo.InvariantCulture)}\n";
+            }
+            return true;
+        }
+
         if (line.StartsWith("MOBATK|", StringComparison.OrdinalIgnoreCase))
         {
             if (_role == NetRole.Host)
@@ -1757,6 +1812,9 @@ public sealed partial class NetNode : IDisposable
             _pendingBossCineLevelIds.Clear();
             _pendingPlayerDownStates.Clear();
             _pendingPlayerReviveRequests.Clear();
+            _pendingInterDoorEvents.Clear();
+            _pendingInterElevatorEvents.Clear();
+            _pendingInterPressurePlateEvents.Clear();
         }
         if (_useSteamTransport)
         {
@@ -2328,6 +2386,70 @@ public sealed partial class NetNode : IDisposable
             return false;
 
         request = new PlayerReviveRequest(reviverId, targetId);
+        return true;
+    }
+
+    private static bool TryParseInterDoorPayload(string payload, out InterDoorEvent ev)
+    {
+        ev = default;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        var parts = payload.Split('|');
+        if (parts.Length < 4)
+            return false;
+
+        if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+            return false;
+        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+            return false;
+
+        var action = (parts[2] ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(action))
+            return false;
+
+        if (!TryParseBool(parts[3], out var broken))
+            return false;
+
+        ev = new InterDoorEvent(x, y, action, broken);
+        return true;
+    }
+
+    private static bool TryParseInterElevatorPayload(string payload, out InterElevatorEvent ev)
+    {
+        ev = default;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        var parts = payload.Split('|');
+        if (parts.Length < 2)
+            return false;
+
+        if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+            return false;
+        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+            return false;
+
+        ev = new InterElevatorEvent(x, y);
+        return true;
+    }
+
+    private static bool TryParseInterPressurePlatePayload(string payload, out InterPressurePlateEvent ev)
+    {
+        ev = default;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        var parts = payload.Split('|');
+        if (parts.Length < 2)
+            return false;
+
+        if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+            return false;
+        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+            return false;
+
+        ev = new InterPressurePlateEvent(x, y);
         return true;
     }
 
@@ -3408,6 +3530,38 @@ public sealed partial class NetNode : IDisposable
         SendRaw($"BOSSCINE|{safe}");
     }
 
+    public void SendInterDoor(double x, double y, string action, bool broken)
+    {
+        if (!HasAnyConnection())
+            return;
+        if (ID <= 0)
+            return;
+        if (string.IsNullOrWhiteSpace(action))
+            return;
+
+        SendRaw($"INTERDOOR|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}|{action}|{(broken ? 1 : 0)}");
+    }
+
+    public void SendInterElevator(double x, double y)
+    {
+        if (!HasAnyConnection())
+            return;
+        if (ID <= 0)
+            return;
+
+        SendRaw($"INTERELEV|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}");
+    }
+
+    public void SendInterPressurePlate(double x, double y)
+    {
+        if (!HasAnyConnection())
+            return;
+        if (ID <= 0)
+            return;
+
+        SendRaw($"INTERPLATE|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}");
+    }
+
     private void SendRaw(string payload)
     {
         var line = payload.EndsWith('\n') ? payload : payload + "\n";
@@ -3695,6 +3849,54 @@ public sealed partial class NetNode : IDisposable
             requests = new List<PlayerReviveRequest>(_pendingPlayerReviveRequests);
             _pendingPlayerReviveRequests.Clear();
             return requests.Count > 0;
+        }
+    }
+
+    public bool TryConsumeInterDoorEvents(out List<InterDoorEvent> events)
+    {
+        lock (_sync)
+        {
+            if (_pendingInterDoorEvents.Count == 0)
+            {
+                events = new List<InterDoorEvent>();
+                return false;
+            }
+
+            events = new List<InterDoorEvent>(_pendingInterDoorEvents);
+            _pendingInterDoorEvents.Clear();
+            return events.Count > 0;
+        }
+    }
+
+    public bool TryConsumeInterElevatorEvents(out List<InterElevatorEvent> events)
+    {
+        lock (_sync)
+        {
+            if (_pendingInterElevatorEvents.Count == 0)
+            {
+                events = new List<InterElevatorEvent>();
+                return false;
+            }
+
+            events = new List<InterElevatorEvent>(_pendingInterElevatorEvents);
+            _pendingInterElevatorEvents.Clear();
+            return events.Count > 0;
+        }
+    }
+
+    public bool TryConsumeInterPressurePlateEvents(out List<InterPressurePlateEvent> events)
+    {
+        lock (_sync)
+        {
+            if (_pendingInterPressurePlateEvents.Count == 0)
+            {
+                events = new List<InterPressurePlateEvent>();
+                return false;
+            }
+
+            events = new List<InterPressurePlateEvent>(_pendingInterPressurePlateEvents);
+            _pendingInterPressurePlateEvents.Clear();
+            return events.Count > 0;
         }
     }
 
