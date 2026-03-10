@@ -23,11 +23,13 @@ public class InteractionSync :
     IOnHeroUpdate
 {
     private const double PosTolerance = 1.0;
+    private const double PlatePosTolerance = 8.0;
     private const double DoorProximityRadiusPx = 100.0;
 
     private readonly ILogger _log;
     private readonly HashSet<Door> _openedDoors = new();
     private bool _applyingRemoteDoorEvents;
+    private bool _applyingRemoteChestEvents;
 
     public InteractionSync(ModEntry entry)
     {
@@ -39,7 +41,6 @@ public class InteractionSync :
     {
         entry.Logger.Information("\x1b[32m[[InteractionSync] Initializing InteractionSync...]\x1b[0m ");
 
-        Hook_CureMachine.postUpdate += Hook_CureMachine_postUpdate;
         Hook_Door.init += Hook_Door_init;
         Hook_Door.open += Hook_Door_open;
         Hook_Door.close += Hook_Door_close;
@@ -48,19 +49,7 @@ public class InteractionSync :
         Hook_Elevator.onStep += Hook_Elevator_onStep;
         Hook_PressurePlate.trigger += Hook_PressurePlate_trigger;
         Hook_PressurePlate.executeOn += Hook_PressurePlate_executeOn;
-    }
-
-    private void Hook_CureMachine_postUpdate(Hook_CureMachine.orig_postUpdate orig, CureMachine self)
-    {
-        orig(self);
-
-        var net = GameMenu.NetRef;
-        if (net == null || !net.IsAlive || net.IsHost)
-            return;
-        if(self.cells is not null)
-        {
-            self.cells = null;
-        }
+        Hook_TreasureChest.open += Hook_TreasureChest_open;
     }
 
     private void Hook_Door_init(Hook_Door.orig_init orig, Door self)
@@ -104,6 +93,8 @@ public class InteractionSync :
             return;
         var net = GameMenu.NetRef;
         if (net == null || !net.IsAlive || net.id <= 0)
+            return;
+        if (!net.IsHost)
             return;
 
         try
@@ -168,6 +159,30 @@ public class InteractionSync :
         }
     }
 
+    private void Hook_TreasureChest_open(Hook_TreasureChest.orig_open orig, TreasureChest self, Hero by)
+    {
+        orig(self, by);
+        if (!_applyingRemoteChestEvents)
+            TrySendTreasureChestEvent(self);
+    }
+
+    private void TrySendTreasureChestEvent(TreasureChest self)
+    {
+        var net = GameMenu.NetRef;
+        if (net == null || !net.IsAlive || net.id <= 0)
+            return;
+
+        try
+        {
+            var (x, y) = GetEntityPixelPos(self);
+            net.SendInterTreasureChest(x, y);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "[InteractionSync] TreasureChest send failed");
+        }
+    }
+
     private static (double x, double y) GetEntityPixelPos(Entity e)
     {
         if (e?.spr == null)
@@ -207,6 +222,11 @@ public class InteractionSync :
         if (net.TryConsumeInterPressurePlateEvents(out var plateEvents))
         {
             ApplyRemotePressurePlateEvents(plateEvents);
+        }
+
+        if (net.TryConsumeInterTreasureChestEvents(out var chestEvents))
+        {
+            ApplyRemoteTreasureChestEvents(chestEvents);
         }
 
         if (net.IsHost)
@@ -389,7 +409,7 @@ public class InteractionSync :
         if (level?.entities == null || events == null)
             return;
 
-        var localHero = ModEntry.me;
+        var localHero = ModEntry.me as Entity;
         if (localHero == null)
             return;
 
@@ -402,6 +422,9 @@ public class InteractionSync :
             try
             {
                 plate.trigger(localHero);
+                bool noLoop = false;
+                var noLoopRef = Ref<bool>.From(ref noLoop);
+                plate.executeOn(localHero, null, noLoopRef);
             }
             catch (Exception ex)
             {
@@ -422,10 +445,50 @@ public class InteractionSync :
 
     private static PressurePlate? FindPressurePlateByPos(Level level, double x, double y)
     {
-        return FindInteractByPos<PressurePlate>(level, x, y);
+        return FindInteractByPos<PressurePlate>(level, x, y, PlatePosTolerance);
     }
 
-    private static T? FindInteractByPos<T>(Level level, double x, double y) where T : Entity
+    private void ApplyRemoteTreasureChestEvents(List<InterTreasureChestEvent> events)
+    {
+        var level = ModEntry.me?._level;
+        if (level?.entities == null || events == null)
+            return;
+
+        var localHero = ModEntry.me;
+        if (localHero == null)
+            return;
+
+        _applyingRemoteChestEvents = true;
+        try
+        {
+            foreach (var ev in events)
+            {
+                var chest = FindTreasureChestByPos(level, ev.X, ev.Y);
+                if (chest == null)
+                    continue;
+
+                try
+                {
+                    chest.open(localHero);
+                }
+                catch (Exception ex)
+                {
+                    _log.Warning(ex, "[InteractionSync] Apply treasure chest event failed x={X} y={Y}", ev.X, ev.Y);
+                }
+            }
+        }
+        finally
+        {
+            _applyingRemoteChestEvents = false;
+        }
+    }
+
+    private static TreasureChest? FindTreasureChestByPos(Level level, double x, double y)
+    {
+        return FindInteractByPos<TreasureChest>(level, x, y);
+    }
+
+    private static T? FindInteractByPos<T>(Level level, double x, double y, double tolerance = PosTolerance) where T : Entity
     {
         if (level?.entities == null)
             return null;
@@ -439,8 +502,8 @@ public class InteractionSync :
             try
             {
                 if (e.spr != null &&
-                    System.Math.Abs(e.spr.x - x) < PosTolerance &&
-                    System.Math.Abs(e.spr.y - y) < PosTolerance)
+                    System.Math.Abs(e.spr.x - x) < tolerance &&
+                    System.Math.Abs(e.spr.y - y) < tolerance)
                 {
                     return e;
                 }

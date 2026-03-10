@@ -41,3 +41,15 @@ public readonly struct InterPressurePlateEvent
         Y = y;
     }
 }
+
+public readonly struct InterTreasureChestEvent
+{
+    public readonly double X;
+    public readonly double Y;
+
+    public InterTreasureChestEvent(double x, double y)
+    {
+        X = x;
+        Y = y;
+    }
+}
