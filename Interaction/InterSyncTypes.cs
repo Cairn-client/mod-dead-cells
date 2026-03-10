@@ -2,13 +2,15 @@ namespace DeadCellsMultiplayerMod.Interaction;
 
 public readonly struct InterDoorEvent
 {
+    public readonly int UserId;
     public readonly double X;
     public readonly double Y;
     public readonly string Action;
     public readonly bool Broken;
 
-    public InterDoorEvent(double x, double y, string action, bool broken)
+    public InterDoorEvent(int userId, double x, double y, string action, bool broken)
     {
+        UserId = userId;
         X = x;
         Y = y;
         Action = action ?? string.Empty;

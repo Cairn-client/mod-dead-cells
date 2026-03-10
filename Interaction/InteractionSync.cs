@@ -7,6 +7,7 @@ using dc.hl.types;
 using dc.pr;
 using Hashlink.Virtuals;
 using dc.tool.atk;
+using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using ModCore.Events;
 using ModCore.Events.Interfaces.Game.Hero;
@@ -22,8 +23,10 @@ public class InteractionSync :
     IOnHeroUpdate
 {
     private const double PosTolerance = 1.0;
+    private const double DoorProximityRadiusPx = 100.0;
 
     private readonly ILogger _log;
+    private readonly HashSet<Door> _openedDoors = new();
 
     public InteractionSync(ModEntry entry)
     {
@@ -36,11 +39,14 @@ public class InteractionSync :
         entry.Logger.Information("\x1b[32m[[InteractionSync] Initializing InteractionSync...]\x1b[0m ");
 
         Hook_CureMachine.postUpdate += Hook_CureMachine_postUpdate;
+        Hook_Door.init += Hook_Door_init;
         Hook_Door.open += Hook_Door_open;
         Hook_Door.close += Hook_Door_close;
         Hook_Door.onDamage += Hook_Door_onDamage;
+        Hook_Door.onDie += Hook_Door_onDie;
         Hook_Elevator.onStep += Hook_Elevator_onStep;
         Hook_PressurePlate.trigger += Hook_PressurePlate_trigger;
+        Hook_PressurePlate.executeOn += Hook_PressurePlate_executeOn;
     }
 
     private void Hook_CureMachine_postUpdate(Hook_CureMachine.orig_postUpdate orig, CureMachine self)
@@ -50,26 +56,31 @@ public class InteractionSync :
         var net = GameMenu.NetRef;
         if (net == null || !net.IsAlive || net.IsHost)
             return;
+        if(self.cells is not null)
+        {
+            self.cells = null;
+        }
+    }
 
-        try
-        {
-            self.maxCells = 0;
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex, "[InteractionSync] CureMachine maxCells set failed");
-        }
+    private void Hook_Door_init(Hook_Door.orig_init orig, Door self)
+    {
+        orig(self);
+        var net = GameMenu.NetRef;
+        if (net != null && net.IsAlive)
+            self.autoClose = false;
     }
 
     private void Hook_Door_open(Hook_Door.orig_open orig, Door self, int durationMs, int? finalRatio, double? _tween)
     {
         orig(self, durationMs, finalRatio, _tween);
+        _openedDoors.Add(self);
         TrySendDoorEvent(self, "open");
     }
 
     private void Hook_Door_close(Hook_Door.orig_close orig, Door self, Ref<int> delayMs)
     {
         orig(self, delayMs);
+        _openedDoors.Remove(self);
         TrySendDoorEvent(self, "close");
     }
 
@@ -77,6 +88,13 @@ public class InteractionSync :
     {
         orig(self, a);
         TrySendDoorEvent(self, "damage");
+    }
+
+    private void Hook_Door_onDie(Hook_Door.orig_onDie orig, Door self)
+    {
+        orig(self);
+        _openedDoors.Remove(self);
+        TrySendDoorEvent(self, "die");
     }
 
     private void TrySendDoorEvent(Door self, string action)
@@ -88,8 +106,8 @@ public class InteractionSync :
         try
         {
             var (x, y) = GetEntityPixelPos(self);
-            var broken = SafeRead(() => self.broken, false);
-            net.SendInterDoor(x, y, action, broken);
+            var broken = action == "die" || SafeRead(() => self.broken, false);
+            net.SendInterDoor(net.id, x, y, action, broken);
         }
         catch (Exception ex)
         {
@@ -119,7 +137,19 @@ public class InteractionSync :
     private void Hook_PressurePlate_trigger(Hook_PressurePlate.orig_trigger orig, PressurePlate self, Entity by)
     {
         orig(self, by);
+        TrySendPressurePlateEvent(self);
+    }
 
+    private bool Hook_PressurePlate_executeOn(Hook_PressurePlate.orig_executeOn orig, PressurePlate self, Entity by, Entity noLoopEntity, Ref<bool> noLoopRef)
+    {
+        var result = orig(self, by, noLoopEntity, noLoopRef);
+        if (result)
+            TrySendPressurePlateEvent(self);
+        return result;
+    }
+
+    private void TrySendPressurePlateEvent(PressurePlate self)
+    {
         var net = GameMenu.NetRef;
         if (net == null || !net.IsAlive || net.id <= 0)
             return;
@@ -175,6 +205,86 @@ public class InteractionSync :
         {
             ApplyRemotePressurePlateEvents(plateEvents);
         }
+
+        if (net.IsHost)
+            CheckAndCloseDoorsWhenNoOneNearby();
+    }
+
+    private void CheckAndCloseDoorsWhenNoOneNearby()
+    {
+        var level = ModEntry.me?._level;
+        if (level == null)
+            return;
+
+        var toRemove = default(List<Door>?);
+        foreach (var door in _openedDoors)
+        {
+            try
+            {
+                if (door == null || SafeRead(() => door.destroyed, true) || SafeRead(() => door.broken, false))
+                {
+                    toRemove ??= new List<Door>();
+                    toRemove.Add(door!);
+                    continue;
+                }
+                if (!ReferenceEquals(door._level, level))
+                    continue;
+
+                var (doorX, doorY) = GetEntityPixelPos(door);
+                if (IsAnyPlayerNearby(level, doorX, doorY))
+                    continue;
+
+                int delayMs = 2000;
+                door.close(Ref<int>.From(ref delayMs));
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "[InteractionSync] Door auto-close check failed");
+            }
+        }
+
+        if (toRemove != null)
+        {
+            foreach (var d in toRemove)
+                _openedDoors.Remove(d);
+        }
+    }
+
+    private static bool IsAnyPlayerNearby(Level level, double doorX, double doorY)
+    {
+        var radiusSq = DoorProximityRadiusPx * DoorProximityRadiusPx;
+
+        var hero = ModEntry.me;
+        if (hero != null && ReferenceEquals(hero._level, level))
+        {
+            if (!SafeRead(() => hero.destroyed, true) && SafeRead(() => hero.life, 0) > 0)
+            {
+                var (hx, hy) = GetEntityPixelPos(hero);
+                var dx = hx - doorX;
+                var dy = hy - doorY;
+                if (dx * dx + dy * dy <= radiusSq)
+                    return true;
+            }
+        }
+
+        for (var i = 0; i < ModEntry.clients.Length; i++)
+        {
+            var client = ModEntry.clients[i];
+            if (client == null)
+                continue;
+            if (!ReferenceEquals(client._level, level))
+                continue;
+            if (SafeRead(() => client.destroyed, true) || SafeRead(() => client.life, 0) <= 0)
+                continue;
+
+            var (cx, cy) = GetEntityPixelPos(client);
+            var dx = cx - doorX;
+            var dy = cy - doorY;
+            if (dx * dx + dy * dy <= radiusSq)
+                return true;
+        }
+
+        return false;
     }
 
     private void ApplyRemoteDoorEvents(List<InterDoorEvent> events)
@@ -183,8 +293,12 @@ public class InteractionSync :
         if (level?.entities == null || events == null)
             return;
 
+        var localId = GameMenu.NetRef?.id ?? 0;
         foreach (var ev in events)
         {
+            if (ev.UserId == localId)
+                continue;
+
             var door = FindDoorByPos(level, ev.X, ev.Y);
             if (door == null)
                 continue;
@@ -197,12 +311,21 @@ public class InteractionSync :
                         door.open(300, null, null);
                         break;
                     case "close":
-                        int delayMs = 0;
+                        int delayMs = 2000;
                         door.close(Ref<int>.From(ref delayMs));
                         break;
                     case "damage":
                         if (ev.Broken)
-                            door.broken = true;
+                        {
+                            _openedDoors.Remove(door);
+                            door.life = 0;
+                            door.onDie();
+                        }
+                        break;
+                    case "die":
+                        _openedDoors.Remove(door);
+                        door.life = 0;
+                        door.onDie();
                         break;
                 }
             }

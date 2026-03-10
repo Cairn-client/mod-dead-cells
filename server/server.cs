@@ -1620,7 +1620,7 @@ public sealed partial class NetNode : IDisposable
         if (line.StartsWith("INTERDOOR|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line["INTERDOOR|".Length..];
-            if (TryParseInterDoorPayload(payload, out var ev))
+            if (TryParseInterDoorPayload(payload, senderId, forceSenderId, out var ev))
             {
                 lock (_sync)
                 {
@@ -1629,7 +1629,7 @@ public sealed partial class NetNode : IDisposable
                 }
 
                 if (_role == NetRole.Host && senderId.HasValue)
-                    forwardLine = $"INTERDOOR|{ev.X.ToString(CultureInfo.InvariantCulture)}|{ev.Y.ToString(CultureInfo.InvariantCulture)}|{ev.Action}|{(ev.Broken ? 1 : 0)}\n";
+                    forwardLine = $"INTERDOOR|{ev.UserId}|{ev.X.ToString(CultureInfo.InvariantCulture)}|{ev.Y.ToString(CultureInfo.InvariantCulture)}|{ev.Action}|{(ev.Broken ? 1 : 0)}\n";
             }
             return true;
         }
@@ -2389,29 +2389,37 @@ public sealed partial class NetNode : IDisposable
         return true;
     }
 
-    private static bool TryParseInterDoorPayload(string payload, out InterDoorEvent ev)
+    private static bool TryParseInterDoorPayload(string payload, int? senderId, bool forceSenderId, out InterDoorEvent ev)
     {
         ev = default;
         if (string.IsNullOrWhiteSpace(payload))
             return false;
 
         var parts = payload.Split('|');
-        if (parts.Length < 4)
+        if (parts.Length < 5)
             return false;
 
-        if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
-            return false;
-        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+        int userId = 0;
+        if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out userId))
+            userId = senderId ?? 0;
+        if (forceSenderId && senderId.HasValue)
+            userId = senderId.Value;
+        if (userId <= 0)
             return false;
 
-        var action = (parts[2] ?? string.Empty).Trim();
+        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+            return false;
+        if (!double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+            return false;
+
+        var action = (parts[3] ?? string.Empty).Trim();
         if (string.IsNullOrEmpty(action))
             return false;
 
-        if (!TryParseBool(parts[3], out var broken))
+        if (!TryParseBool(parts[4], out var broken))
             return false;
 
-        ev = new InterDoorEvent(x, y, action, broken);
+        ev = new InterDoorEvent(userId, x, y, action, broken);
         return true;
     }
 
@@ -3530,16 +3538,16 @@ public sealed partial class NetNode : IDisposable
         SendRaw($"BOSSCINE|{safe}");
     }
 
-    public void SendInterDoor(double x, double y, string action, bool broken)
+    public void SendInterDoor(int userId, double x, double y, string action, bool broken)
     {
         if (!HasAnyConnection())
             return;
-        if (ID <= 0)
+        if (userId <= 0)
             return;
         if (string.IsNullOrWhiteSpace(action))
             return;
 
-        SendRaw($"INTERDOOR|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}|{action}|{(broken ? 1 : 0)}");
+        SendRaw($"INTERDOOR|{userId}|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}|{action}|{(broken ? 1 : 0)}");
     }
 
     public void SendInterElevator(double x, double y)
