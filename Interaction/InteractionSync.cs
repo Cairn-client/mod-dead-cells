@@ -234,6 +234,10 @@ public class InteractionSync :
                 if (IsAnyPlayerNearby(level, doorX, doorY))
                     continue;
 
+                if (!_openedDoors.Contains(door))
+                    continue;
+
+                _openedDoors.Remove(door);
                 int delayMs = 2000;
                 door.close(Ref<int>.From(ref delayMs));
             }
@@ -311,6 +315,9 @@ public class InteractionSync :
                         door.open(300, null, null);
                         break;
                     case "close":
+                        if (!_openedDoors.Contains(door))
+                            break;
+                        _openedDoors.Remove(door);
                         int delayMs = 2000;
                         door.close(Ref<int>.From(ref delayMs));
                         break;
