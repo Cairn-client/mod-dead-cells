@@ -39,6 +39,7 @@ internal static class KingWeaponHooks
         Hook_Hero.addKillCount += Hook_Hero_addKillCount;
         Hook_Hero.onMobDeath += Hook_Hero_onMobDeath;
         Hook_Hero.onOwnAttackDealt += Hook_Hero_onOwnAttackDealt;
+        Hook_Hero.setAffectS += Hook_Hero_setAffectS;
         Hook_Viewport.bumpDir += Hook_Viewport_bumpDir;
 
         Hook_Entity.recoil += Hook_Entity_recoil;
@@ -46,7 +47,6 @@ internal static class KingWeaponHooks
         Hook_Entity.bumpAwayFrom += Hook_Entity_bumpAwayFrom;
         Hook_Entity.cancelVelocities += Hook_Entity_cancelVelocities;
         Hook_Entity.onDamage += Hook_Entity_onDamage;
-        Hook_Entity.setAffectS += Hook_Entity_setAffectS;
         Hook_Entity.addTimeToAffect += Hook_Entity_addTimeToAffect;
         Hook_Entity.removeAffects += Hook_Entity_removeAffects;
         Hook_Entity.removeAllAffects += Hook_Entity_removeAllAffects;
@@ -276,9 +276,9 @@ internal static class KingWeaponHooks
         orig(self, a);
     }
 
-    private static void Hook_Entity_setAffectS(
-        Hook_Entity.orig_setAffectS orig,
-        Entity self,
+    private static void Hook_Hero_setAffectS(
+        Hook_Hero.orig_setAffectS orig,
+        Hero self,
         int id,
         double sec,
         Ref<double> ignoreResist,

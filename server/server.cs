@@ -285,6 +285,38 @@ public sealed partial class NetNode : IDisposable
         }
     }
 
+    public readonly struct MobMoveSnapshot
+    {
+        public readonly int Index;
+        public readonly double X;
+        public readonly double Y;
+        public readonly int Dir;
+        public readonly string AnimPayload;
+
+        public MobMoveSnapshot(int index, double x, double y, int dir, string animPayload)
+        {
+            Index = index;
+            X = x;
+            Y = y;
+            Dir = dir;
+            AnimPayload = animPayload ?? string.Empty;
+        }
+    }
+
+    public readonly struct MobChargeSnapshot
+    {
+        public readonly int Index;
+        public readonly string SkillId;
+        public readonly double Ratio;
+
+        public MobChargeSnapshot(int index, string skillId, double ratio)
+        {
+            Index = index;
+            SkillId = skillId ?? string.Empty;
+            Ratio = ratio;
+        }
+    }
+
     public readonly struct MobHit
     {
         public readonly int UserId;
@@ -452,6 +484,8 @@ public sealed partial class NetNode : IDisposable
     private readonly List<RemoteAttack> _pendingAttacks = new();
     private readonly List<RemoteChatMessage> _pendingChatMessages = new();
     private List<MobStateSnapshot> _pendingMobStates = new();
+    private List<MobMoveSnapshot> _pendingMobMoves = new();
+    private List<MobChargeSnapshot> _pendingMobCharges = new();
     private readonly List<MobHit> _pendingMobHits = new();
     private readonly List<MobDie> _pendingMobDies = new();
     private readonly List<MobAttack> _pendingMobAttacks = new();
@@ -1300,11 +1334,6 @@ public sealed partial class NetNode : IDisposable
                         _primaryRemoteId = effectiveId.Value;
                 }
 
-                if (_role == NetRole.Host && senderId.HasValue)
-                {
-                    forwardLine = BuildTaggedLine("LEVEL", effectiveId.Value, levelValue);
-                    TrySendLevelGraphForLevelOnClientEntry(levelValue);
-                }
             }
             return true;
         }
@@ -1491,6 +1520,42 @@ public sealed partial class NetNode : IDisposable
                     _pendingMobStates = parsedStates;
                 }
                 _hasRemote = true;
+            }
+            return true;
+        }
+
+        if (line.StartsWith("MOBMOVE|", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_role != NetRole.Host)
+            {
+                var payload = line["MOBMOVE|".Length..];
+                var parsedMoves = ParseMobMovesPayload(payload);
+                lock (_sync)
+                {
+                    if (parsedMoves.Count > 0)
+                    {
+                        _pendingMobMoves.AddRange(parsedMoves);
+                        _hasRemote = true;
+                    }
+                }
+            }
+            return true;
+        }
+
+        if (line.StartsWith("MOBCHARGE|", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_role != NetRole.Host)
+            {
+                var payload = line["MOBCHARGE|".Length..];
+                var parsedCharges = ParseMobChargesPayload(payload);
+                lock (_sync)
+                {
+                    if (parsedCharges.Count > 0)
+                    {
+                        _pendingMobCharges.AddRange(parsedCharges);
+                        _hasRemote = true;
+                    }
+                }
             }
             return true;
         }
@@ -1822,6 +1887,8 @@ public sealed partial class NetNode : IDisposable
             _pendingAttacks.Clear();
             _pendingChatMessages.Clear();
             _pendingMobStates.Clear();
+            _pendingMobMoves.Clear();
+            _pendingMobCharges.Clear();
             _pendingMobHits.Clear();
             _pendingMobDies.Clear();
             _pendingMobAttacks.Clear();
@@ -2127,6 +2194,60 @@ public sealed partial class NetNode : IDisposable
         }
 
         return states;
+    }
+
+    private static List<MobMoveSnapshot> ParseMobMovesPayload(string payload)
+    {
+        var moves = new List<MobMoveSnapshot>();
+        if (string.IsNullOrWhiteSpace(payload))
+            return moves;
+
+        var entries = payload.Split(';', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var entry in entries)
+        {
+            var parts = entry.Split(',');
+            if (parts.Length < 5)
+                continue;
+
+            if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var index))
+                continue;
+            if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+                continue;
+            if (!double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+                continue;
+            if (!int.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var dir))
+                continue;
+            var animPayload = parts.Length > 4 ? parts[4] : string.Empty;
+
+            moves.Add(new MobMoveSnapshot(index, x, y, dir, animPayload));
+        }
+
+        return moves;
+    }
+
+    private static List<MobChargeSnapshot> ParseMobChargesPayload(string payload)
+    {
+        var charges = new List<MobChargeSnapshot>();
+        if (string.IsNullOrWhiteSpace(payload))
+            return charges;
+
+        var entries = payload.Split(';', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var entry in entries)
+        {
+            var parts = entry.Split(',');
+            if (parts.Length < 3)
+                continue;
+
+            if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var index))
+                continue;
+            var skillId = parts.Length > 1 ? parts[1] : string.Empty;
+            if (!double.TryParse(parts.Length > 2 ? parts[2] : "0", NumberStyles.Float, CultureInfo.InvariantCulture, out var ratio))
+                ratio = 0;
+
+            charges.Add(new MobChargeSnapshot(index, skillId, ratio));
+        }
+
+        return charges;
     }
 
     private static bool TryParseMobHitPayload(string payload, int? senderId, bool forceSenderId, out MobHit hit)
@@ -2671,6 +2792,52 @@ public sealed partial class NetNode : IDisposable
         return sb.ToString();
     }
 
+    private static string BuildMobMovesLine(IReadOnlyList<MobMoveSnapshot> moves)
+    {
+        var sb = new StringBuilder("MOBMOVE|");
+        if (moves != null)
+        {
+            for (int i = 0; i < moves.Count; i++)
+            {
+                var move = moves[i];
+                if (i > 0)
+                    sb.Append(';');
+                sb.Append(move.Index.ToString(CultureInfo.InvariantCulture));
+                sb.Append(',');
+                sb.Append(move.X.ToString(CultureInfo.InvariantCulture));
+                sb.Append(',');
+                sb.Append(move.Y.ToString(CultureInfo.InvariantCulture));
+                sb.Append(',');
+                sb.Append(move.Dir.ToString(CultureInfo.InvariantCulture));
+                sb.Append(',');
+                sb.Append(move.AnimPayload ?? string.Empty);
+            }
+        }
+        sb.Append('\n');
+        return sb.ToString();
+    }
+
+    private static string BuildMobChargesLine(IReadOnlyList<MobChargeSnapshot> charges)
+    {
+        var sb = new StringBuilder("MOBCHARGE|");
+        if (charges != null)
+        {
+            for (int i = 0; i < charges.Count; i++)
+            {
+                var charge = charges[i];
+                if (i > 0)
+                    sb.Append(';');
+                sb.Append(charge.Index.ToString(CultureInfo.InvariantCulture));
+                sb.Append(',');
+                sb.Append(charge.SkillId ?? string.Empty);
+                sb.Append(',');
+                sb.Append(charge.Ratio.ToString(CultureInfo.InvariantCulture));
+            }
+        }
+        sb.Append('\n');
+        return sb.ToString();
+    }
+
     private static string BuildMobAttackLine(MobAttack attack)
     {
         string encodedSkill;
@@ -2805,6 +2972,8 @@ public sealed partial class NetNode : IDisposable
                trimmed.StartsWith("HEADANIM|", StringComparison.OrdinalIgnoreCase) ||
                trimmed.StartsWith("HP|", StringComparison.OrdinalIgnoreCase) ||
                trimmed.StartsWith("MOBSTATE|", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("MOBMOVE|", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("MOBCHARGE|", StringComparison.OrdinalIgnoreCase) ||
                trimmed.StartsWith("MOBDRAW|", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -3194,22 +3363,6 @@ public sealed partial class NetNode : IDisposable
         _log.Information("[NetNode] Sent level graph ({Length} bytes)", json.Length);
     }
 
-    private void TrySendLevelGraphForLevelOnClientEntry(string levelId)
-    {
-        if (string.IsNullOrWhiteSpace(levelId))
-            return;
-
-        string? graphJson;
-        lock (_hostCacheSync)
-        {
-            if (!_cachedHostLevelGraphsByLevelId.TryGetValue(levelId, out graphJson) || string.IsNullOrWhiteSpace(graphJson))
-                return;
-        }
-
-        SendRaw("LGRAPH|" + graphJson);
-        _log.Information("[NetNode] Sent level graph for {LevelId} on client entry (proactive)", levelId);
-    }
-
     public void SendGeneratePayload(string json)
     {
         if (!HasAnyConnection())
@@ -3473,6 +3626,32 @@ public sealed partial class NetNode : IDisposable
             return;
 
         var line = BuildMobStatesLine(states);
+        _ = SendLineSafe(line);
+    }
+
+    public void SendMobMoves(IReadOnlyList<MobMoveSnapshot> moves)
+    {
+        if (_role != NetRole.Host)
+            return;
+        if (!HasAnyConnection())
+            return;
+        if (moves == null || moves.Count == 0)
+            return;
+
+        var line = BuildMobMovesLine(moves);
+        _ = SendLineSafe(line);
+    }
+
+    public void SendMobCharges(IReadOnlyList<MobChargeSnapshot> charges)
+    {
+        if (_role != NetRole.Host)
+            return;
+        if (!HasAnyConnection())
+            return;
+        if (charges == null || charges.Count == 0)
+            return;
+
+        var line = BuildMobChargesLine(charges);
         _ = SendLineSafe(line);
     }
 
@@ -3757,6 +3936,8 @@ public sealed partial class NetNode : IDisposable
         lock (_sync)
         {
             _pendingMobStates.Clear();
+            _pendingMobMoves.Clear();
+            _pendingMobCharges.Clear();
             _pendingMobHits.Clear();
             _pendingMobDies.Clear();
             _pendingMobAttacks.Clear();
@@ -3777,6 +3958,38 @@ public sealed partial class NetNode : IDisposable
             snapshot = new List<MobStateSnapshot>(_pendingMobStates);
             _pendingMobStates.Clear();
             return snapshot.Count > 0;
+        }
+    }
+
+    public bool TryConsumeMobMoves(out List<MobMoveSnapshot> moves)
+    {
+        lock (_sync)
+        {
+            if (_pendingMobMoves.Count == 0)
+            {
+                moves = new List<MobMoveSnapshot>();
+                return false;
+            }
+
+            moves = new List<MobMoveSnapshot>(_pendingMobMoves);
+            _pendingMobMoves.Clear();
+            return moves.Count > 0;
+        }
+    }
+
+    public bool TryConsumeMobCharges(out List<MobChargeSnapshot> charges)
+    {
+        lock (_sync)
+        {
+            if (_pendingMobCharges.Count == 0)
+            {
+                charges = new List<MobChargeSnapshot>();
+                return false;
+            }
+
+            charges = new List<MobChargeSnapshot>(_pendingMobCharges);
+            _pendingMobCharges.Clear();
+            return charges.Count > 0;
         }
     }
 
@@ -4169,6 +4382,8 @@ public sealed partial class NetNode : IDisposable
             _connectedClientCount = 0;
             _pendingAttacks.Clear();
             _pendingMobStates.Clear();
+            _pendingMobMoves.Clear();
+            _pendingMobCharges.Clear();
             _pendingMobHits.Clear();
             _pendingMobDies.Clear();
             _pendingMobAttacks.Clear();
