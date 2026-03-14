@@ -181,6 +181,21 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook_Hero_startDeathCine(Hook_Hero.orig_startDeathCine orig, Hero self)
         {
+            var net = _net;
+            if (_netRole != NetRole.None &&
+                net != null &&
+                me != null &&
+                ReferenceEquals(self, me))
+            {
+                if (_localFakeDead)
+                    return;
+
+                // Cursed deaths can route straight into vanilla death cine and destroy hero.
+                // In multiplayer we always redirect local death cine to fake-death flow.
+                EnterLocalFakeDeath(self, net);
+                return;
+            }
+
             if (me != null && ReferenceEquals(self, me) && _localFakeDead)
                 return;
 
