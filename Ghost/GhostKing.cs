@@ -55,6 +55,7 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         {
             EnsureRuntimeDependencies();
             base.init();
+            base.initSpeechDeck();
         }
 
         private static Hero? ResolveLocalHero()

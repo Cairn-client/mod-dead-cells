@@ -482,14 +482,12 @@ public class InteractionSync :
                 var teleport = FindTeleportByPos(level, ev.X, ev.Y);
                 if (teleport == null)
                 {
-                    _log.Debug("[InteractionSync] Teleport not found at x={X} y={Y}", ev.X, ev.Y);
                     continue;
                 }
 
                 try
                 {
                     teleport.open();
-                    _log.Debug("[InteractionSync] Teleport opened at x={X} y={Y}", ev.X, ev.Y);
                 }
                 catch (Exception ex)
                 {
