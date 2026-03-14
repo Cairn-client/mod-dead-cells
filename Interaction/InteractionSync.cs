@@ -29,7 +29,7 @@ public class InteractionSync :
     private const double BreakableGroundPosTolerance = 24.0;
     private const double DoorProximityRadiusPx = 100.0;
     private static readonly double DoorProximityRadiusSq = DoorProximityRadiusPx * DoorProximityRadiusPx;
-    private const int DoorCloseDelayMs = 500;
+    private const int DoorCloseDelayMs = 250;
 
     private readonly ILogger _log;
     private readonly HashSet<Door> _openedDoors = new();
@@ -63,6 +63,16 @@ public class InteractionSync :
         Hook_VineLadder.activate += Hook_VineLadder_activate;
         Hook_Teleport.open += Hook_Teleport_open;
         Hook_Hero.breakBreakableGround += Hook_Hero_breakBreakableGround;
+        Hook_SwitchBossRune.canBeActivated += Hook_SwitchBossRune_canBeActivated;
+    }
+
+
+    private bool Hook_SwitchBossRune_canBeActivated(Hook_SwitchBossRune.orig_canBeActivated orig, SwitchBossRune self, Hero by)
+    {
+        var net = GameMenu.NetRef;
+        if(!net.IsHost)
+            return false;
+        return orig(self, by);
     }
 
     private void Hook_Door_init(Hook_Door.orig_init orig, Door self)
