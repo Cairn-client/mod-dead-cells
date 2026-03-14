@@ -1208,33 +1208,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static void TrySendHostMobAttack(Mob mob, string skillId, bool requiresTargetInArea, int? data, Entity? explicitTarget = null)
         {
-            if (MobsSyncAttackDebugLog && mob != null && !string.IsNullOrWhiteSpace(skillId))
-                Log.Debug("[MobsSync] TrySendHostMobAttack entered skill={Skill}", skillId);
-
             if (mob == null || string.IsNullOrWhiteSpace(skillId))
                 return;
 
             var net = GameMenu.NetRef;
             if (!IsHost(net))
-            {
-                if (MobsSyncAttackDebugLog)
-                    Log.Debug("[MobsSync] TrySendHostMobAttack skip: not host");
                 return;
-            }
 
             if (!IsSyncMob(mob))
-            {
-                if (MobsSyncAttackDebugLog)
-                    Log.Debug("[MobsSync] TrySendHostMobAttack skip: not sync mob");
                 return;
-            }
 
             if (!TryGetMobSyncId(mob, out var mobSyncId))
-            {
-                if (MobsSyncAttackDebugLog)
-                    Log.Debug("[MobsSync] TrySendHostMobAttack skip: no syncId");
                 return;
-            }
 
             var targetEntity = ResolveMobAttackTargetEntity(mob, explicitTarget);
 
@@ -1250,10 +1235,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var attackEvent = $"attack|{encodedSkill}|0|0|{reqTarget}|{dataVal}|{targetUserId}|{dir}";
             var mobType = BuildMobStateTypeSignature(mob);
             var update = new NetNode.MobEventUpdate(mobSyncId, x, y, dir, new[] { attackEvent }, mobType);
-
-            if (MobsSyncAttackDebugLog)
-                Log.Debug("[MobsSync] Host sending attack syncId={SyncId} skill={Skill}", mobSyncId, skillId);
-
             net.SendMobEvents(new[] { update });
         }
 
@@ -3036,11 +3017,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 }
 
                 if (mob == null)
-                {
-                    if (MobsSyncAttackDebugLog)
-                        Log.Debug("[MobsSync] Attack dropped: could not resolve mob for syncId={Index} skill={Skill}", attack.Index, attack.SkillId);
                     continue;
-                }
 
                 TryQueueClientMobAttack(mob, attack.SkillId, attack.RequiresTargetInArea, attack.Data, attack.TargetUserId, attack.Dir);
             }
@@ -3268,18 +3245,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (target == null)
                 target = ResolveClientAttackTargetEntity(mob, 0);
             if (target == null)
-            {
-                if (MobsSyncAttackDebugLog)
-                    Log.Debug("[MobsSync] ContactAttack skipped: no target for mob (targetUserId={TargetUserId})", intent.TargetUserId);
                 return;
-            }
 
             RegisterClientNetworkAttackExecuted(mob);
 
             try
             {
-                if (MobsSyncAttackDebugLog)
-                    Log.Debug("[MobsSync] Executing contactAttack on target");
                 mob.contactAttack(target);
             }
             catch (Exception ex)

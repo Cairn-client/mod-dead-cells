@@ -39,8 +39,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const string OldSkillExecutePacketPrefix = "@oldexec:";
         private const string NewSkillExecutePacketPrefix = "@newexec:";
         private const bool DisableBossSyncTemporarily = false;
-        /// <summary>Set to true to log attack flow (consumption, resolution, target, execute) for debugging.</summary>
-        private const bool MobsSyncAttackDebugLog = true;
         private const double HostQueuedOldSkillMarkerSeconds = 3.0;
         private const double ClientQueuedOldSkillMarkerSeconds = 0.4;
         private const double HostContactRetargetLockSeconds = 0.25;
