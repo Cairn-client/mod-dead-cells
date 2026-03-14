@@ -3015,9 +3015,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!net.TryConsumeMobAttacks(out var attacks))
                 return;
 
-            if (attacks.Count > 0)
-                Log.Warning("[MobsSync] Consumed {Count} host mob attacks (LAN/Steam)", attacks.Count);
-
             ApplyIncomingHostMobAttacks(attacks);
         }
 
@@ -3040,7 +3037,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 if (mob == null)
                 {
-                    Log.Warning("[MobsSync] Attack dropped: could not resolve mob for syncId={Index} skill={Skill} type={Type}", attack.Index, attack.SkillId, attack.Type ?? "");
+                    if (MobsSyncAttackDebugLog)
+                        Log.Debug("[MobsSync] Attack dropped: could not resolve mob for syncId={Index} skill={Skill}", attack.Index, attack.SkillId);
                     continue;
                 }
 

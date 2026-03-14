@@ -297,9 +297,6 @@ public sealed partial class NetNode
                     if (_role == NetRole.Client && TryHandleClientFastPathLine(lineCopy))
                         continue;
 
-                    if (_role == NetRole.Client && lineCopy.StartsWith("MOBEVENT|", StringComparison.OrdinalIgnoreCase))
-                        _log.Warning("[NetNode][LAN] Client TCP received MOBEVENT len={Len}", lineCopy.Length);
-
                     GameMenu.EnqueueMainThread(() =>
                     {
                         try

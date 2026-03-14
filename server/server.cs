@@ -1820,27 +1820,8 @@ public sealed partial class NetNode : IDisposable
 
         if (line.StartsWith("MOBEVENT|", StringComparison.OrdinalIgnoreCase))
         {
-            if (_role != NetRole.Host)
-                _log?.Warning("[NetNode] Client HandleLine MOBEVENT len={Len} role={Role}", line.Length, _role);
-
             var payload = line["MOBEVENT|".Length..];
             var parsed = ParseMobEventsPayload(payload);
-
-            if (_role != NetRole.Host && parsed.Count == 0 && payload.Length > 0)
-                _log?.Warning("[NetNode] Client MOBEVENT parse yielded 0 mobs, payload len={Len} first80={Preview}", payload.Length, payload.Length > 80 ? payload[..80] + "..." : payload);
-            if (_role != NetRole.Host && parsed.Count > 0)
-            {
-                var attackCount = 0;
-                foreach (var u in parsed)
-                {
-                    if (u.Events != null)
-                        foreach (var ev in u.Events)
-                            if (ev.StartsWith("attack|", StringComparison.Ordinal)) attackCount++;
-                }
-                if (attackCount == 0)
-                    _log?.Warning("[NetNode] Client MOBEVENT parsed {N} mobs but no attack events, firstEv={First}", parsed.Count, parsed[0].Events?.FirstOrDefault() ?? "(none)");
-            }
-
             var effectiveUserId = forceSenderId && senderId.HasValue ? senderId.Value : (senderId ?? 0);
             var hasDieToForward = false;
             if (parsed.Count > 0)
@@ -1858,12 +1839,7 @@ public sealed partial class NetNode : IDisposable
                             if (ev.StartsWith("attack|", StringComparison.Ordinal) && _role != NetRole.Host)
                             {
                                 if (TryParseMobAttackEvent(ev, u.Index, u.X, u.Y, u.Dir, u.Type, out var attack))
-                                {
                                     _pendingMobAttacks.Add(attack);
-                                    _log?.Warning("[NetNode] Client queued MOBEVENT attack syncId={Index} skill={Skill}", attack.Index, attack.SkillId);
-                                }
-                                else
-                                    _log?.Warning("[NetNode] Client MOBEVENT attack parse failed ev={Ev} partsLen={Parts}", ev.Length > 80 ? ev[..80] + "..." : ev, ev.Split('|').Length);
                             }
                             else if (ev.StartsWith("hit|", StringComparison.Ordinal))
                             {
