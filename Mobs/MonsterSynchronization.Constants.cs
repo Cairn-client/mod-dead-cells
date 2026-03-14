@@ -21,12 +21,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double ClientDrawKeepAliveSeconds = 0.9;
         private const double ClientInterpolationAlpha = 0.62;
         private const double ClientAiLockSeconds = 0.3;
-        private const double ClientAttackUnlockContactSeconds = 0.35;
-        private const double ClientAttackUnlockOldPrepareSeconds = 0.45;
-        private const double ClientAttackUnlockOldExecuteSeconds = 1.15;
-        private const double ClientAttackUnlockNewExecuteSeconds = 0.95;
-        private const double ClientAttackUnlockQueueSeconds = 0.6;
-        private const double ClientAttackForcedDirSeconds = 0.22;
+        private const double ClientNetworkAttackMotionPreserveSeconds = 0.05;
         private const double HostContactAttackSendCooldownSeconds = 0.3;
         private const double ClientMobHitReportMinIntervalSeconds = 0.05;
         private const double ClientAnimSpeedEpsilon = 0.05;
@@ -44,6 +39,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const string OldSkillExecutePacketPrefix = "@oldexec:";
         private const string NewSkillExecutePacketPrefix = "@newexec:";
         private const bool DisableBossSyncTemporarily = false;
+        /// <summary>Set to true to log attack flow (consumption, resolution, target, execute) for debugging.</summary>
+        private const bool MobsSyncAttackDebugLog = true;
         private const double HostQueuedOldSkillMarkerSeconds = 3.0;
         private const double ClientQueuedOldSkillMarkerSeconds = 0.4;
         private const double HostContactRetargetLockSeconds = 0.25;

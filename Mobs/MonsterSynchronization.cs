@@ -34,9 +34,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<Mob, int> trackedMobIndices = new(ReferenceEqualityComparer.Instance);
 
         private static readonly Dictionary<int, ClientMobState> clientMobTargets = new();
-        private static readonly Dictionary<int, long> clientAttackUnlockUntilTick = new();
-        private static readonly Dictionary<int, int> clientAttackForcedDir = new();
-        private static readonly Dictionary<int, long> clientAttackForcedDirUntilTick = new();
         private static readonly Dictionary<int, Entity?> clientCachedAttackTargetByLocalIndex = new();
         private static readonly Dictionary<int, long> hostContactAttackSendTick = new();
         private static readonly Dictionary<int, QueuedOldSkillMarker> clientQueuedOldSkillMarkers = new();
@@ -71,6 +68,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static int clientNetworkQueuedAttackDepth;
         private static Mob? clientNetworkQueuedAttackMob;
         private static readonly Dictionary<int, QueuedOldSkillMarker> hostQueuedOldSkillMarkers = new();
+        private static readonly Dictionary<int, long> clientLastNetworkAttackTickByLocalIndex = new();
 
         private readonly struct QueuedOldSkillMarker
         {
@@ -252,9 +250,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (IsHost(net))
             {
-                // Host must always consume MOBDRAW/HIT/DIE, even when tracked mobs exist.
-                // Otherwise remote clients cannot wake mobs that are far from the host camera,
-                // because no local mob pre/postUpdate runs for those mobs.
                 ConsumeIncomingClientMobStates(net);
                 ConsumeIncomingMobDraws(net);
                 ConsumeIncomingMobDies(net);
@@ -264,13 +259,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (IsClient(net))
             {
-                if (hasTrackedMobs)
-                    return;
-
                 ConsumeIncomingHostMobStates(net);
                 ConsumeIncomingHostMobAttacks(net);
                 ConsumeIncomingMobDies(net);
-                TrySendClientMobDraws(net);
+                ConsumeIncomingMobHits(net);
+                if (hasTrackedMobs)
+                {
+                    TrySendClientMobDraws(net);
+                    TrySendClientMobStateDeltaBatchPreUpdate(net);
+                }
             }
         }
 
@@ -364,14 +361,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 ConsumeIncomingHostMobStates(net!);
                 ConsumeIncomingHostMobAttacks(net!);
                 ConsumeIncomingMobDies(net!);
+                ConsumeIncomingMobHits(net!);
                 TrySendClientMobDraws(net!);
                 TrySendClientMobStateDeltaBatchPreUpdate(net!);
             }
 
             if (isClient && IsSyncMob(self))
             {
-                if (!IsClientAttackUnlockActive(self))
-                    TryLockMobAi(self, ClientAiLockSeconds);
+                TryLockMobAi(self, ClientAiLockSeconds);
             }
 
             if (isHost && IsSyncMob(self))
@@ -388,9 +385,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var net = GameMenu.NetRef;
             if (IsClient(net) && IsSyncMob(self))
             {
-                if (IsClientAttackUnlockActive(self))
-                    orig(self);
-
+                orig(self);
                 ApplyInterpolatedState(self);
                 return;
             }
@@ -439,7 +434,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (shouldSendDie && dieNet != null && dieNet.IsAlive && dieSyncId >= 0)
             {
-                dieNet.SendMobDie(dieSyncId, dieX, dieY);
+                var update = new NetNode.MobEventUpdate(dieSyncId, dieX, dieY, 0, new[] { "die" });
+                dieNet.SendMobEvents(new[] { update });
             }
 
             lock (Sync)
@@ -500,7 +496,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (IsHost(net))
             {
-                TrySendImmediateHostMobState(net, mobSyncId, self, GetWorldX(self), GetWorldY(self));
+                var hx = GetWorldX(self);
+                var hy = GetWorldY(self);
+                var hitEvent = $"hit|{life.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+                var update = new NetNode.MobEventUpdate(mobSyncId, hx, hy, NormalizeDir(self.dir), new[] { hitEvent });
+                net.SendMobEvents(new[] { update });
             }
 
             if (IsClient(net))
@@ -532,9 +532,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     clientLastReportedMobLife[localIndex] = life;
                     clientLastMobHitReportTick[localIndex] = now;
                 }
-            }
 
-            net.SendMobHit(mobSyncId, life, x, y);
+                var clientHitEvent = $"hit|{life.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+                var clientUpdate = new NetNode.MobEventUpdate(mobSyncId, x, y, 0, new[] { clientHitEvent });
+                net.SendMobEvents(new[] { clientUpdate });
+            }
         }
 
         private static bool IsDamageFromLocalPlayer(AttackData attack)
@@ -685,11 +687,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             var now = Stopwatch.GetTimestamp();
-            var hostRateHz = ComputeAdaptiveRateHz(HostStateSendRateHz, HostStateMinRateHz, trackedMobCount);
-            var minDelta = (long)(Stopwatch.Frequency / hostRateHz);
-            if (lastHostStateSendTick != 0 && now - lastHostStateSendTick < minDelta)
-                return;
-            lastHostStateSendTick = now;
 
             List<Mob> mobs;
             lock (Sync)
@@ -718,7 +715,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             if (deltas.Count > 0)
+            {
+                lastHostStateSendTick = now;
                 net.SendMobStates(deltas);
+            }
         }
 
         private static void TrySendClientMobStateDeltaBatchPreUpdate(NetNode net)
@@ -736,11 +736,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             var now = Stopwatch.GetTimestamp();
-            var clientRateHz = ComputeAdaptiveRateHz(ClientStateSendRateHz, ClientStateMinRateHz, trackedMobCount);
-            var minDelta = (long)(Stopwatch.Frequency / clientRateHz);
-            if (lastClientStateSendTick != 0 && now - lastClientStateSendTick < minDelta)
-                return;
-            lastClientStateSendTick = now;
 
             List<Mob> mobs;
             lock (Sync)
@@ -805,7 +800,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             if (deltas.Count > 0)
+            {
+                lastClientStateSendTick = now;
                 net.SendMobStates(deltas);
+            }
         }
 
         private static bool TryBuildHostMobStateDeltaSnapshot(Mob mob, long nowTick, int trackedMobCount, out NetNode.MobStateSnapshot snapshot)
@@ -1210,18 +1208,33 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static void TrySendHostMobAttack(Mob mob, string skillId, bool requiresTargetInArea, int? data, Entity? explicitTarget = null)
         {
+            if (MobsSyncAttackDebugLog && mob != null && !string.IsNullOrWhiteSpace(skillId))
+                Log.Debug("[MobsSync] TrySendHostMobAttack entered skill={Skill}", skillId);
+
             if (mob == null || string.IsNullOrWhiteSpace(skillId))
                 return;
 
             var net = GameMenu.NetRef;
             if (!IsHost(net))
+            {
+                if (MobsSyncAttackDebugLog)
+                    Log.Debug("[MobsSync] TrySendHostMobAttack skip: not host");
                 return;
+            }
 
             if (!IsSyncMob(mob))
+            {
+                if (MobsSyncAttackDebugLog)
+                    Log.Debug("[MobsSync] TrySendHostMobAttack skip: not sync mob");
                 return;
+            }
 
             if (!TryGetMobSyncId(mob, out var mobSyncId))
+            {
+                if (MobsSyncAttackDebugLog)
+                    Log.Debug("[MobsSync] TrySendHostMobAttack skip: no syncId");
                 return;
+            }
 
             var targetEntity = ResolveMobAttackTargetEntity(mob, explicitTarget);
 
@@ -1230,7 +1243,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var y = GetWorldY(mob);
             var dir = NormalizeDir(mob.dir);
             RegisterHostAttackRetargetLock(mob, skillId);
-            net.SendMobAttack(mobSyncId, skillId, requiresTargetInArea, data, x, y, targetUserId, dir);
+
+            var encodedSkill = Uri.EscapeDataString(skillId);
+            var reqTarget = requiresTargetInArea ? 1 : 0;
+            var dataVal = data ?? 0;
+            var attackEvent = $"attack|{encodedSkill}|0|0|{reqTarget}|{dataVal}|{targetUserId}|{dir}";
+            var mobType = BuildMobStateTypeSignature(mob);
+            var update = new NetNode.MobEventUpdate(mobSyncId, x, y, dir, new[] { attackEvent }, mobType);
+
+            if (MobsSyncAttackDebugLog)
+                Log.Debug("[MobsSync] Host sending attack syncId={SyncId} skill={Skill}", mobSyncId, skillId);
+
+            net.SendMobEvents(new[] { update });
         }
 
         private void Hook_Mob_setNemesisTarget(Hook_Mob.orig_setNemesisTarget orig, Mob self, Entity e)
@@ -1360,9 +1384,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             trackedMobs.Clear();
             trackedMobIndices.Clear();
             clientMobTargets.Clear();
-            clientAttackUnlockUntilTick.Clear();
-            clientAttackForcedDir.Clear();
-            clientAttackForcedDirUntilTick.Clear();
             clientCachedAttackTargetByLocalIndex.Clear();
             clientQueuedOldSkillMarkers.Clear();
             hostContactAttackSendTick.Clear();
@@ -1376,6 +1397,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             clientLastAppliedHostAffectPayloadBySyncId.Clear();
             clientLastAppliedAnimPayloadByLocalIndex.Clear();
             clientLastAnimationApplyFrameByLocalIndex.Clear();
+            clientLastNetworkAttackTickByLocalIndex.Clear();
             parsedAnimPayloadCache.Clear();
             hostMobTypeBySyncId.Clear();
             hostLastSentMobStatesBySyncId.Clear();
@@ -1443,9 +1465,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static void ShiftIndicesAfterRemovalLocked(int deletedIndex)
         {
             ShiftDictionaryKeysLocked(clientMobTargets, deletedIndex);
-            ShiftDictionaryKeysLocked(clientAttackUnlockUntilTick, deletedIndex);
-            ShiftDictionaryKeysLocked(clientAttackForcedDir, deletedIndex);
-            ShiftDictionaryKeysLocked(clientAttackForcedDirUntilTick, deletedIndex);
             ShiftDictionaryKeysLocked(clientCachedAttackTargetByLocalIndex, deletedIndex);
             ShiftDictionaryKeysLocked(clientQueuedOldSkillMarkers, deletedIndex);
             ShiftDictionaryKeysLocked(hostContactAttackSendTick, deletedIndex);
@@ -1455,6 +1474,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             ShiftDictionaryKeysLocked(hostQueuedOldSkillMarkers, deletedIndex);
             ShiftDictionaryKeysLocked(clientLastAppliedAnimPayloadByLocalIndex, deletedIndex);
             ShiftDictionaryKeysLocked(clientLastAnimationApplyFrameByLocalIndex, deletedIndex);
+            ShiftDictionaryKeysLocked(clientLastNetworkAttackTickByLocalIndex, deletedIndex);
         }
 
         private static void ShiftDictionaryKeysLocked<T>(Dictionary<int, T> dict, int deletedIndex)
@@ -1831,7 +1851,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static int ResolveLocalIndexForIncomingAttackLocked(NetNode.MobAttack attack)
         {
             var localIndex = ResolveLocalIndexBySyncIdLocked(attack.Index);
-            hostMobTypeBySyncId.TryGetValue(attack.Index, out var expectedType);
+            var expectedType = attack.Type;
+            if (string.IsNullOrWhiteSpace(expectedType))
+                hostMobTypeBySyncId.TryGetValue(attack.Index, out expectedType);
 
             if (localIndex >= 0 && localIndex < trackedMobs.Count)
             {
@@ -1842,6 +1864,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (string.IsNullOrWhiteSpace(expectedType))
                 return -1;
+
+            if (!string.IsNullOrWhiteSpace(attack.Type))
+                hostMobTypeBySyncId[attack.Index] = attack.Type;
 
             var rebindIndex = FindBestTrackedMobIndexForTypeAndPositionLocked(expectedType, attack.X, attack.Y, null);
             if (rebindIndex >= 0 && rebindIndex < trackedMobs.Count)
@@ -2443,54 +2468,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static bool IsClientAttackUnlockActive(Mob mob)
-        {
-            if (!TryGetTrackedIndex(mob, out var localIndex))
-                return false;
-
-            lock (Sync)
-            {
-                return IsClientAttackUnlockActiveLocked(localIndex, Stopwatch.GetTimestamp());
-            }
-        }
-
-        private static bool IsClientAttackUnlockActiveLocked(int localIndex, long nowTick)
-        {
-            if (!clientAttackUnlockUntilTick.TryGetValue(localIndex, out var until))
-                return false;
-
-            if (nowTick <= until)
-                return true;
-
-            clientAttackUnlockUntilTick.Remove(localIndex);
-            clientCachedAttackTargetByLocalIndex.Remove(localIndex);
-            return false;
-        }
-
-        private static bool TryGetClientForcedDirLocked(int localIndex, long nowTick, out int dir)
-        {
-            dir = 0;
-            if (!clientAttackForcedDir.TryGetValue(localIndex, out var rawDir))
-                return false;
-
-            if (clientAttackForcedDirUntilTick.TryGetValue(localIndex, out var until) && nowTick > until)
-            {
-                clientAttackForcedDir.Remove(localIndex);
-                clientAttackForcedDirUntilTick.Remove(localIndex);
-                return false;
-            }
-
-            dir = NormalizeDir(rawDir);
-            if (dir == 0)
-            {
-                clientAttackForcedDir.Remove(localIndex);
-                clientAttackForcedDirUntilTick.Remove(localIndex);
-                return false;
-            }
-
-            return true;
-        }
-
         private static int NormalizeDir(int dir)
         {
             if (dir < 0) return -1;
@@ -3038,6 +3015,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!net.TryConsumeMobAttacks(out var attacks))
                 return;
 
+            if (attacks.Count > 0)
+                Log.Warning("[MobsSync] Consumed {Count} host mob attacks (LAN/Steam)", attacks.Count);
+
             ApplyIncomingHostMobAttacks(attacks);
         }
 
@@ -3055,70 +3035,17 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 {
                     var localIndex = ResolveLocalIndexForIncomingAttackLocked(attack);
                     if (localIndex >= 0 && localIndex < trackedMobs.Count)
-                    {
                         mob = trackedMobs[localIndex];
-                        var forcedDirTicks = (long)(Stopwatch.Frequency * ClientAttackForcedDirSeconds);
-                        var nowTick = Stopwatch.GetTimestamp();
-                        var unlockSeconds = ResolveClientAttackUnlockSeconds(attack.SkillId);
-                        if (unlockSeconds > 0.0)
-                        {
-                            var unlockTicks = (long)(Stopwatch.Frequency * unlockSeconds);
-                            var until = nowTick + unlockTicks;
-                            if (clientAttackUnlockUntilTick.TryGetValue(localIndex, out var previousUntil) &&
-                                previousUntil > until)
-                            {
-                                until = previousUntil;
-                            }
-
-                            clientAttackUnlockUntilTick[localIndex] = until;
-                        }
-                        else
-                        {
-                            clientAttackUnlockUntilTick.Remove(localIndex);
-                        }
-
-                        var normalizedAttackDir = NormalizeDir(attack.Dir);
-                        if (normalizedAttackDir != 0)
-                        {
-                            clientAttackForcedDir[localIndex] = normalizedAttackDir;
-                            clientAttackForcedDirUntilTick[localIndex] = nowTick + forcedDirTicks;
-                        }
-                        else
-                        {
-                            clientAttackForcedDir.Remove(localIndex);
-                            clientAttackForcedDirUntilTick.Remove(localIndex);
-                        }
-                    }
                 }
 
                 if (mob == null)
+                {
+                    Log.Warning("[MobsSync] Attack dropped: could not resolve mob for syncId={Index} skill={Skill} type={Type}", attack.Index, attack.SkillId, attack.Type ?? "");
                     continue;
+                }
 
                 TryQueueClientMobAttack(mob, attack.SkillId, attack.RequiresTargetInArea, attack.Data, attack.TargetUserId, attack.Dir);
             }
-        }
-
-        private static double ResolveClientAttackUnlockSeconds(string? skillId)
-        {
-            if (string.IsNullOrWhiteSpace(skillId))
-                return 0.0;
-
-            if (string.Equals(skillId, ContactAttackPacketSkillId, StringComparison.Ordinal))
-                return ClientAttackUnlockContactSeconds;
-
-            if (skillId.StartsWith(OldSkillPreparePacketPrefix, StringComparison.Ordinal))
-                return ClientAttackUnlockOldPrepareSeconds;
-
-            if (skillId.StartsWith(OldSkillExecutePacketPrefix, StringComparison.Ordinal) ||
-                skillId.StartsWith(OldSkillChargeCompletePacketPrefix, StringComparison.Ordinal))
-            {
-                return ClientAttackUnlockOldExecuteSeconds;
-            }
-
-            if (skillId.StartsWith(NewSkillExecutePacketPrefix, StringComparison.Ordinal))
-                return ClientAttackUnlockNewExecuteSeconds;
-
-            return ClientAttackUnlockQueueSeconds;
         }
 
         private static void TrySendClientMobDraws(NetNode net)
@@ -3341,10 +3268,20 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             var target = ResolveClientAttackTargetEntity(mob, intent.TargetUserId);
             if (target == null)
+                target = ResolveClientAttackTargetEntity(mob, 0);
+            if (target == null)
+            {
+                if (MobsSyncAttackDebugLog)
+                    Log.Debug("[MobsSync] ContactAttack skipped: no target for mob (targetUserId={TargetUserId})", intent.TargetUserId);
                 return;
+            }
+
+            RegisterClientNetworkAttackExecuted(mob);
 
             try
             {
+                if (MobsSyncAttackDebugLog)
+                    Log.Debug("[MobsSync] Executing contactAttack on target");
                 mob.contactAttack(target);
             }
             catch (Exception ex)
@@ -3392,6 +3329,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 TrySetClientMobAttackTarget(mob, intent.TargetUserId, intent.AttackDir, forceRetarget: true);
                 TryWakeMobForForcedSimulation(mob);
+                if (ResolveClientAttackTargetEntity(mob, intent.TargetUserId) == null)
+                    TrySetClientMobAttackTarget(mob, 0, intent.AttackDir, forceRetarget: true);
 
                 if (!TryGetChargingOldSkillId(mob, out _))
                 {
@@ -3404,6 +3343,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 }
 
                 TryInvokeOldSkillChargeComplete(oldSkill);
+                RegisterClientNetworkAttackExecuted(mob);
                 oldSkill.execute(null);
             }
             catch (Exception ex)
@@ -3433,9 +3373,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 TrySetClientMobAttackTarget(mob, intent.TargetUserId, intent.AttackDir, forceRetarget: true);
                 TryWakeMobForForcedSimulation(mob);
+                if (ResolveClientAttackTargetEntity(mob, intent.TargetUserId) == null)
+                    TrySetClientMobAttackTarget(mob, 0, intent.AttackDir, forceRetarget: true);
 
                 if (!TryExecuteClientOldSkillNativeLike(oldSkill, intent.Data))
                 {
+                    RegisterClientNetworkAttackExecuted(mob);
                     oldSkill.prepare(intent.Data);
                 }
             }
@@ -3493,6 +3436,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return;
 
                 TrySetClientMobAttackTarget(mob, intent.TargetUserId, intent.AttackDir, forceRetarget: true);
+                if (ResolveClientAttackTargetEntity(mob, intent.TargetUserId) == null)
+                    TrySetClientMobAttackTarget(mob, 0, intent.AttackDir, forceRetarget: true);
 
                 var haxeSkillId = intent.SkillId.AsHaxeString();
                 if (!mob.hasOldSkill(haxeSkillId))
@@ -3922,6 +3867,30 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return TryGetChargingOldSkillId(mob, out _) || TryGetChargingNewSkillId(mob, out _);
         }
 
+        private static void RegisterClientNetworkAttackExecuted(Mob mob)
+        {
+            if (mob == null || !TryGetTrackedIndex(mob, out var localIndex))
+                return;
+
+            lock (Sync)
+            {
+                clientLastNetworkAttackTickByLocalIndex[localIndex] = Stopwatch.GetTimestamp();
+            }
+        }
+
+        private static bool IsWithinClientNetworkAttackMotionPreserveWindow(int localIndex)
+        {
+            lock (Sync)
+            {
+                if (!clientLastNetworkAttackTickByLocalIndex.TryGetValue(localIndex, out var tick))
+                    return false;
+
+                var now = Stopwatch.GetTimestamp();
+                var windowTicks = (long)(Stopwatch.Frequency * ClientNetworkAttackMotionPreserveSeconds);
+                return now - tick <= windowTicks;
+            }
+        }
+
         private static void ConsumeIncomingMobHits(NetNode net)
         {
             if (!net.TryConsumeMobHits(out var hits))
@@ -4080,7 +4049,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 {
                     var sx = GetWorldX(mob);
                     var sy = GetWorldY(mob);
-                    TrySendImmediateHostMobState(net, update.SyncId, mob, sx, sy);
+                    var dir = NormalizeDir(mob.dir);
+                    var hitEv = $"hit|{update.TargetLife.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+                    var evUpdate = new NetNode.MobEventUpdate(update.SyncId, sx, sy, dir, new[] { hitEv });
+                    net.SendMobEvents(new[] { evUpdate });
                 }
             }
         }

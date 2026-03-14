@@ -361,8 +361,14 @@ public sealed partial class NetNode : IDisposable
         public readonly double Y;
         public readonly int TargetUserId;
         public readonly int Dir;
+        /// <summary>Block client simulation for this many seconds. From event; 0 = use legacy lookup.</summary>
+        public readonly double BlockSeconds;
+        /// <summary>Force facing dir for this many seconds. From event; 0 = use legacy.</summary>
+        public readonly double ForcedDirSeconds;
+        /// <summary>Mob type for rebind when syncId mapping is missing. From MOBEVENT.</summary>
+        public readonly string Type;
 
-        public MobAttack(int index, string skillId, bool requiresTargetInArea, int? data, double x, double y, int targetUserId, int dir = 0)
+        public MobAttack(int index, string skillId, bool requiresTargetInArea, int? data, double x, double y, int targetUserId, int dir = 0, double blockSeconds = 0, double forcedDirSeconds = 0, string type = "")
         {
             Index = index;
             SkillId = skillId ?? string.Empty;
@@ -372,6 +378,31 @@ public sealed partial class NetNode : IDisposable
             Y = y;
             TargetUserId = targetUserId;
             Dir = dir;
+            BlockSeconds = blockSeconds;
+            ForcedDirSeconds = forcedDirSeconds;
+            Type = type ?? string.Empty;
+        }
+    }
+
+    /// <summary>Event-based mob update: x, y, dir + events (attack, hit, die, oldSkill). Sent when something changes, not repeatedly.</summary>
+    public readonly struct MobEventUpdate
+    {
+        public readonly int Index;
+        public readonly double X;
+        public readonly double Y;
+        public readonly int Dir;
+        public readonly IReadOnlyList<string> Events;
+        /// <summary>Mob type for rebind when syncId mapping is missing. Optional.</summary>
+        public readonly string Type;
+
+        public MobEventUpdate(int index, double x, double y, int dir, IReadOnlyList<string> events, string type = "")
+        {
+            Index = index;
+            X = x;
+            Y = y;
+            Dir = dir;
+            Events = events ?? Array.Empty<string>();
+            Type = type ?? string.Empty;
         }
     }
 
@@ -1787,6 +1818,77 @@ public sealed partial class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("MOBEVENT|", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_role != NetRole.Host)
+                _log?.Warning("[NetNode] Client HandleLine MOBEVENT len={Len} role={Role}", line.Length, _role);
+
+            var payload = line["MOBEVENT|".Length..];
+            var parsed = ParseMobEventsPayload(payload);
+
+            if (_role != NetRole.Host && parsed.Count == 0 && payload.Length > 0)
+                _log?.Warning("[NetNode] Client MOBEVENT parse yielded 0 mobs, payload len={Len} first80={Preview}", payload.Length, payload.Length > 80 ? payload[..80] + "..." : payload);
+            if (_role != NetRole.Host && parsed.Count > 0)
+            {
+                var attackCount = 0;
+                foreach (var u in parsed)
+                {
+                    if (u.Events != null)
+                        foreach (var ev in u.Events)
+                            if (ev.StartsWith("attack|", StringComparison.Ordinal)) attackCount++;
+                }
+                if (attackCount == 0)
+                    _log?.Warning("[NetNode] Client MOBEVENT parsed {N} mobs but no attack events, firstEv={First}", parsed.Count, parsed[0].Events?.FirstOrDefault() ?? "(none)");
+            }
+
+            var effectiveUserId = forceSenderId && senderId.HasValue ? senderId.Value : (senderId ?? 0);
+            var hasDieToForward = false;
+            if (parsed.Count > 0)
+            {
+                lock (_sync)
+                {
+                    foreach (var u in parsed)
+                    {
+                        if (u.Events == null)
+                            continue;
+                        foreach (var ev in u.Events)
+                        {
+                            if (string.IsNullOrEmpty(ev))
+                                continue;
+                            if (ev.StartsWith("attack|", StringComparison.Ordinal) && _role != NetRole.Host)
+                            {
+                                if (TryParseMobAttackEvent(ev, u.Index, u.X, u.Y, u.Dir, u.Type, out var attack))
+                                {
+                                    _pendingMobAttacks.Add(attack);
+                                    _log?.Warning("[NetNode] Client queued MOBEVENT attack syncId={Index} skill={Skill}", attack.Index, attack.SkillId);
+                                }
+                                else
+                                    _log?.Warning("[NetNode] Client MOBEVENT attack parse failed ev={Ev} partsLen={Parts}", ev.Length > 80 ? ev[..80] + "..." : ev, ev.Split('|').Length);
+                            }
+                            else if (ev.StartsWith("hit|", StringComparison.Ordinal))
+                            {
+                                if (TryParseMobHitEvent(ev, u.Index, u.X, u.Y, effectiveUserId, out var hit))
+                                {
+                                    _pendingMobHits.Add(hit);
+                                }
+                            }
+                            else if (ev == "die")
+                            {
+                                var die = new MobDie(effectiveUserId, u.Index, u.X, u.Y);
+                                _pendingMobDies.Add(die);
+                                if (_role == NetRole.Host && senderId.HasValue)
+                                    hasDieToForward = true;
+                            }
+                        }
+                    }
+                    _hasRemote = true;
+                }
+                if (hasDieToForward)
+                    forwardLine = line;
+            }
+            return true;
+        }
+
         if (line.StartsWith("MOBATK|", StringComparison.OrdinalIgnoreCase))
         {
             if (_role == NetRole.Host)
@@ -2400,6 +2502,109 @@ public sealed partial class NetNode : IDisposable
         return true;
     }
 
+    /// <summary>Parse attack event: attack|skillId|blockSec|forcedDirSec|reqTarget|data|targetUid|dir (8 parts)</summary>
+    private static bool TryParseMobAttackEvent(string ev, int index, double x, double y, int dir, string type, out MobAttack attack)
+    {
+        attack = default;
+        if (string.IsNullOrEmpty(ev) || !ev.StartsWith("attack|", StringComparison.Ordinal))
+            return false;
+
+        var parts = ev.Split('|');
+        if (parts.Length < 8)
+            return false;
+
+        string skillId;
+        try
+        {
+            skillId = Uri.UnescapeDataString(parts[1]);
+        }
+        catch
+        {
+            skillId = parts[1];
+        }
+
+        if (string.IsNullOrWhiteSpace(skillId))
+            return false;
+
+        if (!double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var blockSec))
+            blockSec = 0;
+        if (!double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var forcedDirSec))
+            forcedDirSec = 0;
+        var requiresTargetInArea = parts[4] == "1";
+        var dataVal = 0;
+        int.TryParse(parts[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out dataVal);
+        int? data = dataVal != 0 ? dataVal : null;
+        var targetUserId = 0;
+        int.TryParse(parts[6], NumberStyles.Integer, CultureInfo.InvariantCulture, out targetUserId);
+        var attackDir = 0;
+        if (parts.Length > 7)
+            int.TryParse(parts[7], NumberStyles.Integer, CultureInfo.InvariantCulture, out attackDir);
+
+        attack = new MobAttack(index, skillId, requiresTargetInArea, data, x, y, targetUserId, attackDir != 0 ? attackDir : dir, blockSec, forcedDirSec, type ?? string.Empty);
+        return true;
+    }
+
+    /// <summary>Parse hit event: hit|life|maxLife</summary>
+    private static bool TryParseMobHitEvent(string ev, int index, double x, double y, int userId, out MobHit hit)
+    {
+        hit = default;
+        if (string.IsNullOrEmpty(ev) || !ev.StartsWith("hit|", StringComparison.Ordinal))
+            return false;
+
+        var parts = ev.Split('|');
+        if (parts.Length < 3)
+            return false;
+
+        if (!int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var life))
+            return false;
+
+        hit = new MobHit(userId, index, life, x, y);
+        return true;
+    }
+
+    /// <summary>Parse MOBEVENT payload. Format: idx,x,y,dir[,type]§event1§event2;idx2,x2,y2,dir2[,type2]§event1. Events use § separator (they contain |).</summary>
+    private static List<MobEventUpdate> ParseMobEventsPayload(string payload)
+    {
+        const char EventSep = '\u00A7';
+        var result = new List<MobEventUpdate>();
+        if (string.IsNullOrWhiteSpace(payload))
+            return result;
+
+        var mobEntries = payload.Split(';', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var entry in mobEntries)
+        {
+            var sepIndex = entry.IndexOf(EventSep);
+            var basePart = sepIndex >= 0 ? entry[..sepIndex] : entry;
+            var eventsPart = sepIndex >= 0 && sepIndex + 1 < entry.Length ? entry[(sepIndex + 1)..] : string.Empty;
+
+            var baseParts = basePart.Split(',');
+            if (baseParts.Length < 4)
+                continue;
+
+            if (!int.TryParse(baseParts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var index))
+                continue;
+            if (!double.TryParse(baseParts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+                continue;
+            if (!double.TryParse(baseParts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+                continue;
+            if (!int.TryParse(baseParts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var dir))
+                continue;
+
+            var type = baseParts.Length >= 5 ? string.Join(",", baseParts.Skip(4)) : string.Empty;
+
+            var events = new List<string>();
+            foreach (var ev in eventsPart.Split(EventSep, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (!string.IsNullOrEmpty(ev))
+                    events.Add(ev);
+            }
+
+            result.Add(new MobEventUpdate(index, x, y, dir, events, type));
+        }
+
+        return result;
+    }
+
     private static bool TryParseMobDrawPayload(string payload, int? senderId, bool forceSenderId, out List<MobDraw> draws)
     {
         draws = new List<MobDraw>();
@@ -2868,6 +3073,40 @@ public sealed partial class NetNode : IDisposable
         return sb.ToString();
     }
 
+    private static string BuildMobEventsLine(IReadOnlyList<MobEventUpdate> updates)
+    {
+        const char EventSep = '\u00A7'; // section sign - events contain '|' so we use different separator
+        var sb = new StringBuilder("MOBEVENT|");
+        if (updates != null)
+        {
+            for (int i = 0; i < updates.Count; i++)
+            {
+                var u = updates[i];
+                if (i > 0)
+                    sb.Append(';');
+                sb.Append(u.Index.ToString(CultureInfo.InvariantCulture));
+                sb.Append(',');
+                sb.Append(u.X.ToString(CultureInfo.InvariantCulture));
+                sb.Append(',');
+                sb.Append(u.Y.ToString(CultureInfo.InvariantCulture));
+                sb.Append(',');
+                sb.Append(u.Dir.ToString(CultureInfo.InvariantCulture));
+                sb.Append(',');
+                sb.Append(u.Type ?? string.Empty);
+                if (u.Events != null)
+                {
+                    for (int j = 0; j < u.Events.Count; j++)
+                    {
+                        sb.Append(EventSep);
+                        sb.Append(u.Events[j] ?? string.Empty);
+                    }
+                }
+            }
+        }
+        sb.Append('\n');
+        return sb.ToString();
+    }
+
     private static string BuildMobMovesLine(IReadOnlyList<MobMoveSnapshot> moves)
     {
         var sb = new StringBuilder("MOBMOVE|");
@@ -3073,6 +3312,8 @@ public sealed partial class NetNode : IDisposable
 
     private static EP2PSend ResolveSteamSendType(string line)
     {
+        if (line.StartsWith("MOBEVENT|", StringComparison.OrdinalIgnoreCase))
+            return EP2PSend.k_EP2PSendReliable;
         return IsRealtimeSteamLine(line)
             ? EP2PSend.k_EP2PSendUnreliable
             : EP2PSend.k_EP2PSendReliable;
@@ -3742,6 +3983,20 @@ public sealed partial class NetNode : IDisposable
 
         var attack = new MobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y, targetUserId, dir);
         var line = BuildMobAttackLine(attack);
+        _ = SendLineSafe(line);
+    }
+
+    /// <summary>Send event-based mob updates. Format: x, y, dir + events. Sent when something changes, not repeatedly.</summary>
+    public void SendMobEvents(IReadOnlyList<MobEventUpdate> updates)
+    {
+        if (_role != NetRole.Host && _role != NetRole.Client)
+            return;
+        if (!HasAnyConnection())
+            return;
+        if (updates == null || updates.Count == 0)
+            return;
+
+        var line = BuildMobEventsLine(updates);
         _ = SendLineSafe(line);
     }
 

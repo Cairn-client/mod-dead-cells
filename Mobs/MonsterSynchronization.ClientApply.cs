@@ -15,25 +15,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             ClientMobState target;
-            var forcedDir = 0;
-            var useForcedDir = false;
-            var attackUnlock = false;
             lock (Sync)
             {
                 if (!clientMobTargets.TryGetValue(localIndex, out target))
                     return;
-
-                var nowTick = Stopwatch.GetTimestamp();
-                attackUnlock = IsClientAttackUnlockActiveLocked(localIndex, nowTick);
-                if (attackUnlock &&
-                    TryGetClientForcedDirLocked(localIndex, nowTick, out var attackDir))
-                {
-                    forcedDir = NormalizeDir(attackDir);
-                    useForcedDir = forcedDir != 0;
-                }
             }
 
-            var preserveLocalMotion = attackUnlock && ShouldPreserveClientAttackMotion(self);
+            var preserveLocalMotion = (HasLocalQueuedOrChargingSkill(self) && ShouldPreserveClientAttackMotion(self))
+                || IsWithinClientNetworkAttackMotionPreserveWindow(localIndex);
 
             if (!preserveLocalMotion)
             {
@@ -78,14 +67,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 }
             }
 
-            if (useForcedDir)
-                self.dir = forcedDir;
-            else
-            {
-                var responsiveDir = ComputeResponsiveFacingDir(self, target);
-                if (responsiveDir != 0)
-                    self.dir = responsiveDir;
-            }
+            var responsiveDir = ComputeResponsiveFacingDir(self, target);
+            if (responsiveDir != 0)
+                self.dir = responsiveDir;
 
             ApplyAuthoritativeLifeState(self, target.Life, target.MaxLife);
         }
@@ -165,36 +149,20 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             ClientMobState target;
-            var forcedDir = 0;
-            var useForcedDir = false;
-            var attackUnlock = false;
             var shouldApplyAnimThisFrame = true;
             lock (Sync)
             {
                 if (!clientMobTargets.TryGetValue(localIndex, out target))
                     return;
 
-                var nowTick = Stopwatch.GetTimestamp();
-                attackUnlock = IsClientAttackUnlockActiveLocked(localIndex, nowTick);
-                if (attackUnlock && TryGetClientForcedDirLocked(localIndex, nowTick, out var attackDir))
-                {
-                    forcedDir = NormalizeDir(attackDir);
-                    useForcedDir = forcedDir != 0;
-                }
-
                 shouldApplyAnimThisFrame = ShouldApplyClientAnimationForFrameLocked(self, localIndex);
             }
 
-            if (useForcedDir)
-                self.dir = forcedDir;
-            else
-            {
-                var responsiveDir = ComputeResponsiveFacingDir(self, target);
-                if (responsiveDir != 0)
-                    self.dir = responsiveDir;
-            }
+            var responsiveDir = ComputeResponsiveFacingDir(self, target);
+            if (responsiveDir != 0)
+                self.dir = responsiveDir;
 
-            if (attackUnlock && HasLocalQueuedOrChargingSkill(self))
+            if (HasLocalQueuedOrChargingSkill(self))
                 return;
 
             if (!shouldApplyAnimThisFrame)
