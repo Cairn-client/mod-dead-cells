@@ -991,6 +991,11 @@ namespace DeadCellsMultiplayerMod
 
 
 
+        internal static int GetBossRuneInt(User? user)
+        {
+            return user == null ? 0 : GetEffectiveBossRune(user);
+        }
+
         public static void SendBossRune(User self, NetNode? net)
         {
             if (self == null)

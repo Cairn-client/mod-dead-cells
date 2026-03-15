@@ -532,6 +532,7 @@ public sealed partial class NetNode : IDisposable
     private readonly List<InterVineLadderEvent> _pendingInterVineLadderEvents = new();
     private readonly List<InterTeleportEvent> _pendingInterTeleportEvents = new();
     private readonly List<InterBreakableGroundEvent> _pendingInterBreakableGroundEvents = new();
+    private readonly List<InterBossRuneUpdateCellsEvent> _pendingBossRuneUpdateCells = new();
     private int _primaryRemoteId;
 
     private readonly IPEndPoint _bindEp;   // host bind
@@ -1160,6 +1161,24 @@ public sealed partial class NetNode : IDisposable
             var payload = line["BOSSRUNE|".Length..];
             lock (_sync) _hasRemote = true;
             GameDataSync.ReceiveBossRune(payload);
+            return true;
+        }
+
+        if (line.StartsWith("BOSSRUNE_UPDATE_CELLS|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["BOSSRUNE_UPDATE_CELLS|".Length..].Trim();
+            var parts = payload.Split('|');
+            if (parts.Length >= 3 &&
+                double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var x) &&
+                double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var y) &&
+                int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var addInt))
+            {
+                lock (_sync)
+                {
+                    _pendingBossRuneUpdateCells.Add(new InterBossRuneUpdateCellsEvent(x, y, addInt != 0));
+                    _hasRemote = true;
+                }
+            }
             return true;
         }
 
@@ -2036,6 +2055,7 @@ public sealed partial class NetNode : IDisposable
             _pendingInterVineLadderEvents.Clear();
             _pendingInterTeleportEvents.Clear();
             _pendingInterBreakableGroundEvents.Clear();
+            _pendingBossRuneUpdateCells.Clear();
         }
         if (_useSteamTransport)
         {
@@ -4172,6 +4192,16 @@ public sealed partial class NetNode : IDisposable
         SendRaw($"INTERBREAK|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}");
     }
 
+    public void SendInterBossRuneUpdateCells(double x, double y, bool add)
+    {
+        if (!HasAnyConnection())
+            return;
+        if (ID <= 0)
+            return;
+
+        SendRaw($"BOSSRUNE_UPDATE_CELLS|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}|{(add ? 1 : 0)}");
+    }
+
     private void SendRaw(string payload)
     {
         var line = payload.EndsWith('\n') ? payload : payload + "\n";
@@ -4604,6 +4634,22 @@ public sealed partial class NetNode : IDisposable
 
             events = new List<InterBreakableGroundEvent>(_pendingInterBreakableGroundEvents);
             _pendingInterBreakableGroundEvents.Clear();
+            return events.Count > 0;
+        }
+    }
+
+    public bool TryConsumeBossRuneUpdateCells(out List<InterBossRuneUpdateCellsEvent> events)
+    {
+        lock (_sync)
+        {
+            if (_pendingBossRuneUpdateCells.Count == 0)
+            {
+                events = new List<InterBossRuneUpdateCellsEvent>();
+                return false;
+            }
+
+            events = new List<InterBossRuneUpdateCellsEvent>(_pendingBossRuneUpdateCells);
+            _pendingBossRuneUpdateCells.Clear();
             return events.Count > 0;
         }
     }

@@ -27,6 +27,7 @@ public class InteractionSync :
     private const double DoorPosTolerance = 16.0;
     private const double TeleportPosTolerance = 48.0;
     private const double BreakableGroundPosTolerance = 24.0;
+    private const double SwitchBossRunePosTolerance = 32.0;
     private const double DoorProximityRadiusPx = 100.0;
     private static readonly double DoorProximityRadiusSq = DoorProximityRadiusPx * DoorProximityRadiusPx;
     private const int DoorCloseDelayMs = 250;
@@ -65,20 +66,61 @@ public class InteractionSync :
         Hook_Hero.breakBreakableGround += Hook_Hero_breakBreakableGround;
         Hook_SwitchBossRune.canBeActivated += Hook_SwitchBossRune_canBeActivated;
         Hook_SwitchBossRune.close += Hook_SwitchBossRune_close;
+        Hook_SwitchBossRune.updateCells += Hook_SwitchBossRune_updateCells;
     }
 
 
     private bool Hook_SwitchBossRune_canBeActivated(Hook_SwitchBossRune.orig_canBeActivated orig, SwitchBossRune self, Hero by)
     {
         var net = GameMenu.NetRef;
-        if(!net.IsHost)
+        if(net != null && !net.IsHost)
             return false;
         return orig(self, by);
     }
 
     private void Hook_SwitchBossRune_close(Hook_SwitchBossRune.orig_close orig, SwitchBossRune self)
     {
+        var oldRune = 0;
+        var net = GameMenu.NetRef;
+        if (IsNetReadyForSend(net) && net!.IsHost)
+        {
+            try
+            {
+                var user = self?._level?.game?.user ?? dc.Main.Class.ME?.user;
+                if (user != null)
+                    oldRune = GameDataSync.GetBossRuneInt(user);
+            }
+            catch { }
+        }
+
         orig(self);
+
+        if (!IsNetReadyForSend(net) || !net!.IsHost)
+            return;
+
+        try
+        {
+            var user = self?._level?.game?.user ?? dc.Main.Class.ME?.user;
+            if (user != null && self != null)
+            {
+                GameDataSync.SendBossRune(user, net);
+                var newRune = GameDataSync.GetBossRuneInt(user);
+                var add = newRune > oldRune;
+                var count = System.Math.Abs(newRune - oldRune);
+                var (x, y) = GetEntityPixelPos(self);
+                for (var i = 0; i < count; i++)
+                    net.SendInterBossRuneUpdateCells(x, y, add);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "[InteractionSync] Failed to send boss rune after SwitchBossRune.close");
+        }
+    }
+
+    private void Hook_SwitchBossRune_updateCells(Hook_SwitchBossRune.orig_updateCells orig, SwitchBossRune self, bool add)
+    {
+        orig(self, add);
 
         var net = GameMenu.NetRef;
         if (!IsNetReadyForSend(net) || !net!.IsHost)
@@ -86,13 +128,15 @@ public class InteractionSync :
 
         try
         {
+            var (x, y) = GetEntityPixelPos(self);
+            net.SendInterBossRuneUpdateCells(x, y, add);
             var user = self?._level?.game?.user ?? dc.Main.Class.ME?.user;
             if (user != null)
                 GameDataSync.SendBossRune(user, net);
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "[InteractionSync] Failed to send boss rune after SwitchBossRune.close");
+            _log.Warning(ex, "[InteractionSync] Failed to send boss rune updateCells");
         }
     }
 
@@ -310,6 +354,11 @@ public class InteractionSync :
         {
             ApplyRemoteBreakableGroundEvents(breakableGroundEvents);
         }
+
+        if (net.TryConsumeBossRuneUpdateCells(out var updateCellsEvents))
+        {
+            ApplyRemoteBossRuneUpdateCells(updateCellsEvents);
+        }
     }
 
     private void CheckAndCloseDoorsWhenNoOneNearby()
@@ -407,6 +456,36 @@ public class InteractionSync :
             door.life = 0;
             door.onDie();
         }
+    }
+
+    private void ApplyRemoteBossRuneUpdateCells(List<InterBossRuneUpdateCellsEvent> events)
+    {
+        var level = ModEntry.me?._level;
+        if (level?.entities == null || events == null || events.Count == 0)
+            return;
+
+        foreach (var ev in events)
+        {
+            var altar = FindSwitchBossRuneByPos(level, ev.X, ev.Y);
+            if (altar == null)
+            {
+                _log.Warning("[InteractionSync] No SwitchBossRune found at x={X} y={Y}", ev.X, ev.Y);
+                continue;
+            }
+            try
+            {
+                altar.updateCells(ev.Add);
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "[InteractionSync] updateCells(add={Add}) failed", ev.Add);
+            }
+        }
+    }
+
+    private static SwitchBossRune? FindSwitchBossRuneByPos(Level level, double x, double y)
+    {
+        return FindInteractByPos<SwitchBossRune>(level, x, y, SwitchBossRunePosTolerance);
     }
 
     private void ApplyRemoteDoorEvents(List<InterDoorEvent> events)

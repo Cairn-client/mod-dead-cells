@@ -89,3 +89,17 @@ public readonly struct InterBreakableGroundEvent
         Y = y;
     }
 }
+
+public readonly struct InterBossRuneUpdateCellsEvent
+{
+    public readonly double X;
+    public readonly double Y;
+    public readonly bool Add;
+
+    public InterBossRuneUpdateCellsEvent(double x, double y, bool add)
+    {
+        X = x;
+        Y = y;
+        Add = add;
+    }
+}
