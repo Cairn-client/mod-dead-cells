@@ -54,8 +54,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         public static bool set_visible
         {
-            get => Instance!.root.visible;
-            set => Instance!.root.visible = value;
+            get => Instance?.root.visible ?? false;
+            set { if (Instance != null) Instance.root.visible = value; }
         }
 
 
@@ -547,8 +547,9 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         /// </summary>
         public static void EnsureCreated(TitleScreen screen)
         {
-            if (Instance != null)
+            if (Instance != null && ReferenceEquals(Instance.parent, screen))
                 return;
+            Instance = null;
             var connectionUI = new ConnectionUI(screen);
             screen.addChild(connectionUI);
             connectionUI.root.set_visible(false);

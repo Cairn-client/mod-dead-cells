@@ -3633,7 +3633,7 @@ public sealed partial class NetNode : IDisposable
 
         var payload = bossRune.ToString(CultureInfo.InvariantCulture);
         SendRaw("BOSSRUNE|" + payload);
-        _log.Information("[NetNode] Sent boss rune {BossRune}", bossRune);
+        // _log.Information("[NetNode] Sent boss rune {BossRune}", bossRune);
     }
 
     public void SendLevelDesc(string json)

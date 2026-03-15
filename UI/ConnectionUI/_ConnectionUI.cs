@@ -99,7 +99,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         }
         public static bool ShouldAutoHideConnectionUI(this TitleScreen titleScreen, bool visible)
         {
-            return ConnectionUI.set_visible = visible;
+            ConnectionUI.set_visible = visible;
+            return visible;
         }
 
     }
