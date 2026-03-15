@@ -64,6 +64,7 @@ public class InteractionSync :
         Hook_Teleport.open += Hook_Teleport_open;
         Hook_Hero.breakBreakableGround += Hook_Hero_breakBreakableGround;
         Hook_SwitchBossRune.canBeActivated += Hook_SwitchBossRune_canBeActivated;
+        Hook_SwitchBossRune.close += Hook_SwitchBossRune_close;
     }
 
 
@@ -73,6 +74,26 @@ public class InteractionSync :
         if(!net.IsHost)
             return false;
         return orig(self, by);
+    }
+
+    private void Hook_SwitchBossRune_close(Hook_SwitchBossRune.orig_close orig, SwitchBossRune self)
+    {
+        orig(self);
+
+        var net = GameMenu.NetRef;
+        if (!IsNetReadyForSend(net) || !net!.IsHost)
+            return;
+
+        try
+        {
+            var user = self?._level?.game?.user ?? dc.Main.Class.ME?.user;
+            if (user != null)
+                GameDataSync.SendBossRune(user, net);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "[InteractionSync] Failed to send boss rune after SwitchBossRune.close");
+        }
     }
 
     private void Hook_Door_init(Hook_Door.orig_init orig, Door self)

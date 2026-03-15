@@ -996,7 +996,7 @@ namespace DeadCellsMultiplayerMod
             if (self == null)
                 return;
 
-            var bossRune = ToInt(self.bossRuneActivated);
+            var bossRune = GetEffectiveBossRune(self);
             lock (_bossRuneLock)
             {
                 _hostBossRune = bossRune;
@@ -1027,6 +1027,10 @@ namespace DeadCellsMultiplayerMod
             var net = GameMenu.NetRef;
             if (net != null && net.IsHost)
                 return;
+
+            MarkPendingBossRuneReload(bossRune);
+            _log?.Information("[NetMod] Received remote boss rune {BossRune}", bossRune);
+            TryScheduleBossRuneReloadForCurrentLevel();
 
             GameMenu.EnqueueMainThread(() =>
             {
@@ -1144,8 +1148,64 @@ namespace DeadCellsMultiplayerMod
         private static void ApplyRemoteBossRune(User user, int bossRune)
         {
             CaptureOriginalUserData(user);
-            user.bossRuneActivated = bossRune;
+
+            try
+            {
+                user.br_setActivated(bossRune);
+            }
+            catch
+            {
+                user.bossRuneActivated = bossRune;
+            }
+
+            try
+            {
+                dynamic? gameData = user.game?.data;
+                if (gameData?.cgData != null)
+                    gameData.cgData.numBossCells = bossRune;
+            }
+            catch
+            {
+            }
+
             _hasRemoteBossRune = true;
+        }
+
+        private static int GetEffectiveBossRune(User user)
+        {
+            if (user == null)
+                return 0;
+
+            var fallback = ToInt(user.bossRuneActivated);
+
+            // During active runs the currently selected BC is mirrored in cgData.numBossCells (>=0).
+            // Prefer that when available so decreases are propagated too.
+            try
+            {
+                dynamic? gameData = user.game?.data;
+                if (gameData?.cgData != null)
+                {
+                    var cgBossRune = ToInt(gameData.cgData.numBossCells);
+                    if (cgBossRune >= 0)
+                        return cgBossRune;
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var activated = user.br_numActivated();
+                // br_numActivated() can return 0 in scoring contexts when cgData is unavailable.
+                if (activated == 0 && fallback > 0)
+                    return fallback;
+                return activated;
+            }
+            catch
+            {
+                return fallback;
+            }
         }
 
         private static void ForEachEscapedToken(string payload, Action<string> onToken)

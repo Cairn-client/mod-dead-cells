@@ -813,6 +813,9 @@ namespace DeadCellsMultiplayerMod
                 try
                 {
                     GameDataSync.SendLevelGraph(graphLevelId, root, graph, rng, _net);
+                    var activeUser = user ?? game?.user ?? dc.Main.Class.ME?.user;
+                    if (activeUser != null)
+                        GameDataSync.SendBossRune(activeUser, _net);
                 }
                 catch (Exception ex)
                 {
