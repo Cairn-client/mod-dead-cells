@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Reflection;
 using dc;
 using dc.en;
@@ -12,6 +13,8 @@ using dc.pr;
 using dc.shader;
 using dc.tool;
 using dc.tool._AnimationTrack;
+using dc.tool._Cooldown;
+using dc.tool.mainSkills;
 using Hashlink.Virtuals;
 using ModCore.Storage;
 using ModCore.Utilities;
@@ -31,6 +34,12 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         public string? RemoteSkinId;
         public string? RemoteHeadSkinId;
         public KingWeaponsManager? kingWeaponsManager;
+        private DiveAttack? remoteDiveAttack;
+        private long _lastRemoteDiveStartTicks;
+        private long _lastRemoteDiveLandTicks;
+
+        private const double RemoteDiveReplayMinSeconds = 0.03;
+        private const int DiveAttackCooldownKey = 729808896;
 
         ScarfManager? scarf;
 
@@ -103,6 +112,243 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             }
         }
 
+        public void TriggerRemoteDiveAttackStart()
+        {
+            if (destroyed || _level == null)
+                return;
+
+            var localHero = ResolveLocalHero();
+            if (localHero == null)
+                return;
+
+            var dive = EnsureRemoteDiveAttack(localHero);
+            if (dive == null)
+                return;
+
+            if (IsReplayTooSoon(ref _lastRemoteDiveStartTicks, RemoteDiveReplayMinSeconds))
+                return;
+
+            ExecuteRemoteDive(localHero, dive, high: 1.0, startOnly: true);
+        }
+
+        public void TriggerRemoteDiveAttackLand(double high)
+        {
+            if (destroyed || _level == null)
+                return;
+
+            var localHero = ResolveLocalHero();
+            if (localHero == null)
+                return;
+
+            var dive = EnsureRemoteDiveAttack(localHero);
+            if (dive == null)
+                return;
+
+            if (IsReplayTooSoon(ref _lastRemoteDiveLandTicks, RemoteDiveReplayMinSeconds))
+                return;
+
+            ExecuteRemoteDive(localHero, dive, high, startOnly: false);
+        }
+
+        private static bool IsReplayTooSoon(ref long lastTicks, double minSeconds)
+        {
+            var now = Stopwatch.GetTimestamp();
+            var minTicks = (long)(Stopwatch.Frequency * minSeconds);
+            if (lastTicks != 0 && now - lastTicks < minTicks)
+                return true;
+            lastTicks = now;
+            return false;
+        }
+
+        private DiveAttack? EnsureRemoteDiveAttack(Hero localHero)
+        {
+            if (remoteDiveAttack != null)
+                return remoteDiveAttack;
+
+            try
+            {
+                var manager = localHero.mainSkillsManager;
+                var localDive = manager?.getMainSkill(DiveAttack.Class) as DiveAttack;
+                if (localDive?.skillInfos == null)
+                    return null;
+
+                var currentGame = localHero._level?.game ?? dc.pr.Game.Class.ME;
+                if (currentGame == null)
+                    return null;
+
+                var created = new DiveAttack(localHero, currentGame, localDive.skillInfos);
+                created.init();
+                remoteDiveAttack = created;
+                return created;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void ExecuteRemoteDive(Hero localHero, DiveAttack dive, double high, bool startOnly)
+        {
+            var cooldownSnapshot = CaptureCooldown(localHero.cd, DiveAttackCooldownKey);
+            try
+            {
+                KingWeaponSupport.WithLocalHeroDamageAllowed(() =>
+                {
+                    KingWeaponSupport.WithKingContext(localHero, this, () =>
+                    {
+                        if (!EnsureDiveActive(dive))
+                            return;
+
+                        try { dive.activeFixedUpdate(); } catch { }
+
+                        if (startOnly)
+                            return;
+
+                        try
+                        {
+                            dive.onOwnerLand(high);
+                        }
+                        catch
+                        {
+                            try { dive.end(); } catch { }
+                        }
+                    });
+                });
+            }
+            finally
+            {
+                RestoreCooldown(localHero.cd, DiveAttackCooldownKey, cooldownSnapshot);
+            }
+        }
+
+        private static bool EnsureDiveActive(DiveAttack dive)
+        {
+            try
+            {
+                if (dive.isActive())
+                    return true;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                dive.start();
+            }
+            catch
+            {
+                try
+                {
+                    dive.onStart();
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            try
+            {
+                return dive.isActive();
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private readonly struct CooldownSnapshot
+        {
+            public readonly bool HadEntry;
+            public readonly CdInst? Entry;
+            public readonly double Frames;
+            public readonly double Initial;
+            public readonly int SubIndexBits;
+
+            public CooldownSnapshot(bool hadEntry, CdInst? entry, double frames, double initial, int subIndexBits)
+            {
+                HadEntry = hadEntry;
+                Entry = entry;
+                Frames = frames;
+                Initial = initial;
+                SubIndexBits = subIndexBits;
+            }
+        }
+
+        private static CooldownSnapshot CaptureCooldown(Cooldown? cooldown, int key)
+        {
+            if (cooldown?.fastCheck == null)
+                return default;
+
+            try
+            {
+                var fastCheck = cooldown.fastCheck;
+                if (!fastCheck.exists(key))
+                    return default;
+
+                var entry = fastCheck.get(key) as CdInst;
+                if (entry == null)
+                    return default;
+
+                return new CooldownSnapshot(
+                    hadEntry: true,
+                    entry: entry,
+                    frames: entry.frames,
+                    initial: entry.initial,
+                    subIndexBits: entry.subIndexBits);
+            }
+            catch
+            {
+                return default;
+            }
+        }
+
+        private static void RestoreCooldown(Cooldown? cooldown, int key, CooldownSnapshot snapshot)
+        {
+            if (cooldown?.fastCheck == null)
+                return;
+
+            try
+            {
+                var fastCheck = cooldown.fastCheck;
+                var current = fastCheck.get(key) as CdInst;
+
+                if (!snapshot.HadEntry || snapshot.Entry == null)
+                {
+                    if (current != null)
+                    {
+                        try { cooldown.cdList?.remove(current); } catch { }
+                        try { fastCheck.remove(key); } catch { }
+                    }
+                    return;
+                }
+
+                if (current != null && !ReferenceEquals(current, snapshot.Entry))
+                {
+                    try { cooldown.cdList?.remove(current); } catch { }
+                }
+
+                snapshot.Entry.frames = snapshot.Frames;
+                snapshot.Entry.initial = snapshot.Initial;
+                snapshot.Entry.subIndexBits = snapshot.SubIndexBits;
+                fastCheck.set(key, snapshot.Entry);
+            }
+            catch
+            {
+            }
+        }
+
+        private void DisposeRemoteDiveAttack()
+        {
+            if (remoteDiveAttack == null)
+                return;
+
+            try { remoteDiveAttack.cancel(); } catch { }
+            try { remoteDiveAttack.destroy(); } catch { }
+            remoteDiveAttack = null;
+        }
+
         private static string NormalizeBodySkinId(string? skin)
         {
             return string.IsNullOrWhiteSpace(skin)
@@ -171,6 +417,7 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         public override void dispose()
         {
             DisposeScarf();
+            DisposeRemoteDiveAttack();
             base.dispose();
         }
 

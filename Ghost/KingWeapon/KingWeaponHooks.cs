@@ -938,7 +938,8 @@ internal static class KingWeaponHooks
         if(ModEntry.IsLocalPlayerDowned())
             return false;
 
-        if(KingWeaponSupport.IsInKingContext)
+        if(KingWeaponSupport.IsInKingContext &&
+           !KingWeaponSupport.IsLocalHeroDamageAllowedInKingContext)
             return true;
 
         Weapon sourceWeapon;

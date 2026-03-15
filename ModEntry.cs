@@ -17,6 +17,7 @@ using dc.ui.hud;
 using dc.h2d;
 using Hashlink.Virtuals;
 using dc.tool;
+using dc.tool.mainSkills;
 using HaxeProxy.Runtime;
 using dc.cine;
 using CineHookInitialize;
@@ -458,6 +459,8 @@ namespace DeadCellsMultiplayerMod
             Hook_BossRushDoor.initGfx += Hook_BossRushDoor_initGfx;
             Hook_Hero.applySkin += Hook_Hero_applySkin;
             Hook_HeroHead.initCustomHead += Hook_HeroHead_initCustomHead;
+            Hook_DiveAttack.onStart += Hook_DiveAttack_onStart;
+            Hook_DiveAttack.onOwnerLand += Hook_DiveAttack_onOwnerLand;
             // Hook_Hero.tryToApplyYoloPerk += Hook_Hero_tryToApplyYoloPerk;
             // Hook_Hero.onEnterRoom += 
             Ghost.KingWeaponHooks.Install();
@@ -1764,6 +1767,9 @@ namespace DeadCellsMultiplayerMod
             var localId = net.id;
             foreach (var attack in attacks)
             {
+                if (TryHandleRemoteDiveAttack(attack, localId))
+                    continue;
+
                 ApplyRemoteWeaponUpdate(attack.Id, attack.Kind, attack.Slot, attack.PermanentId, attack.Ammo);
                 if (!TryGetClientIndex(localId, attack.Id, out var index))
                     continue;
