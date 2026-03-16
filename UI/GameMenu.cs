@@ -883,6 +883,8 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
+            _log?.Information("[NetMod][Steam] Overlay join starting: lobbyId={LobbyId} screen=ok", lobbyId);
+
             _menuSelection = NetRole.Client;
             _menuTransport = ConnectionTransport.Steam;
             _steamLobbyActive = false;
@@ -895,6 +897,7 @@ namespace DeadCellsMultiplayerMod
             ShowSteamConnectingMenu(screen);
             _ = Task.Run(() =>
             {
+                _log?.Information("[NetMod][Steam] Overlay join resolving lobby (lobbyId={LobbyId})", lobbyId);
                 var ok = SteamConnect.TryResolveJoinEndpointFromLobbyId(lobbyId, out var join);
                 EnqueueMainThread(() => ApplySteamJoinResult(screen, ok, join, fromOverlay: true));
             });
@@ -942,6 +945,9 @@ namespace DeadCellsMultiplayerMod
 
         private static void ApplySteamJoinResult(TitleScreen screen, bool ok, SteamConnect.JoinLobbyResult join, bool fromOverlay)
         {
+            if (fromOverlay)
+                _log?.Information("[NetMod][Steam] Overlay join result: ok={Ok} error={Error}", ok, join.Error ?? "(none)");
+
             if (!ok)
             {
                 _log?.Warning("[NetMod][SteamWorkerError] {Error}", join.Error);

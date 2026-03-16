@@ -360,8 +360,10 @@ namespace DeadCellsMultiplayerMod
                         Instance?.Logger.Information("[NetMod] Steam overlay join callback registered (game had Steam initialized)");
                         return;
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        Instance?.Logger.Warning(ex, "[NetMod] Steam overlay: callback registration failed (Init was false): {Message}", ex.Message);
+                        WriteOverlayCallbackFailedDiagnostics(ex);
                         return;
                     }
                 }
@@ -372,7 +374,30 @@ namespace DeadCellsMultiplayerMod
             catch (Exception ex)
             {
                 if (s_steamOverlayCallbackRetryCount == 1 || s_steamOverlayCallbackRetryCount % 60 == 0)
-                    Instance?.Logger.Debug("[NetMod] Steam overlay callback registration attempt {Attempt} failed: {Error}", s_steamOverlayCallbackRetryCount, ex.Message);
+                {
+                    Instance?.Logger.Warning(ex, "[NetMod] Steam overlay callback registration attempt {Attempt} failed: {Message}", s_steamOverlayCallbackRetryCount, ex.Message);
+                    WriteOverlayCallbackFailedDiagnostics(ex);
+                }
+            }
+        }
+
+        private static void WriteOverlayCallbackFailedDiagnostics(Exception ex)
+        {
+            try
+            {
+                var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dccm_overlay_callback_failed.txt");
+                var lines = new[]
+                {
+                    $"DCCM Steam overlay callback registration failed - {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}Z",
+                    $"Message: {ex.Message}",
+                    $"Type: {ex.GetType().FullName}",
+                    ex.StackTrace ?? "(no stack trace)"
+                };
+                System.IO.File.WriteAllLines(path, lines);
+            }
+            catch
+            {
+                // Best-effort diagnostics
             }
         }
 

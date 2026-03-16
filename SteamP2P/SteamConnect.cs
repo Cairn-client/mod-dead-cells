@@ -5,10 +5,11 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
 using System.Reflection;
-using System.Threading;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using System.Threading;
+using Microsoft.Win32;
 using ModCore.Utilities;
 using Newtonsoft.Json;
 using Steamworks;
@@ -235,6 +236,8 @@ namespace DeadCellsMultiplayerMod
 
         internal static bool TryResolveJoinEndpointFromLobbyId(ulong lobbyId, out JoinLobbyResult result)
         {
+            ModEntry.Instance?.Logger?.Information("[NetMod][Steam] TryResolveJoinEndpointFromLobbyId start: lobbyId={LobbyId}", lobbyId);
+
             result = new JoinLobbyResult
             {
                 Success = false,
@@ -242,7 +245,10 @@ namespace DeadCellsMultiplayerMod
             };
 
             if (lobbyId == 0UL)
+            {
+                ModEntry.Instance?.Logger?.Warning("[NetMod][Steam] TryResolveJoinEndpointFromLobbyId failed: invalid lobbyId");
                 return false;
+            }
 
             var request = new WorkerRequest
             {
@@ -265,15 +271,15 @@ namespace DeadCellsMultiplayerMod
 
             if (!workerSucceeded)
             {
+                var err = string.IsNullOrWhiteSpace(response.Error) ? "Steam worker process failed" : response.Error;
+                ModEntry.Instance?.Logger?.Warning("[NetMod][Steam] TryResolveJoinEndpointFromLobbyId failed: lobbyId={LobbyId} error={Error}", lobbyId, err);
                 result = new JoinLobbyResult
                 {
                     Success = false,
                     LobbyId = lobbyId,
                     HostSteamId = response.HostSteamId,
                     PersonaName = response.PersonaName ?? string.Empty,
-                    Error = string.IsNullOrWhiteSpace(response.Error)
-                        ? "Steam worker process failed"
-                        : response.Error
+                    Error = err
                 };
                 return false;
             }
@@ -305,6 +311,7 @@ namespace DeadCellsMultiplayerMod
                 Error = string.Empty
             };
 
+            ModEntry.Instance?.Logger?.Information("[NetMod][Steam] TryResolveJoinEndpointFromLobbyId success: lobbyId={LobbyId} hostSteamId={HostSteamId}", lobbyId, response.HostSteamId);
             return true;
         }
 
@@ -895,10 +902,11 @@ namespace DeadCellsMultiplayerMod
 
             if (!SteamAPI.Init())
             {
+                WriteSteamInitDiagnostics();
                 return new WorkerResponse
                 {
                     Success = false,
-                    Error = "Steam API init failed"
+                    Error = "Steam API init failed. Ensure Steam client is running and the game was launched from Steam."
                 };
             }
 
@@ -919,6 +927,43 @@ namespace DeadCellsMultiplayerMod
             finally
             {
                 try { SteamAPI.Shutdown(); } catch { }
+            }
+        }
+
+        private static void WriteSteamInitDiagnostics()
+        {
+            try
+            {
+                var steamApiName = Environment.Is64BitProcess ? "steam_api64.dll" : "steam_api.dll";
+                var lines = new List<string>
+                {
+                    $"DCCM Steam API init diagnostics - {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}Z",
+                    $"Process: {Environment.Is64BitProcess}",
+                    $"CurrentDirectory: {Environment.CurrentDirectory}",
+                    $"BaseDirectory: {AppContext.BaseDirectory}",
+                    $"ProcessPath: {Environment.ProcessPath ?? "(null)"}",
+                    ""
+                };
+
+                var steamRunning = Process.GetProcessesByName("steam").Length > 0;
+                lines.Add($"Steam process running: {steamRunning}");
+                lines.Add("");
+
+                var paths = GetSteamNativeSearchPaths();
+                lines.Add("Search paths checked:");
+                foreach (var path in paths)
+                {
+                    var steamApiPath = Path.Combine(path, steamApiName);
+                    var exists = File.Exists(steamApiPath);
+                    lines.Add($"  {path} -> {steamApiName} exists: {exists}");
+                }
+
+                var diagPath = Path.Combine(Path.GetTempPath(), "dccm_steam_init_diag.txt");
+                File.WriteAllLines(diagPath, lines);
+            }
+            catch
+            {
+                // Best-effort diagnostics
             }
         }
 
@@ -1523,6 +1568,15 @@ namespace DeadCellsMultiplayerMod
                 Add(Path.Combine(mdkRoot, "tools"));
             }
 
+            var steamPath = TryGetSteamInstallPath();
+            if (!string.IsNullOrWhiteSpace(steamPath))
+            {
+                Add(Path.Combine(steamPath, "steamapps", "common", "Steamworks SDK Redist", "redist", "bin", preferredNativeDir));
+                Add(Path.Combine(steamPath, "steamapps", "common", "Steamworks SDK Redist", "redist", "bin", "win64"));
+                Add(Path.Combine(steamPath, "steamapps", "common", "Steamworks SDK Redist", "redist", "bin", "win32"));
+                Add(steamPath);
+            }
+
             Add(Environment.CurrentDirectory);
             Add(AppContext.BaseDirectory);
 
@@ -1537,6 +1591,37 @@ namespace DeadCellsMultiplayerMod
             }
 
             return searchPaths;
+        }
+
+        private static string? TryGetSteamInstallPath()
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam");
+                if (key != null)
+                {
+                    var steamPath = key.GetValue("SteamPath") as string;
+                    if (string.IsNullOrWhiteSpace(steamPath))
+                        steamPath = key.GetValue("InstallPath") as string;
+                    if (!string.IsNullOrWhiteSpace(steamPath))
+                        return steamPath.Trim();
+                }
+            }
+            catch { }
+
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\Valve\Steam");
+                if (key != null)
+                {
+                    var steamPath = key.GetValue("InstallPath") as string;
+                    if (!string.IsNullOrWhiteSpace(steamPath))
+                        return steamPath.Trim();
+                }
+            }
+            catch { }
+
+            return null;
         }
 
         private static bool HasSteamApiExport(string steamApiPath, string exportName)
