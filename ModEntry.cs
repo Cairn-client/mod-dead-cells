@@ -1859,8 +1859,7 @@ namespace DeadCellsMultiplayerMod
                 animManager.play(anim.AsHaxeString(), null, null).loop(null);
                 return;
             }
-
-            animManager.play(anim.AsHaxeString(), queueAnim, g);
+            animManager.play(anim.AsHaxeString(), queueAnim, g).stopOnLastFrame(Ref<bool>.Null);
         }
 
         private static bool ShouldLoopRemoteAnim(string anim)
@@ -1884,6 +1883,7 @@ namespace DeadCellsMultiplayerMod
             if (a.IndexOf("ladder", StringComparison.OrdinalIgnoreCase) >= 0) return true;
             if (a.IndexOf("crouch", StringComparison.OrdinalIgnoreCase) >= 0) return true;
             if (a.IndexOf("volte", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("remain", StringComparison.OrdinalIgnoreCase) >= 0) return true;
 
             return false;
         }
