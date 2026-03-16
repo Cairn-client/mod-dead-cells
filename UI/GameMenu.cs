@@ -845,6 +845,8 @@ namespace DeadCellsMultiplayerMod
             ConnectionUI.NotifyConnectionsChanged();
             _log?.Information("[NetMod][Steam] Host lobby ready: id={LobbyId} code={LobbyCode}", _steamLobbyId, _steamLobbyCode);
 
+            SteamConnect.SetHostRichPresence(_steamLobbyId);
+
             var copied = SteamConnect.TryCopyLobbyCodeToClipboard(_steamLobbyCode)
                          || SteamConnect.TryCopyLobbyIdToClipboard(lobby.LobbyId);
             if (copied)
@@ -1517,6 +1519,7 @@ namespace DeadCellsMultiplayerMod
 
         private static void ResetSteamState()
         {
+            SteamConnect.ClearRichPresence();
             var lobbyId = _steamLobbyId;
             if (lobbyId != 0UL)
             {

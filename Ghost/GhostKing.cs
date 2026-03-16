@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using dc;
 using dc.en;
@@ -41,6 +42,9 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 
         private const double RemoteDiveReplayMinSeconds = 0.03;
         private const int DiveAttackCooldownKey = 729808896;
+        private const int HeroControlLockCooldownKey = 255852544;
+        private const int HeroSkillLockCooldownKey = 174063616;
+        private const int HeroDiveRuntimeCooldownKey = 719323136;
 
         ScarfManager? scarf;
 
@@ -84,22 +88,62 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             }
         }
 
+        private static Inventory? CreateDetachedInventory(Inventory? template)
+        {
+            try
+            {
+                return new Inventory();
+            }
+            catch
+            {
+            }
+
+            if (template == null)
+                return null;
+
+            try
+            {
+                var cloned = template.clone();
+                ClearInventoryContents(cloned);
+                return cloned;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static void ClearInventoryContents(Inventory inventory)
+        {
+            try
+            {
+                var items = inventory.items;
+                if (items == null || items.array == null)
+                    return;
+
+                for (var i = items.length - 1; i >= 0; i--)
+                {
+                    if ((uint)i >= (uint)items.length)
+                        continue;
+
+                    if (items.array[i] is not InventItem item)
+                        continue;
+
+                    try { inventory.remove(item); } catch { }
+                }
+            }
+            catch
+            {
+            }
+        }
+
         private void EnsureRuntimeDependencies()
         {
             var localHero = ResolveLocalHero();
-            if (localHero?.inventory != null && inventory == null)
-            {
-                try
-                {
-                    inventory = localHero.inventory.clone();
-                }
-                catch
-                {
-                    inventory = localHero.inventory;
-                }
-            }
+            if (inventory == null)
+                inventory = CreateDetachedInventory(localHero?.inventory);
 
-            if (kingWeaponsManager == null && localHero != null)
+            if (kingWeaponsManager == null && localHero != null && inventory != null)
             {
                 try
                 {
@@ -118,18 +162,11 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             if (destroyed || _level == null)
                 return;
 
-            var localHero = ResolveLocalHero();
-            if (localHero == null)
-                return;
-
-            var dive = EnsureRemoteDiveAttack(localHero, forceRecreate: true);
-            if (dive == null)
-                return;
-
             if (IsReplayTooSoon(ref _lastRemoteDiveStartTicks, RemoteDiveReplayMinSeconds))
                 return;
 
-            ExecuteRemoteDive(localHero, dive, high: 1.0, startOnly: true);
+            // Keep visual anticipation but avoid mutating local Hero state on remote "start".
+            try { spr?._animManager?.play("jumpDown".AsHaxeString(), null, null)?.stopOnLastFrame(Ref<bool>.Null); } catch { }
         }
 
         public void TriggerRemoteDiveAttackLand(double high)
@@ -141,7 +178,7 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             if (localHero == null)
                 return;
 
-            var dive = EnsureRemoteDiveAttack(localHero, forceRecreate: false);
+            var dive = EnsureRemoteDiveAttack(localHero, forceRecreate: true);
             if (dive == null)
                 return;
 
@@ -207,13 +244,17 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         private void ExecuteRemoteDive(Hero localHero, DiveAttack dive, double high, bool startOnly)
         {
             var cooldownSnapshot = CaptureCooldown(localHero.cd, DiveAttackCooldownKey);
+            var controlLockSnapshot = CaptureCooldown(localHero.cd, HeroControlLockCooldownKey);
+            var skillLockSnapshot = CaptureCooldown(localHero.cd, HeroSkillLockCooldownKey);
+            var diveRuntimeSnapshot = CaptureCooldown(localHero.cd, HeroDiveRuntimeCooldownKey);
+            var heroSnapshot = CaptureLocalHeroDiveState(localHero);
             try
             {
                 KingWeaponSupport.WithLocalHeroDamageAllowed(() =>
                 {
                     KingWeaponSupport.WithKingContext(localHero, this, () =>
                     {
-                        if (!EnsureDiveActive(dive))
+                        if (!EnsureDiveActive(localHero, dive))
                             return;
 
                         try { dive.activeFixedUpdate(); } catch { }
@@ -234,11 +275,327 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             }
             finally
             {
+                RestoreCooldown(localHero.cd, HeroDiveRuntimeCooldownKey, diveRuntimeSnapshot);
+                RestoreCooldown(localHero.cd, HeroSkillLockCooldownKey, skillLockSnapshot);
+                RestoreCooldown(localHero.cd, HeroControlLockCooldownKey, controlLockSnapshot);
                 RestoreCooldown(localHero.cd, DiveAttackCooldownKey, cooldownSnapshot);
+                RestoreLocalHeroDiveState(localHero, heroSnapshot);
             }
         }
 
-        private static bool EnsureDiveActive(DiveAttack dive)
+        private readonly struct LocalHeroDiveStateSnapshot
+        {
+            public readonly bool HadDiveAffect;
+            public readonly bool HadLandAffect;
+            public readonly object? CollisionMode;
+            public readonly object? IgnoreGround;
+            public readonly bool HasRepelling;
+            public readonly bool HasRepellingKnown;
+            public readonly double Bdx;
+            public readonly bool BdxKnown;
+            public readonly double Bdy;
+            public readonly bool BdyKnown;
+
+            public LocalHeroDiveStateSnapshot(
+                bool hadDiveAffect,
+                bool hadLandAffect,
+                object? collisionMode,
+                object? ignoreGround,
+                bool hasRepelling,
+                bool hasRepellingKnown,
+                double bdx,
+                bool bdxKnown,
+                double bdy,
+                bool bdyKnown)
+            {
+                HadDiveAffect = hadDiveAffect;
+                HadLandAffect = hadLandAffect;
+                CollisionMode = collisionMode;
+                IgnoreGround = ignoreGround;
+                HasRepelling = hasRepelling;
+                HasRepellingKnown = hasRepellingKnown;
+                Bdx = bdx;
+                BdxKnown = bdxKnown;
+                Bdy = bdy;
+                BdyKnown = bdyKnown;
+            }
+        }
+
+        private static LocalHeroDiveStateSnapshot CaptureLocalHeroDiveState(Hero hero)
+        {
+            var hadDiveAffect = HasAffect(hero, 11);
+            var hadLandAffect = HasAffect(hero, 63);
+            var collisionMode = TryReadMemberValue(hero, "collisionMode");
+            var ignoreGround = TryReadMemberValue(hero, "ignoreGround");
+            var hasRepellingKnown = TryReadBoolMember(hero, "hasRepelling", out var hasRepelling);
+            var bdxKnown = TryReadDoubleMember(hero, "bdx", out var bdx);
+            var bdyKnown = TryReadDoubleMember(hero, "bdy", out var bdy);
+            return new LocalHeroDiveStateSnapshot(
+                hadDiveAffect,
+                hadLandAffect,
+                collisionMode,
+                ignoreGround,
+                hasRepelling,
+                hasRepellingKnown,
+                bdx,
+                bdxKnown,
+                bdy,
+                bdyKnown);
+        }
+
+        private static void RestoreLocalHeroDiveState(Hero hero, LocalHeroDiveStateSnapshot snapshot)
+        {
+            if (!snapshot.HadDiveAffect)
+            {
+                try { hero.removeAllAffects(11); } catch { }
+            }
+
+            if (!snapshot.HadLandAffect)
+            {
+                try { hero.removeAllAffects(63); } catch { }
+            }
+
+            TryWriteMemberValue(hero, "collisionMode", snapshot.CollisionMode);
+            TryWriteMemberValue(hero, "ignoreGround", snapshot.IgnoreGround);
+
+            if (snapshot.HasRepellingKnown)
+            {
+                TryWriteBoolMember(hero, "hasRepelling", snapshot.HasRepelling);
+                if (snapshot.HasRepelling)
+                {
+                    try { hero.enableRepelling(); } catch { }
+                }
+            }
+
+            if (snapshot.BdxKnown)
+                TryWriteDoubleMember(hero, "bdx", snapshot.Bdx);
+            if (snapshot.BdyKnown)
+                TryWriteDoubleMember(hero, "bdy", snapshot.Bdy);
+        }
+
+        private static bool HasAffect(Entity entity, int affectId)
+        {
+            try
+            {
+                var affects = entity.affects;
+                if (affects == null || affects.array == null)
+                    return false;
+                if ((uint)affectId >= (uint)affects.length)
+                    return false;
+                var bucket = affects.array[affectId] as ArrayObj;
+                return bucket != null && bucket.length > 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static object? TryReadMemberValue(object target, string memberName)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(memberName))
+                return null;
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            try
+            {
+                var type = target.GetType();
+                var prop = type.GetProperty(memberName, flags);
+                if (prop != null)
+                    return prop.GetValue(target);
+                var field = type.GetField(memberName, flags);
+                if (field != null)
+                    return field.GetValue(target);
+            }
+            catch
+            {
+            }
+
+            return null;
+        }
+
+        private static void TryWriteMemberValue(object target, string memberName, object? value)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(memberName))
+                return;
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            try
+            {
+                var type = target.GetType();
+                var prop = type.GetProperty(memberName, flags);
+                if (prop != null && prop.CanWrite)
+                {
+                    if (value == null)
+                    {
+                        if (!prop.PropertyType.IsValueType || Nullable.GetUnderlyingType(prop.PropertyType) != null)
+                            prop.SetValue(target, null);
+                        return;
+                    }
+
+                    if (prop.PropertyType.IsInstanceOfType(value))
+                    {
+                        prop.SetValue(target, value);
+                        return;
+                    }
+                }
+
+                var field = type.GetField(memberName, flags);
+                if (field != null)
+                {
+                    if (value == null)
+                    {
+                        if (!field.FieldType.IsValueType || Nullable.GetUnderlyingType(field.FieldType) != null)
+                            field.SetValue(target, null);
+                        return;
+                    }
+
+                    if (field.FieldType.IsInstanceOfType(value))
+                        field.SetValue(target, value);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static bool TryReadBoolMember(object target, string memberName, out bool value)
+        {
+            value = default;
+            var raw = TryReadMemberValue(target, memberName);
+            if (raw is bool b)
+            {
+                value = b;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static void TryWriteBoolMember(object target, string memberName, bool value)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(memberName))
+                return;
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            try
+            {
+                var type = target.GetType();
+                var prop = type.GetProperty(memberName, flags);
+                if (prop != null && prop.CanWrite)
+                {
+                    if (prop.PropertyType == typeof(bool) || prop.PropertyType == typeof(bool?))
+                    {
+                        prop.SetValue(target, value);
+                        return;
+                    }
+                }
+
+                var field = type.GetField(memberName, flags);
+                if (field != null && (field.FieldType == typeof(bool) || field.FieldType == typeof(bool?)))
+                    field.SetValue(target, value);
+            }
+            catch
+            {
+            }
+        }
+
+        private static bool TryReadDoubleMember(object target, string memberName, out double value)
+        {
+            value = default;
+            var raw = TryReadMemberValue(target, memberName);
+
+            if (raw is double d)
+            {
+                value = d;
+                return true;
+            }
+
+            if (raw is float f)
+            {
+                value = f;
+                return true;
+            }
+
+            if (raw is int i)
+            {
+                value = i;
+                return true;
+            }
+
+            if (raw is long l)
+            {
+                value = l;
+                return true;
+            }
+
+            if (raw is decimal m)
+            {
+                value = (double)m;
+                return true;
+            }
+
+            if (raw != null)
+            {
+                try
+                {
+                    value = Convert.ToDouble(raw, CultureInfo.InvariantCulture);
+                    return true;
+                }
+                catch
+                {
+                }
+            }
+
+            return false;
+        }
+
+        private static void TryWriteDoubleMember(object target, string memberName, double value)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(memberName))
+                return;
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            try
+            {
+                var type = target.GetType();
+                var prop = type.GetProperty(memberName, flags);
+                if (prop != null && prop.CanWrite)
+                {
+                    if (prop.PropertyType == typeof(double) || prop.PropertyType == typeof(double?))
+                    {
+                        prop.SetValue(target, value);
+                        return;
+                    }
+
+                    if (prop.PropertyType == typeof(float) || prop.PropertyType == typeof(float?))
+                    {
+                        prop.SetValue(target, (float)value);
+                        return;
+                    }
+                }
+
+                var field = type.GetField(memberName, flags);
+                if (field == null)
+                    return;
+
+                if (field.FieldType == typeof(double) || field.FieldType == typeof(double?))
+                {
+                    field.SetValue(target, value);
+                    return;
+                }
+
+                if (field.FieldType == typeof(float) || field.FieldType == typeof(float?))
+                {
+                    field.SetValue(target, (float)value);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static bool EnsureDiveActive(Hero localHero, DiveAttack dive)
         {
             try
             {
@@ -249,21 +606,7 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             {
             }
 
-            try
-            {
-                dive.start();
-            }
-            catch
-            {
-                try
-                {
-                    dive.onStart();
-                }
-                catch
-                {
-                    return false;
-                }
-            }
+            ForceDiveActiveWithoutStart(localHero, dive);
 
             try
             {
@@ -272,6 +615,37 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             catch
             {
                 return true;
+            }
+        }
+
+        private static void ForceDiveActiveWithoutStart(Hero localHero, DiveAttack dive)
+        {
+            EnsureCooldownEntry(dive.cd, 721420288, 2.0);
+            EnsureCooldownEntry(localHero.cd, HeroDiveRuntimeCooldownKey, 2.0);
+        }
+
+        private static void EnsureCooldownEntry(Cooldown? cooldown, int key, double frames)
+        {
+            if (cooldown?.fastCheck == null)
+                return;
+
+            try
+            {
+                var fastCheck = cooldown.fastCheck;
+                var existing = fastCheck.get(key) as CdInst;
+                if (existing != null)
+                {
+                    if (existing.frames < frames)
+                        existing.frames = frames;
+                    return;
+                }
+
+                var created = new CdInst(key, frames);
+                fastCheck.set(key, created);
+                try { cooldown.cdList?.push(created); } catch { }
+            }
+            catch
+            {
             }
         }
 

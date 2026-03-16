@@ -395,6 +395,42 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
+        /// <summary>
+        /// Sets Rich Presence "connect" so friends can use "Join Game" in Steam overlay.
+        /// </summary>
+        internal static void SetHostRichPresence(ulong lobbyId)
+        {
+            if (lobbyId == 0UL)
+            {
+                ClearRichPresence();
+                return;
+            }
+            try
+            {
+                var connect = $"+connect_lobby {lobbyId}";
+                if (SteamFriends.SetRichPresence("connect", connect))
+                    ModEntry.Instance?.Logger?.Debug("[NetMod][Steam] Rich Presence set: connect={Connect}", connect);
+            }
+            catch (Exception ex)
+            {
+                ModEntry.Instance?.Logger?.Debug(ex, "[NetMod][Steam] SetRichPresence failed");
+            }
+        }
+
+        /// <summary>
+        /// Clears Rich Presence when leaving lobby.
+        /// </summary>
+        internal static void ClearRichPresence()
+        {
+            try
+            {
+                SteamFriends.ClearRichPresence();
+            }
+            catch
+            {
+            }
+        }
+
         internal static bool TryCopyLobbyIdToClipboard(ulong lobbyId)
         {
             if (lobbyId == 0)

@@ -435,10 +435,12 @@ public partial class ModEntry
         payload = string.Empty;
         if (string.IsNullOrWhiteSpace(kindId))
             return false;
-        if (!kindId.StartsWith(RemoteDiveInfoKindPrefix, StringComparison.Ordinal))
+
+        var cleaned = kindId.Trim();
+        if (!cleaned.StartsWith(RemoteDiveInfoKindPrefix, StringComparison.Ordinal))
             return false;
 
-        payload = kindId[RemoteDiveInfoKindPrefix.Length..];
+        payload = cleaned[RemoteDiveInfoKindPrefix.Length..];
         return true;
     }
 
@@ -447,7 +449,7 @@ public partial class ModEntry
         if (string.IsNullOrWhiteSpace(kindId))
             return false;
 
-        return string.Equals(kindId, RemoteDiveAttackKind, StringComparison.Ordinal);
+        return string.Equals(kindId.Trim(), RemoteDiveAttackKind, StringComparison.Ordinal);
     }
 
     private bool TryHandleRemoteDiveAttack(NetNode.RemoteAttack attack, int localId)

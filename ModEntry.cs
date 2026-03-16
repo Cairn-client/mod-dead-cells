@@ -52,6 +52,7 @@ namespace DeadCellsMultiplayerMod
         private bool _ready;
         private static bool s_hooksInstalled;
         private static IDisposable? s_steamOverlayJoinCallback;
+        private static IDisposable? s_steamRichPresenceJoinCallback;
         private static bool s_steamOverlayCallbackPending;
         private static int s_steamOverlayCallbackRetryCount;
         private const int SteamOverlayCallbackMaxRetries = 600;
@@ -337,7 +338,7 @@ namespace DeadCellsMultiplayerMod
 
         private static void TryDeferredSteamOverlayCallbackRegistration()
         {
-            if (!s_steamOverlayCallbackPending || s_steamOverlayJoinCallback != null)
+            if (!s_steamOverlayCallbackPending || (s_steamOverlayJoinCallback != null && s_steamRichPresenceJoinCallback != null))
                 return;
             if (s_steamOverlayCallbackRetryCount >= SteamOverlayCallbackMaxRetries)
             {
@@ -356,8 +357,9 @@ namespace DeadCellsMultiplayerMod
                     try
                     {
                         s_steamOverlayJoinCallback = Callback<GameLobbyJoinRequested_t>.Create(OnGameLobbyJoinRequested);
+                        s_steamRichPresenceJoinCallback = Callback<GameRichPresenceJoinRequested_t>.Create(OnGameRichPresenceJoinRequested);
                         s_steamOverlayCallbackPending = false;
-                        Instance?.Logger.Information("[NetMod] Steam overlay join callback registered (game had Steam initialized)");
+                        Instance?.Logger.Information("[NetMod] Steam overlay join callbacks registered (game had Steam initialized)");
                         return;
                     }
                     catch (Exception ex)
@@ -368,8 +370,9 @@ namespace DeadCellsMultiplayerMod
                     }
                 }
                 s_steamOverlayJoinCallback = Callback<GameLobbyJoinRequested_t>.Create(OnGameLobbyJoinRequested);
+                s_steamRichPresenceJoinCallback = Callback<GameRichPresenceJoinRequested_t>.Create(OnGameRichPresenceJoinRequested);
                 s_steamOverlayCallbackPending = false;
-                Instance?.Logger.Information("[NetMod] Steam overlay join callback registered (attempt {Attempt})", s_steamOverlayCallbackRetryCount);
+                Instance?.Logger.Information("[NetMod] Steam overlay join callbacks registered (attempt {Attempt})", s_steamOverlayCallbackRetryCount);
             }
             catch (Exception ex)
             {
@@ -420,8 +423,42 @@ namespace DeadCellsMultiplayerMod
             var lobbyId = data.m_steamIDLobby.m_SteamID;
             if (lobbyId == 0UL)
                 return;
-            Instance?.Logger.Information("[NetMod][Steam] Overlay join requested lobbyId={LobbyId}", lobbyId);
+            Instance?.Logger.Information("[NetMod][Steam] Overlay lobby join requested lobbyId={LobbyId}", lobbyId);
             GameMenu.EnqueueMainThread(() => GameMenu.HandleSteamOverlayJoinRequest(lobbyId));
+        }
+
+        private static void OnGameRichPresenceJoinRequested(GameRichPresenceJoinRequested_t data)
+        {
+            var connect = data.m_rgchConnect;
+            if (string.IsNullOrWhiteSpace(connect))
+            {
+                Instance?.Logger.Debug("[NetMod][Steam] Rich Presence join requested but connect string is empty");
+                return;
+            }
+            Instance?.Logger.Information("[NetMod][Steam] Overlay Rich Presence join requested connect={Connect}", connect);
+            var lobbyId = TryParseLobbyIdFromConnectString(connect);
+            if (lobbyId == 0UL)
+            {
+                Instance?.Logger.Warning("[NetMod][Steam] Could not parse lobby ID from connect string: {Connect}", connect);
+                return;
+            }
+            GameMenu.EnqueueMainThread(() => GameMenu.HandleSteamOverlayJoinRequest(lobbyId));
+        }
+
+        private static ulong TryParseLobbyIdFromConnectString(string connect)
+        {
+            if (string.IsNullOrWhiteSpace(connect))
+                return 0UL;
+            var parts = connect.Split((char[]?)[' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < parts.Length - 1; i++)
+            {
+                if (string.Equals(parts[i], "+connect_lobby", StringComparison.OrdinalIgnoreCase) &&
+                    ulong.TryParse(parts[i + 1], out var lobbyId) && lobbyId > 0)
+                    return lobbyId;
+            }
+            if (ulong.TryParse(connect.Trim(), out var direct) && direct > 0)
+                return direct;
+            return 0UL;
         }
 
         private static void TryRunSteamCallbacks()
@@ -942,8 +979,7 @@ namespace DeadCellsMultiplayerMod
             if (_netRole == NetRole.None) return;
             var net = _net;
             var localId = net?.id ?? 0;
-            if (_ghost == null)
-                _ghost = new GhostHero(localId, game!, me, Logger, this);
+            _ghost = new GhostHero(localId, game!, me, Logger, this);
             _ghost.SetLabel(me, GameMenu.Username);
 
             for (int i = 0; i < clients.Length; i++)
@@ -953,6 +989,7 @@ namespace DeadCellsMultiplayerMod
                 rLastY[i] = 0;
             }
 
+            DrainRemoteCombatQueuesAfterLevelChange();
             ReceiveGhostCoords();
         }
 
@@ -1784,6 +1821,16 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
+        private void DrainRemoteCombatQueuesAfterLevelChange()
+        {
+            var net = _net;
+            if (net == null)
+                return;
+
+            try { net.TryConsumeRemoteWeaponSnapshots(out _); } catch { }
+            try { net.TryConsumeRemoteAttacks(out _); } catch { }
+        }
+
         private void ReceiveGhostAttacks()
         {
             var net = _net;
@@ -1797,6 +1844,13 @@ namespace DeadCellsMultiplayerMod
             {
                 if (TryHandleRemoteDiveAttack(attack, localId))
                     continue;
+
+                if (attack.Slot < 0 &&
+                    (string.IsNullOrWhiteSpace(attack.Kind) ||
+                     attack.Kind.StartsWith("__", StringComparison.Ordinal)))
+                {
+                    continue;
+                }
 
                 ApplyRemoteWeaponUpdate(attack.Id, attack.Kind, attack.Slot, attack.PermanentId, attack.Ammo);
                 if (!TryGetClientIndex(localId, attack.Id, out var index))
