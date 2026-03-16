@@ -432,7 +432,7 @@ namespace DeadCellsMultiplayerMod
             var connect = data.m_rgchConnect;
             if (string.IsNullOrWhiteSpace(connect))
             {
-                Instance?.Logger.Debug("[NetMod][Steam] Rich Presence join requested but connect string is empty");
+                Instance?.Logger.Information("[NetMod][Steam] Rich Presence join requested but connect string is empty (host may not have set Rich Presence)");
                 return;
             }
             Instance?.Logger.Information("[NetMod][Steam] Overlay Rich Presence join requested connect={Connect}", connect);
@@ -470,6 +470,15 @@ namespace DeadCellsMultiplayerMod
             catch
             {
             }
+        }
+
+        /// <summary>
+        /// Call from GameMenu when at main menu so Steam overlay join callbacks are pumped even if frame update is throttled.
+        /// </summary>
+        internal static void PumpSteamCallbacksForOverlay()
+        {
+            TryRunSteamCallbacks();
+            TryDeferredSteamOverlayCallbackRegistration();
         }
 
         public override void Initialize()

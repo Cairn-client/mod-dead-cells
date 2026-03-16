@@ -28,6 +28,7 @@ public class InteractionSync :
     private const double TeleportPosTolerance = 48.0;
     private const double BreakableGroundPosTolerance = 24.0;
     private const double SwitchBossRunePosTolerance = 32.0;
+    private const double ElevatorPosTolerance = 48.0;
     private const double DoorProximityRadiusPx = 100.0;
     private static readonly double DoorProximityRadiusSq = DoorProximityRadiusPx * DoorProximityRadiusPx;
     private const int DoorCloseDelayMs = 250;
@@ -552,14 +553,17 @@ public class InteractionSync :
     private void ApplyRemoteElevatorEvents(List<InterElevatorEvent> events)
     {
         var level = ModEntry.me?._level;
-        if (level?.entities == null || events == null || events.Count == 0)
+        if (level == null || events == null || events.Count == 0)
             return;
 
         foreach (var ev in events)
         {
             var elevator = FindElevatorByPos(level, ev.X, ev.Y);
             if (elevator == null)
+            {
+                _log.Warning("[InteractionSync] No Elevator found at x={X} y={Y}", ev.X, ev.Y);
                 continue;
+            }
 
             try
             {
@@ -753,7 +757,44 @@ public class InteractionSync :
 
     private static Elevator? FindElevatorByPos(Level level, double x, double y)
     {
-        return FindInteractByPos<Elevator>(level, x, y);
+        var byPos = FindInteractByPos<Elevator>(level, x, y, ElevatorPosTolerance);
+        if (byPos != null)
+            return byPos;
+        var nearest = FindNearestByPos<Elevator>(level, x, y, ElevatorPosTolerance * ElevatorPosTolerance * 4);
+        if (nearest != null)
+            return nearest;
+        return FindElevatorInTriggers(level, x, y);
+    }
+
+    private static Elevator? FindElevatorInTriggers(Level level, double x, double y)
+    {
+        try
+        {
+            var triggers = (level as dynamic)?.triggers;
+            if (triggers == null)
+                return null;
+            var len = (int)(triggers.length ?? 0);
+            Elevator? nearest = null;
+            double nearestSq = ElevatorPosTolerance * ElevatorPosTolerance * 4;
+            for (var i = 0; i < len; i++)
+            {
+                var t = triggers.getDyn(i) as Elevator;
+                if (t?.spr == null) continue;
+                var dx = t.spr.x - x;
+                var dy = t.spr.y - y;
+                var dSq = dx * dx + dy * dy;
+                if (dSq < nearestSq)
+                {
+                    nearestSq = dSq;
+                    nearest = t;
+                }
+            }
+            return nearest;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static VineLadder? FindVineLadderByPos(Level level, double x, double y)

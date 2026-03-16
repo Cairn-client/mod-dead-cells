@@ -179,6 +179,7 @@ namespace DeadCellsMultiplayerMod
 
         internal static void ProcessMainThreadQueue()
         {
+            ModEntry.PumpSteamCallbacksForOverlay();
             while (_mainThreadQueue.TryDequeue(out var action))
             {
                 try

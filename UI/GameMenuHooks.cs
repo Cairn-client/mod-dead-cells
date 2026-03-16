@@ -33,6 +33,7 @@ namespace DeadCellsMultiplayerMod
 
         private static void MainMenuHook(Hook_TitleScreen.orig_mainMenu orig, TitleScreen self)
         {
+            ModEntry.PumpSteamCallbacksForOverlay();
             if (!_addMenuHookRegistered)
             {
                 Hook_TitleScreen.addMenu += AddMenuHook;
