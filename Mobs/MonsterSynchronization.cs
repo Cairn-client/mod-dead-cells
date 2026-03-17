@@ -512,25 +512,31 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 {
                     if (!clientLastReportedMobLife.TryGetValue(localIndex, out var lastLife))
                     {
-                        // No baseline yet (fresh tracked mob). Seed and wait for next confirmed delta.
-                        // This avoids false zero-life reports during boss intro/phase transitions.
+                        // First locally-confirmed hit for this tracked mob: establish baseline and
+                        // propagate immediately when damage actually reduced life.
                         clientLastReportedMobLife[localIndex] = life;
-                        return;
+                        var maxLife = self.maxLife;
+                        if (life >= maxLife && life > 0)
+                            return;
+
+                        clientLastMobHitReportTick[localIndex] = now;
                     }
-
-                    if (life >= lastLife)
-                        return;
-
-                    if (life > 0 &&
-                        clientLastMobHitReportTick.TryGetValue(localIndex, out var lastTick) &&
-                        now - lastTick < minDelta)
+                    else
                     {
-                        clientLastReportedMobLife[localIndex] = life;
-                        return;
-                    }
+                        if (life >= lastLife)
+                            return;
 
-                    clientLastReportedMobLife[localIndex] = life;
-                    clientLastMobHitReportTick[localIndex] = now;
+                        if (life > 0 &&
+                            clientLastMobHitReportTick.TryGetValue(localIndex, out var lastTick) &&
+                            now - lastTick < minDelta)
+                        {
+                            clientLastReportedMobLife[localIndex] = life;
+                            return;
+                        }
+
+                        clientLastReportedMobLife[localIndex] = life;
+                        clientLastMobHitReportTick[localIndex] = now;
+                    }
                 }
 
                 var clientHitEvent = $"hit|{life.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
