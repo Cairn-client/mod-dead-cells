@@ -11,6 +11,7 @@ using dc.pr;
 using dc.tool.atk;
 using dc.tool.skill;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
+using DeadCellsMultiplayerMod.Mobs.Bosses;
 using DeadCellsMultiplayerMod.Mobs.Levelinit;
 using Hashlink.Virtuals;
 using ModCore.Events;
@@ -1008,7 +1009,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (parts.Count == 0)
                     return string.Empty;
 
-                return string.Join(".", parts);
+                var basePayload = string.Join(".", parts);
+                return BossStateSync.AppendBossState(basePayload, mob);
             }
             catch
             {
@@ -1279,6 +1281,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 {
                 }
 
+                var fallbackTarget = ResolveDetectedClientTargetEntity(self);
+                if (fallbackTarget != null)
+                {
+                    orig(self, fallbackTarget);
+                    return;
+                }
                 return;
             }
 
@@ -1302,6 +1310,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 }
                 catch
                 {
+                }
+
+                var fallbackTarget = ResolveDetectedClientTargetEntity(self);
+                if (fallbackTarget != null)
+                {
+                    orig(self, fallbackTarget);
+                    return;
                 }
             }
 
@@ -1582,7 +1597,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (mob.destroyed || mob._level == null)
                     return false;
 
-                if (DisableBossSyncTemporarily && IsBossMob(mob))
+                if (BossSyncConstants.DisableBossSyncTemporarily && BossSyncHelpers.IsBossMob(mob))
                     return false;
 
                 // Primary rule: any combat-hostile mob (including bosses) must be synced.
@@ -1607,28 +1622,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 }
                 
                 return false;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private static bool IsBossMob(Mob mob)
-        {
-            if (mob == null)
-                return false;
-
-            try
-            {
-                var runtimeType = mob.GetType();
-                var typeName = runtimeType?.FullName ?? runtimeType?.ToString() ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(typeName))
-                    typeName = mob.GetType().ToString();
-
-                return typeName.Contains("dc.en.mob.boss.", StringComparison.OrdinalIgnoreCase) ||
-                       typeName.Contains(".mob.boss.", StringComparison.OrdinalIgnoreCase) ||
-                       typeName.Contains(".boss.", StringComparison.OrdinalIgnoreCase);
             }
             catch
             {
@@ -2750,6 +2743,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             foreach (var entry in desired)
                 ApplySyncedAffectState(mob, entry.Key, entry.Value);
+            BossStateSync.ApplyBossStateFromPayload(mob, payload);
         }
 
         private static void ApplyIncomingHostMobStates(IReadOnlyList<NetNode.MobStateSnapshot> states)
@@ -2832,6 +2826,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             foreach (var entry in desired)
                 ApplySyncedAffectState(mob, entry.Key, entry.Value);
+            BossStateSync.ApplyBossStateFromPayload(mob, payload);
         }
 
         private static void ApplySyncedAffectState(Mob mob, int affectId, int targetFrames)
@@ -4154,31 +4149,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         /// <summary>Scale mob HP for multiplayer: +0.5 per player for regular mobs, +2 per player for bosses.</summary>
         private static void ScaleMobHpForMultiplayer(Mob mob)
         {
-            if (mob == null)
-                return;
-
-            var net = GameMenu.NetRef;
-            var playerCount = (net != null && net.IsAlive) ? (1 + NetNode.ConnectedClientCount) : 1;
-            if (playerCount <= 1)
-                return;
-
-            try
-            {
-                var maxLife = System.Math.Max(1, mob.maxLife);
-                var life = mob.life;
-                var mult = IsBossMob(mob)
-                    ? (1 + (playerCount - 1) * 2)   // bosses: 1p=1x, 2p=2x, 3p=3x
-                    : (1 + (playerCount - 1) * 0.5); // regular: 1p=1x, 2p=1.5x, 3p=2x
-
-                var newMaxLife = System.Math.Max(1, (int)System.Math.Round(maxLife * mult));
-                var newLife = System.Math.Clamp((int)System.Math.Round(life * mult), 0, newMaxLife);
-                mob.maxLife = newMaxLife;
-                mob.life = newLife;
-            }
-            catch
-            {
-                // ignore
-            }
+            BossHpScaling.ScaleForMultiplayer(mob);
         }
     }
 }

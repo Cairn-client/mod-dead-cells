@@ -623,8 +623,31 @@ namespace DeadCellsMultiplayerMod
             _localFakeDead = true;
             _localExitPenaltyApplied = false;
             _localFakeDeadStartedTicks = Stopwatch.GetTimestamp();
-            _localDownedX = hero.spr?.x ?? 0;
-            _localDownedY = hero.spr?.y ?? 0;
+            double sprX, sprY;
+            if (hero.spr != null)
+            {
+                sprX = hero.spr.x;
+                sprY = hero.spr.y;
+            }
+            else
+            {
+                try
+                {
+                    var cx = hero.cx;
+                    var xr = hero.xr;
+                    var cy = hero.cy;
+                    var yr = hero.yr;
+                    sprX = (cx + xr) * 24.0;
+                    sprY = (cy + yr) * 24.0;
+                }
+                catch
+                {
+                    sprX = 0;
+                    sprY = 0;
+                }
+            }
+            _localDownedX = sprX;
+            _localDownedY = sprY;
             _localHeldX = _localDownedX;
             _localHeldY = _localDownedY;
             _localDownedAnchorX = _localDownedX;
@@ -646,6 +669,7 @@ namespace DeadCellsMultiplayerMod
             try { hero.cancelVelocities(); } catch { }
             try { hero.lockControlsS(10.0); } catch { }
             try { hero.cancelSkillControlLock(); } catch { }
+            SnapHeroToDownedPosition(hero, _localDownedX, _localDownedY, clampToGround: false);
             StartLocalDeadCine(hero);
 
             SendLocalDownedState(net, isDowned: true, force: true);

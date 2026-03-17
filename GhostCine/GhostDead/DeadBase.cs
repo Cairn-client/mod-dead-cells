@@ -115,6 +115,10 @@ namespace DeadCellsMultiplayerMod
             if (corpse == null || corpse.destroyed || _lethalFallStarted)
                 return;
 
+            var levelId = _hero?._level?.map?.id?.ToString();
+            if (ModEntry.IsBossLevel(levelId))
+                return;
+
             _lethalFallStarted = true;
             try { corpse.startLethalFall(); } catch { }
         }

@@ -168,6 +168,19 @@ namespace DeadCellsMultiplayerMod
             "SwampHeart", "CastleAlchemy", "LighthouseTop", "LighthouseBottom", "Giant",
             "DookuCastle", "RichterCastle", "BossRushZone", "Bridge", "TopClockTower"
         };
+
+        internal static bool IsBossLevel(string? levelId)
+        {
+            return !string.IsNullOrWhiteSpace(levelId) && BossLevelIds.Contains(levelId);
+        }
+
+        /// <summary>Known boss-room genericEventIds from game's HiddenTrigger (set via marker.customId in level data).</summary>
+        private static readonly HashSet<string> BossRoomGenericEventIds = new(StringComparer.Ordinal)
+        {
+            "roomDeath", "roomBeholder", "roomBerserk", "roomCollectorBoss", "roomDooku",
+            "roomGardenerBoss", "roomGiant", "roomKingsHand", "roomQueen", "roomBehemoth",
+            "roomMamaTick", "roomKingsHandAsKing"
+        };
         private string? _lastBossCineSentLevelId;
         private long _lastBossCineSentTick;
         private const double BossCineSendCooldownSeconds = 2.0;
@@ -1205,38 +1218,41 @@ namespace DeadCellsMultiplayerMod
         {
             try
             {
+                if (string.IsNullOrWhiteSpace(levelId))
+                    return false;
+
+                if (!BossLevelIds.Contains(levelId))
+                    return false;
+
                 var game = dc.pr.Game.Class.ME;
-                var hero = game?.hero ?? ModEntry.me;
+                var hero = game?.hero ?? me;
                 var level = hero?._level;
-                if (game == null || level == null)
+                if (game == null || level == null || hero == null)
                     return false;
 
                 if (game.curCine != null && !game.curCine.destroyed)
                     return false;
 
-                var cm = level.cm;
-                if (cm == null)
+                var entitiesByClass = level.entitiesByClass;
+                if (entitiesByClass == null)
                     return false;
-                var cmType = cm.GetType();
-                var playMethod = cmType.GetMethod("play", BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(string) }, null)
-                    ?? cmType.GetMethod("play", BindingFlags.Public | BindingFlags.Instance, null, System.Type.EmptyTypes, null)
-                    ?? cmType.GetMethod("run", BindingFlags.Public | BindingFlags.Instance, null, System.Type.EmptyTypes, null);
 
-                if (playMethod != null)
+                var triggerClid = HiddenTrigger.Class.__clid;
+                var entries = entitiesByClass.get(triggerClid) as dc.hl.types.ArrayObj;
+                if (entries == null)
+                    return false;
+
+                for (var i = 0; i < entries.length; i++)
                 {
-                    if (playMethod.GetParameters().Length == 0)
-                        playMethod.Invoke(cm, null);
-                    else
-                        playMethod.Invoke(cm, new object[] { levelId });
-                    return true;
-                }
+                    if (entries.getDyn(i) is not HiddenTrigger ht)
+                        continue;
+                    if (ht.used)
+                        continue;
+                    var evId = ht.genericEventId?.ToString();
+                    if (string.IsNullOrEmpty(evId) || !BossRoomGenericEventIds.Contains(evId))
+                        continue;
 
-                var triggerMethod = cmType.GetMethod("triggerBossIntro", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic, null, System.Type.EmptyTypes, null)
-                    ?? cmType.GetMethod("startBossCine", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic, null, System.Type.EmptyTypes, null);
-
-                if (triggerMethod != null)
-                {
-                    triggerMethod.Invoke(cm, null);
+                    ht.trigger(hero);
                     return true;
                 }
             }

@@ -2578,7 +2578,7 @@ public sealed partial class NetNode : IDisposable
         return true;
     }
 
-    /// <summary>Parse hit event: hit|life|maxLife</summary>
+    /// <summary>Parse hit event: hit|life or hit|life|maxLife</summary>
     private static bool TryParseMobHitEvent(string ev, int index, double x, double y, int userId, out MobHit hit)
     {
         hit = default;
@@ -2586,7 +2586,7 @@ public sealed partial class NetNode : IDisposable
             return false;
 
         var parts = ev.Split('|');
-        if (parts.Length < 3)
+        if (parts.Length < 2)
             return false;
 
         if (!int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var life))
