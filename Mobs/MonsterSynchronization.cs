@@ -663,7 +663,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var maxLife = mob.maxLife;
             var animPayload = BuildAnimPayload(mob);
             var mobType = BuildMobStateTypeSignature(mob);
-            var statePayload = BuildMobAffectStatePayload(mob);
+            var statePayload = BuildMobAffectStatePayload(mob, includeBossStateForHost: true);
 
             var one = new List<NetNode.MobStateSnapshot>(1)
             {
@@ -846,12 +846,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var shouldRefreshPayload = !hasCachedPayload ||
                                        !hadPrevious ||
                                        nowTick - cachedPayload.Tick >= payloadRefreshTicks;
+            if (BossSyncHelpers.IsBossMob(mob))
+                shouldRefreshPayload = true;
 
             if (shouldRefreshPayload)
             {
                 animPayload = BuildAnimPayload(mob);
                 mobType = BuildMobStateTypeSignature(mob);
-                statePayload = BuildMobAffectStatePayload(mob);
+                statePayload = BuildMobAffectStatePayload(mob, includeBossStateForHost: true);
                 cachedPayload = new CachedHostMobPayload(animPayload, mobType, statePayload, nowTick);
                 hasCachedPayload = true;
                 lock (Sync)
@@ -955,7 +957,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 }
             }
 
-            var payload = BuildMobAffectStatePayload(mob);
+            var payload = BuildMobAffectStatePayload(mob, includeBossStateForHost: false);
             lock (Sync)
             {
                 clientAffectSampleBySyncId[mobSyncId] = new TimedStringPayload(payload, nowTick);
@@ -969,12 +971,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return System.Math.Abs(a - b) <= epsilon;
         }
 
-        private static string BuildMobAffectStatePayload(Mob mob)
+        private static string BuildMobAffectStatePayload(Mob mob, bool includeBossStateForHost = false)
         {
             if (mob == null)
                 return string.Empty;
             if (BossSyncHelpers.IsBossMob(mob))
-                return string.Empty;
+                return includeBossStateForHost ? BossStateSync.AppendBossState(string.Empty, mob) : string.Empty;
 
             try
             {
@@ -1012,7 +1014,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return string.Empty;
 
                 var basePayload = string.Join(".", parts);
-                return BossStateSync.AppendBossState(basePayload, mob);
+                return includeBossStateForHost ? BossStateSync.AppendBossState(basePayload, mob) : basePayload;
             }
             catch
             {
@@ -2808,8 +2810,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             if (mob == null || mob.destroyed)
                 return;
-            if (BossSyncHelpers.IsBossMob(mob))
-                return;
 
             var safePayload = payload ?? string.Empty;
             var nowTick = Stopwatch.GetTimestamp();
@@ -2824,6 +2824,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 }
 
                 clientLastAppliedHostAffectPayloadBySyncId[mobSyncId] = new TimedStringPayload(safePayload, nowTick);
+            }
+
+            if (BossSyncHelpers.IsBossMob(mob))
+            {
+                BossStateSync.ApplyBossStateFromPayload(mob, safePayload);
+                return;
             }
 
             var desired = ParseAffectStatePayload(safePayload);

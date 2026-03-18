@@ -91,13 +91,21 @@ public static class BossStateSync
             try
             {
                 if (phaseVal.HasValue)
-                    gardener.phase = phaseVal.Value;
+                {
+                    var currentPhase = gardener.phase;
+                    if (currentPhase != phaseVal.Value)
+                        gardener.phase = phaseVal.Value;
+                }
 
                 if (actionVal.HasValue)
                 {
-                    var action = CreateBossActionByIndex(actionVal.Value);
-                    if (action != null)
-                        gardener.action = action;
+                    var currentActionIndex = TryGetBossActionIndex(gardener.action);
+                    if (!currentActionIndex.HasValue || currentActionIndex.Value != actionVal.Value)
+                    {
+                        var action = CreateBossActionByIndex(actionVal.Value);
+                        if (action != null)
+                            gardener.action = action;
+                    }
                 }
             }
             catch
@@ -109,12 +117,29 @@ public static class BossStateSync
         {
             try
             {
-                collector.phase = phaseVal.Value;
+                var currentPhase = collector.phase;
+                if (currentPhase != phaseVal.Value)
+                    collector.phase = phaseVal.Value;
             }
             catch
             {
                 // ignore
             }
+        }
+    }
+
+    private static int? TryGetBossActionIndex(BossAction? action)
+    {
+        if (action == null)
+            return null;
+
+        try
+        {
+            return (int)action.Index;
+        }
+        catch
+        {
+            return null;
         }
     }
 
