@@ -973,6 +973,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             if (mob == null)
                 return string.Empty;
+            if (BossSyncHelpers.IsBossMob(mob))
+                return string.Empty;
 
             try
             {
@@ -2736,6 +2738,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             if (mob == null || mob.destroyed)
                 return;
+            if (BossSyncHelpers.IsBossMob(mob))
+                return;
 
             var desired = ParseAffectStatePayload(payload);
             if (desired.Count == 0)
@@ -2803,6 +2807,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static void ApplyAuthoritativeAffectState(int mobSyncId, Mob mob, string? payload)
         {
             if (mob == null || mob.destroyed)
+                return;
+            if (BossSyncHelpers.IsBossMob(mob))
                 return;
 
             var safePayload = payload ?? string.Empty;
