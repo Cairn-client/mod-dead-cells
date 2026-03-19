@@ -560,6 +560,7 @@ public sealed partial class NetNode : IDisposable
     private int? _cachedHostBossRune;
     private int? _cachedHostSerializerSeq;
     private int? _cachedHostSerializerUid;
+    private string? _cachedHostProgressPayload;
     private string? _cachedHostCountersPayload;
     private string? _cachedHostBlueprintsPayload;
     private string? _cachedHostLevelDescPayload;
@@ -926,6 +927,7 @@ public sealed partial class NetNode : IDisposable
         int? cachedSeed;
         int? cachedSerializerSeq;
         int? cachedSerializerUid;
+        string? cachedProgressPayload;
         string? cachedCountersPayload;
         string? cachedBlueprintsPayload;
         string? cachedLevelDescPayload;
@@ -939,6 +941,7 @@ public sealed partial class NetNode : IDisposable
             cachedSeed = _cachedHostSeed;
             cachedSerializerSeq = _cachedHostSerializerSeq;
             cachedSerializerUid = _cachedHostSerializerUid;
+            cachedProgressPayload = _cachedHostProgressPayload;
             cachedCountersPayload = _cachedHostCountersPayload;
             cachedBlueprintsPayload = _cachedHostBlueprintsPayload;
             cachedLevelDescPayload = _cachedHostLevelDescPayload;
@@ -954,6 +957,8 @@ public sealed partial class NetNode : IDisposable
             await SendLineToSteamClientSafe(connection, $"BOSSRUNE|{cachedBossRune.Value}\n").ConfigureAwait(false);
         if (cachedSeed.HasValue)
             await SendLineToSteamClientSafe(connection, $"SEED|{cachedSeed.Value}\n").ConfigureAwait(false);
+        if (cachedProgressPayload != null)
+            await SendLineToSteamClientSafe(connection, $"PROGRESS|{cachedProgressPayload}\n").ConfigureAwait(false);
         if (cachedCountersPayload != null)
             await SendLineToSteamClientSafe(connection, $"COUNTERS|{cachedCountersPayload}\n").ConfigureAwait(false);
         if (cachedBlueprintsPayload != null)
@@ -1138,6 +1143,14 @@ public sealed partial class NetNode : IDisposable
             var payload = line["HXSYNC|".Length..];
             lock (_sync) _hasRemote = true;
             GameDataSync.ReceiveSerializerSync(payload);
+            return true;
+        }
+
+        if (line.StartsWith("PROGRESS|", StringComparison.Ordinal))
+        {
+            var payload = line["PROGRESS|".Length..];
+            lock (_sync) _hasRemote = true;
+            GameDataSync.ReceiveProgressSync(payload);
             return true;
         }
 
@@ -3620,6 +3633,27 @@ public sealed partial class NetNode : IDisposable
         _log.Information("[NetNode] Sent counters sync");
     }
 
+    public void SendProgress(string progressPayload)
+    {
+        var safeProgress = (progressPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
+        if (_role == NetRole.Host)
+        {
+            lock (_hostCacheSync)
+            {
+                _cachedHostProgressPayload = safeProgress;
+            }
+        }
+
+        if (!HasAnyConnection())
+        {
+            _log.Information("[NetNode] Skip sending progress sync: no connected client");
+            return;
+        }
+
+        SendRaw($"PROGRESS|{safeProgress}");
+        _log.Information("[NetNode] Sent progress sync");
+    }
+
     public void SendBlueprints(string blueprintsPayload)
     {
         var safeBlueprints = (blueprintsPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
@@ -4904,6 +4938,7 @@ public sealed partial class NetNode : IDisposable
             _cachedHostBossRune = null;
             _cachedHostSerializerSeq = null;
             _cachedHostSerializerUid = null;
+            _cachedHostProgressPayload = null;
             _cachedHostCountersPayload = null;
             _cachedHostBlueprintsPayload = null;
             _cachedHostLevelDescPayload = null;
