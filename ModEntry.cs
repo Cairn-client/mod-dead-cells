@@ -733,6 +733,7 @@ namespace DeadCellsMultiplayerMod
             if (activeUser == null || !ReferenceEquals(activeUser, user))
                 return;
 
+            GameDataSync.MarkProgressPayloadDirty();
             GameDataSync.SendProgressSync(user, net);
         }
 
@@ -958,7 +959,10 @@ namespace DeadCellsMultiplayerMod
             {
                 orig(u, onlyGameData);
                 if (u != null)
+                {
+                    GameDataSync.MarkProgressPayloadDirty();
                     GameDataSync.SendProgressSync(u, _net);
+                }
                 return;
             }
 

@@ -44,6 +44,14 @@ namespace DeadCellsMultiplayerMod
         private static bool _origHeroCosmeticsCaptured;
         private static string? _origHeroSkin;
         private static string? _origHeroHeadSkin;
+        private static User? _cachedBuiltProgressPayloadUser;
+        private static string? _cachedBuiltProgressPayload;
+        private static NetNode? _lastProgressSyncNet;
+        private static string? _lastProgressSyncPayload;
+        private static NetNode? _lastHeroSkinSyncNet;
+        private static string? _lastHeroSkinSyncPayload;
+        private static NetNode? _lastHeroHeadSkinSyncNet;
+        private static string? _lastHeroHeadSkinSyncPayload;
 
         private static string? _remoteCountersPayload;
         public static string? HostCountersPayload;
@@ -136,6 +144,7 @@ namespace DeadCellsMultiplayerMod
 
             if (net != null && net.IsHost)
             {
+                MarkProgressPayloadDirty();
                 if (shouldSynchronizeSeed)
                     Seed = GameMenu.ForceGenerateServerSeed("NewGame_hook");
                 else
@@ -197,7 +206,10 @@ namespace DeadCellsMultiplayerMod
             orig(self, lvl, isTwitch, isCustom, mode, gdata);
 
             if (net != null && net.IsHost)
+            {
+                MarkProgressPayloadDirty();
                 SendProgressSync(self, net);
+            }
             else if (net != null)
             {
                 if (!appliedRemoteProgressBeforeNewGame && !string.IsNullOrEmpty(_remoteProgressPayload))
@@ -212,6 +224,32 @@ namespace DeadCellsMultiplayerMod
         private static bool ShouldSynchronizeRunSeed(LaunchMode? launch)
         {
             return launch is LaunchMode.NewGame;
+        }
+
+        public static void MarkProgressPayloadDirty()
+        {
+            _cachedBuiltProgressPayloadUser = null;
+            _cachedBuiltProgressPayload = null;
+        }
+
+        private static string? GetCurrentProgressPayload(User user)
+        {
+            if (user == null)
+                return null;
+
+            if (!string.IsNullOrWhiteSpace(_cachedBuiltProgressPayload) &&
+                ReferenceEquals(_cachedBuiltProgressPayloadUser, user))
+            {
+                return _cachedBuiltProgressPayload;
+            }
+
+            var payload = BuildProgressPayload(user);
+            if (string.IsNullOrWhiteSpace(payload))
+                return null;
+
+            _cachedBuiltProgressPayloadUser = user;
+            _cachedBuiltProgressPayload = payload;
+            return payload;
         }
 
         public static void ReceiveBlueprints(string payload, User? target = null)
@@ -485,6 +523,13 @@ namespace DeadCellsMultiplayerMod
                 _origItemMetaWasNull = false;
                 _origBossRuneCaptured = false;
                 _origBossRune = 0;
+                MarkProgressPayloadDirty();
+                _lastProgressSyncNet = null;
+                _lastProgressSyncPayload = null;
+                _lastHeroSkinSyncNet = null;
+                _lastHeroSkinSyncPayload = null;
+                _lastHeroHeadSkinSyncNet = null;
+                _lastHeroHeadSkinSyncPayload = null;
             }
 
             return restored;
@@ -1072,12 +1117,20 @@ namespace DeadCellsMultiplayerMod
             if (user == null || net == null || !net.IsHost || !net.IsAlive)
                 return;
 
-            var payload = BuildProgressPayload(user);
+            var payload = GetCurrentProgressPayload(user);
             if (string.IsNullOrWhiteSpace(payload))
                 return;
 
             HostProgressPayload = payload;
+            if (ReferenceEquals(_lastProgressSyncNet, net) &&
+                string.Equals(_lastProgressSyncPayload, payload, StringComparison.Ordinal))
+            {
+                return;
+            }
+
             net.SendProgress(payload);
+            _lastProgressSyncNet = net;
+            _lastProgressSyncPayload = payload;
         }
 
         public static void ReceiveProgressSync(string payload, User? target = null)
@@ -1245,7 +1298,15 @@ namespace DeadCellsMultiplayerMod
                 if (string.IsNullOrWhiteSpace(skin))
                     skin = "PrisonerDefault";
 
+                if (ReferenceEquals(_lastHeroSkinSyncNet, net) &&
+                    string.Equals(_lastHeroSkinSyncPayload, skin, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
                 net.SendHeroSkin(skin);
+                _lastHeroSkinSyncNet = net;
+                _lastHeroSkinSyncPayload = skin;
             }
             catch (Exception ex)
             {
@@ -1265,7 +1326,15 @@ namespace DeadCellsMultiplayerMod
                 if (string.IsNullOrWhiteSpace(skin))
                     skin = "BaseFlame";
 
+                if (ReferenceEquals(_lastHeroHeadSkinSyncNet, net) &&
+                    string.Equals(_lastHeroHeadSkinSyncPayload, skin, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
                 net.SendHeroHeadSkin(skin);
+                _lastHeroHeadSkinSyncNet = net;
+                _lastHeroHeadSkinSyncPayload = skin;
             }
             catch (Exception ex)
             {
