@@ -254,9 +254,24 @@ namespace DeadCellsMultiplayerMod
             return clientLabels[slotIndex] ?? string.Empty;
         }
 
+        /// <summary>Assigned id for the listen-server host (<see cref="NetNode"/>).</summary>
+        internal const int MultiplayerHostAssignedId = 1;
+
         internal static bool IsLocalPlayerDowned()
         {
             return Instance != null && Instance._localFakeDead;
+        }
+
+        /// <summary>
+        /// True when the session host is fake-dead (on host) or their down state was received (on client).
+        /// </summary>
+        internal static bool IsSessionHostDowned(NetNode? net)
+        {
+            if (net == null || !net.IsAlive)
+                return false;
+            if (net.IsHost)
+                return IsLocalPlayerDowned();
+            return IsRemotePlayerDowned(MultiplayerHostAssignedId);
         }
 
         internal static void ApplyLocalDownedExitPenaltyIfNeeded()

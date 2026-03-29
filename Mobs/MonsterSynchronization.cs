@@ -1139,9 +1139,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private void Hook_Mob_contactAttack(Hook_Mob.orig_contactAttack orig, Mob self, Entity pow)
         {
+            var net = GameMenu.NetRef;
+            if (IsHost(net) && ModEntry.IsLocalPlayerDowned() && IsPlayerCombatTargetEntity(pow))
+                return;
+
             orig(self, pow);
 
-            var net = GameMenu.NetRef;
             if (!IsHost(net) || !IsPlayerCombatTargetEntity(pow))
                 return;
 
@@ -1151,9 +1154,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private void Hook_Mob_onTouch(Hook_Mob.orig_onTouch orig, Mob self, Entity atk)
         {
+            var net = GameMenu.NetRef;
+            if (IsHost(net) && ModEntry.IsLocalPlayerDowned() && IsPlayerCombatTargetEntity(atk))
+                return;
+
             orig(self, atk);
 
-            var net = GameMenu.NetRef;
             if (!IsHost(net) || !IsSyncMob(self) || !IsPlayerCombatTargetEntity(atk))
                 return;
 
@@ -1363,6 +1369,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var targetEntity = ResolveMobAttackTargetEntity(mob, explicitTarget);
 
             var targetUserId = ResolveHostTargetUserId(targetEntity, net!.id);
+            if (ModEntry.IsLocalPlayerDowned() && targetUserId > 0 && targetUserId != net.id)
+                return;
+
             var x = GetWorldX(mob);
             var y = GetWorldY(mob);
             var dir = NormalizeDir(mob.dir);
@@ -2257,6 +2266,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!HasDownedPlayerCombatTarget(mob) && ShouldSuppressHostRetarget(mob))
                 return;
 
+            if (ModEntry.IsLocalPlayerDowned())
+            {
+                TryClearHostMobLivingPlayerTargets(mob);
+                return;
+            }
+
             Entity? selected = null;
 
             lock (Sync)
@@ -2395,6 +2410,32 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return false;
         }
 
+        private static void TryClearHostMobLivingPlayerTargets(Mob mob)
+        {
+            if (mob == null)
+                return;
+
+            try
+            {
+                var at = mob.aTarget;
+                if (at != null && IsPlayerCombatTargetEntity(at))
+                    mob.setAttackTarget(null);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var nt = mob.nemesisTarget;
+                if (nt != null && IsPlayerCombatTargetEntity(nt))
+                    mob.setNemesisTarget(null);
+            }
+            catch
+            {
+            }
+        }
+
         private static void TryCollectDetectedTarget(Mob mob, Entity? candidate)
         {
             if (candidate == null)
@@ -2402,6 +2443,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (ReferenceEquals(candidate, mob))
                 return;
             if (ModEntry.IsEntityDownedForCombat(candidate))
+                return;
+
+            if (ModEntry.IsLocalPlayerDowned() && IsPlayerCombatTargetEntity(candidate))
                 return;
 
             try
@@ -3403,6 +3447,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static void ProcessClientMobAttackIntent(Mob mob, ClientMobAttackIntent intent)
         {
             if (mob == null || string.IsNullOrWhiteSpace(intent.SkillId))
+                return;
+
+            var netUi = GameMenu.NetRef;
+            if (IsClient(netUi) && ModEntry.IsSessionHostDowned(netUi))
                 return;
 
             var skillId = intent.SkillId;
