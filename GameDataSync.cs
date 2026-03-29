@@ -2508,21 +2508,14 @@ namespace DeadCellsMultiplayerMod
             CopyCountersToDictionary(source.counters, legacyCounters);
             var legacyNpcProgress = new Dictionary<int, int>();
             CopyNpcProgressToDictionary(source.npcs, legacyNpcProgress);
-
-            var storyCounters = new Dictionary<string, int>(StringComparer.Ordinal);
-            var storyNpcProgress = new Dictionary<int, int>();
-            var loreRoomRunIds = new Dictionary<string, int>(StringComparer.Ordinal);
-            var visitedLoreRooms = new HashSet<string>(StringComparer.Ordinal);
-            var plannedLores = new List<int>();
-            CaptureStorySnapshot(
-                source,
-                storyCounters,
-                storyNpcProgress,
-                loreRoomRunIds,
-                visitedLoreRooms,
-                plannedLores,
-                out _,
-                out var storyDataVersion);
+            var sourceStory = source.story;
+            if (sourceStory != null)
+            {
+                if (sourceStory.counters == null)
+                    sourceStory.counters = BuildCountersMap(legacyCounters);
+                if (sourceStory.npcProgresses == null)
+                    sourceStory.npcProgresses = BuildNpcProgressMap(legacyNpcProgress);
+            }
 
             target.flags = source.flags;
             target.userId = source.userId;
@@ -2530,9 +2523,9 @@ namespace DeadCellsMultiplayerMod
             target.deathCells = source.deathCells;
             target.bossRuneActivated = GetEffectiveBossRune(source);
             target.tutorial = source.tutorial;
-            target.counters = BuildCountersMap(legacyCounters);
-            target.npcs = BuildNpcProgressMap(legacyNpcProgress);
-            target.story = null;
+            target.counters = sourceStory?.counters ?? BuildCountersMap(legacyCounters);
+            target.npcs = sourceStory?.npcProgresses ?? BuildNpcProgressMap(legacyNpcProgress);
+            target.story = sourceStory;
             target.itemMeta = null;
             target.userStats = source.userStats;
             target.activeMods = CloneItemList(source.activeMods);
@@ -2543,6 +2536,7 @@ namespace DeadCellsMultiplayerMod
             target.deathItem = source.deathItem;
             target.consecutiveCompletedRuns = source.consecutiveCompletedRuns;
             ApplyHeroCosmetics(target, preservedHeroSkin, preservedHeroHeadSkin);
+            MirrorStoryStateToSaveUser(target);
 
             try
             {
@@ -2561,15 +2555,7 @@ namespace DeadCellsMultiplayerMod
             }
 
             ApplyHeroCosmetics(target, preservedHeroSkin, preservedHeroHeadSkin);
-
-            ApplyStoryState(
-                target,
-                storyCounters,
-                storyNpcProgress,
-                storyDataVersion,
-                loreRoomRunIds,
-                visitedLoreRooms,
-                plannedLores);
+            MirrorStoryStateToSaveUser(target);
 
             try
             {
@@ -2621,6 +2607,26 @@ namespace DeadCellsMultiplayerMod
             catch
             {
                 target.bossRuneActivated = GetEffectiveBossRune(source);
+            }
+        }
+
+        private static void MirrorStoryStateToSaveUser(User user)
+        {
+            if (user == null)
+                return;
+
+            try
+            {
+                var saveUser = user.mainGameData?.sUser;
+                if (saveUser == null || ReferenceEquals(saveUser, user))
+                    return;
+
+                saveUser.story = user.story;
+                saveUser.counters = user.counters;
+                saveUser.npcs = user.npcs;
+            }
+            catch
+            {
             }
         }
 
