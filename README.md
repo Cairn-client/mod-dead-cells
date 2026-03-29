@@ -52,8 +52,7 @@ This method will automatically install and keep DCCM up to date.
 
 ---
 
-### 🔹 ~~Non-Steam version~~
-## DCCM works only on Steam currently!
+### 🔹 Non-Steam version
 If you are using a **non-Steam version** of Dead Cells:
 
 1. Download the latest release of **DCCM** from the official repository:
@@ -64,6 +63,12 @@ If you are using a **non-Steam version** of Dead Cells:
 3. Create a folder named `coremod`.
 
 4. Extract the downloaded DCCM files into the `coremod` folder.
+
+5. Open modcore.json that's in `your_game_path\Dead Cells\coremod\config\modcore.json`
+
+6. Ensure that EnableGoldberg is true! 
+<img width="351" height="163" alt="image" src="https://github.com/user-attachments/assets/8886c291-e0fc-45fe-80e8-4a40550b61aa" />
+
 
 ---
 
