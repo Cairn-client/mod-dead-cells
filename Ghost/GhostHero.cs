@@ -161,12 +161,6 @@ namespace DeadCellsMultiplayerMod
 
         }
 
-        public void TeleportByPixels(double x, double y)
-        {
-            king?.setPosPixel(x, y - 0.2d);
-        }
-
-
         public void SetLabel(Entity entity, string? text)
         {
             if (entity == null) return;

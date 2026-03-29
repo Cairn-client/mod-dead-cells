@@ -2121,6 +2121,56 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return false;
         }
 
+        private static bool TryResolveSafeBossNemesisTarget(Mob? mob, Entity? requestedTarget, out Entity safeTarget)
+        {
+            safeTarget = null!;
+
+            if (mob == null || !BossSyncHelpers.IsBossMob(mob))
+                return false;
+
+            if (requestedTarget is Hero heroTarget)
+            {
+                safeTarget = heroTarget;
+                return true;
+            }
+
+            try
+            {
+                var currentHeroTarget = mob.nemesisTarget as Hero;
+                if (currentHeroTarget != null &&
+                    !currentHeroTarget.destroyed &&
+                    currentHeroTarget.life > 0 &&
+                    !ModEntry.IsEntityDownedForCombat(currentHeroTarget))
+                {
+                    safeTarget = currentHeroTarget;
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            var localHero = ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+            if (localHero != null)
+            {
+                try
+                {
+                    if (!localHero.destroyed &&
+                        localHero.life > 0 &&
+                        !ModEntry.IsEntityDownedForCombat(localHero))
+                    {
+                        safeTarget = localHero;
+                        return true;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            return false;
+        }
+
         private static bool TrySplitStateTypeSignature(string? rawValue, out string typeId, out string runtimeClass)
         {
             typeId = string.Empty;
@@ -2603,6 +2653,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static void TrySetNemesisTargetExact(Mob mob, Entity target)
         {
             if (mob == null || target == null)
+                return;
+
+            if (TryResolveSafeBossNemesisTarget(mob, target, out var safeBossTarget))
+                target = safeBossTarget;
+            else if (BossSyncHelpers.IsBossMob(mob))
                 return;
 
             System.Threading.Interlocked.Increment(ref forceExactNemesisTargetDepth);
@@ -4178,17 +4233,20 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     if (mob == null)
                         continue;
 
+                    var isBoss = BossSyncHelpers.IsBossMob(mob);
                     var life = 0;
                     try
                     {
                         life = mob.life;
+                        if (mob.destroyed)
+                            continue;
                     }
                     catch
                     {
                         continue;
                     }
 
-                    if (life <= 0)
+                    if (!isBoss && life <= 0)
                         continue;
 
                     var alreadyAdded = false;

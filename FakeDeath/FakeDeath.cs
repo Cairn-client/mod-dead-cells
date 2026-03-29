@@ -1032,8 +1032,6 @@ namespace DeadCellsMultiplayerMod
             }
 
             net.SendPlayerReviveRequest(nearest.UserId);
-            _remoteDowned.Remove(nearest.UserId);
-            _downedAnnouncements.Remove(nearest.UserId);
             _nextReviveAttemptTicks = now + (long)(Stopwatch.Frequency * ReviveAttemptCooldownSeconds);
             ResetReviveHold();
             ClearReviveHints();

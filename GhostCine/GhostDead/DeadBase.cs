@@ -2,6 +2,7 @@ using System;
 using dc.en;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using HaxeProxy.Runtime;
+using System.Diagnostics;
 
 namespace DeadCellsMultiplayerMod
 {
@@ -19,6 +20,10 @@ namespace DeadCellsMultiplayerMod
         private bool _hasBossArenaCorpseAnchor;
         private double _bossArenaCorpseAnchorX;
         private double _bossArenaCorpseAnchorY;
+        private bool _bossArenaCorpsePushApplied;
+        private long _bossArenaCorpsePushStartedTicks;
+        private const double BossArenaCorpsePushSettleSeconds = 0.35;
+        private const double BossArenaCorpsePushVelocityThreshold = 0.08;
 
         public DeadBase(Hero hero, GhostKing? king)
         {
@@ -98,7 +103,10 @@ namespace DeadCellsMultiplayerMod
                 _hasBossArenaCorpseAnchor = false;
                 _bossArenaCorpseAnchorX = 0;
                 _bossArenaCorpseAnchorY = 0;
+                _bossArenaCorpsePushApplied = false;
+                _bossArenaCorpsePushStartedTicks = 0;
                 TrySnapCorpseToHeroAnchor(corpse);
+                TryApplyBossArenaCorpsePush(corpse);
                 EnsureLethalFallStarted();
             }
             catch
@@ -159,7 +167,6 @@ namespace DeadCellsMultiplayerMod
             }
 
             TryClampCorpseToGround(corpse);
-            CaptureBossArenaCorpseAnchor(corpse);
         }
 
         private static void TryClampCorpseToGround(HeroDeadCorpse corpse)
@@ -221,8 +228,18 @@ namespace DeadCellsMultiplayerMod
             if (corpse == null || corpse.destroyed || !ModEntry.IsBossLevel(_hero?._level?.map?.id?.ToString()))
                 return;
 
+            if (!_bossArenaCorpsePushApplied)
+                TryApplyBossArenaCorpsePush(corpse);
+
+            TryClampCorpseToGround(corpse);
+
             if (!_hasBossArenaCorpseAnchor)
+            {
+                if (!IsBossArenaCorpsePushSettled(corpse))
+                    return;
+
                 CaptureBossArenaCorpseAnchor(corpse);
+            }
 
             if (!_hasBossArenaCorpseAnchor)
                 return;
@@ -230,6 +247,87 @@ namespace DeadCellsMultiplayerMod
             try { corpse.setPosPixel(_bossArenaCorpseAnchorX, _bossArenaCorpseAnchorY); } catch { }
             TryClampCorpseToGround(corpse);
             CaptureBossArenaCorpseAnchor(corpse);
+        }
+
+        private void TryApplyBossArenaCorpsePush(HeroDeadCorpse corpse)
+        {
+            if (corpse == null || corpse.destroyed || _hero == null)
+                return;
+            if (_bossArenaCorpsePushApplied)
+                return;
+            if (!ModEntry.IsBossLevel(_hero._level?.map?.id?.ToString()))
+                return;
+
+            var dir = 1;
+            try { dir = _hero.dir < 0 ? -1 : 1; } catch { }
+
+            double pushX = dir * 0.18;
+            double pushY = -0.12;
+            var hasMomentum = false;
+            try
+            {
+                var momentumX = _hero.dx + _hero.bdx;
+                var momentumY = _hero.dy + _hero.bdy;
+                if (double.IsFinite(momentumX) && double.IsFinite(momentumY))
+                {
+                    pushX = momentumX;
+                    pushY = momentumY;
+                    hasMomentum = true;
+                }
+            }
+            catch
+            {
+            }
+
+            if (!hasMomentum ||
+                (System.Math.Abs(pushX) < 0.01 && System.Math.Abs(pushY) < 0.01))
+            {
+                pushX = dir * 0.18;
+                pushY = -0.12;
+            }
+            else
+            {
+                if (System.Math.Abs(pushX) < 0.08)
+                    pushX = dir * 0.12;
+                if (pushY > -0.08)
+                    pushY = -0.12;
+            }
+
+            try { corpse.hasGravity = true; } catch { }
+            try { corpse.bump(pushX, pushY, null); } catch { }
+            _bossArenaCorpsePushApplied = true;
+            _bossArenaCorpsePushStartedTicks = Stopwatch.GetTimestamp();
+            _hasBossArenaCorpseAnchor = false;
+        }
+
+        private bool IsBossArenaCorpsePushSettled(HeroDeadCorpse corpse)
+        {
+            if (corpse == null || corpse.destroyed)
+                return false;
+            if (!_bossArenaCorpsePushApplied)
+                return true;
+
+            if (_bossArenaCorpsePushStartedTicks != 0 &&
+                Stopwatch.GetElapsedTime(_bossArenaCorpsePushStartedTicks).TotalSeconds >= BossArenaCorpsePushSettleSeconds)
+            {
+                return true;
+            }
+
+            try
+            {
+                var totalVelocity =
+                    System.Math.Abs(corpse.dx) +
+                    System.Math.Abs(corpse.dy) +
+                    System.Math.Abs(corpse.bdx) +
+                    System.Math.Abs(corpse.bdy);
+                if (totalVelocity <= BossArenaCorpsePushVelocityThreshold)
+                    return true;
+            }
+            catch
+            {
+            }
+
+            return false;
         }
 
         private void CreateHomunculus(HeroDeadCorpse corpse)
