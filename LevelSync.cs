@@ -18,15 +18,20 @@ namespace DeadCellsMultiplayerMod
     internal partial class GameDataSync
     {
         private static readonly object _levelGraphLock = new();
+        private static readonly object _levelGraphReloadLock = new();
         private static readonly object _bossRuneReloadLock = new();
         private static readonly object _pendingBossRuneReloadLock = new();
         private static readonly Dictionary<string, LevelGraphSync> _remoteLevelGraphs = new(StringComparer.Ordinal);
+        private static string? _lastLevelGraphReloadLevelId;
+        private static string? _lastLevelGraphReloadPayload;
+        private static long _lastLevelGraphReloadTick;
         private static string? _lastBossRuneReloadLevelId;
         private static long _lastBossRuneReloadTick;
         private static string? _pendingBossRuneReloadLevelId;
         private static int _pendingBossRuneReloadValue;
         private static long _pendingBossRuneReloadTick;
         private static bool _hasPendingBossRuneReload;
+        private const int LevelGraphReloadThrottleMs = 3000;
         private const int BossRuneReloadThrottleMs = 3000;
         private const int PendingBossRuneReloadTtlMs = 15000;
 
@@ -109,6 +114,7 @@ namespace DeadCellsMultiplayerMod
                 }
 
                 _log?.Information("[NetMod] Received level graph for {LevelId} ({Count} nodes)", graph.LevelId, graph.Nodes?.Count ?? 0);
+                TryScheduleLevelGraphReloadForLevel(graph.LevelId, payload);
                 TryScheduleBossRuneReloadForLevel(graph.LevelId);
             }
             catch (Exception ex)
@@ -164,6 +170,91 @@ namespace DeadCellsMultiplayerMod
                     _log?.Warning("[NetMod] Failed to process boss-rune reload for {LevelId}: {Message}", levelId, ex.Message);
                 }
             });
+        }
+
+        private static void TryScheduleLevelGraphReloadForLevel(string levelId, string payload)
+        {
+            if (string.IsNullOrWhiteSpace(levelId) || string.IsNullOrWhiteSpace(payload))
+                return;
+
+            var net = GameMenu.NetRef;
+            if (net == null || !net.IsAlive || net.IsHost)
+                return;
+
+            GameMenu.EnqueueMainThread(() =>
+            {
+                try
+                {
+                    TryTriggerLevelGraphReload(levelId, payload);
+                }
+                catch (Exception ex)
+                {
+                    _log?.Warning("[NetMod] Failed to process level-graph reload for {LevelId}: {Message}", levelId, ex.Message);
+                }
+            });
+        }
+
+        private static void TryTriggerLevelGraphReload(string graphLevelId, string payload)
+        {
+            if (string.IsNullOrWhiteSpace(graphLevelId) || string.IsNullOrWhiteSpace(payload))
+                return;
+
+            var net = GameMenu.NetRef;
+            if (net == null || !net.IsAlive || net.IsHost)
+                return;
+
+            var hero = ModEntry.me;
+            var level = hero?._level;
+            if (hero == null || level == null || level.map == null)
+                return;
+
+            var currentLevelId = level.map.id?.ToString();
+            if (!string.Equals(currentLevelId, graphLevelId, StringComparison.Ordinal))
+                return;
+
+            lock (_levelGraphLock)
+            {
+                if (!_remoteLevelGraphs.ContainsKey(graphLevelId))
+                    return;
+            }
+
+            if (!TryBeginLevelGraphReload(graphLevelId, payload))
+                return;
+
+            var targetLevelId = ResolveBossRuneReloadTargetLevelId(level, graphLevelId);
+            var (offsetCx, offsetCy) = ComputeCurrentLevelReloadOffsets(hero, level);
+            var reload = LevelTransition.Class.reloadAfterBossRuneModif;
+            if (reload == null)
+            {
+                _log?.Warning("[NetMod] Missing LevelTransition.reloadAfterBossRuneModif for graph reload {LevelId}", targetLevelId);
+                return;
+            }
+
+            _ = reload(targetLevelId.AsHaxeString(), offsetCx, offsetCy);
+            _log?.Information(
+                "[NetMod] Triggered level-graph reload for {LevelId} offset=({OffsetCx},{OffsetCy})",
+                targetLevelId,
+                offsetCx,
+                offsetCy);
+        }
+
+        private static bool TryBeginLevelGraphReload(string levelId, string payload)
+        {
+            var now = Environment.TickCount64;
+            lock (_levelGraphReloadLock)
+            {
+                if (string.Equals(_lastLevelGraphReloadLevelId, levelId, StringComparison.Ordinal) &&
+                    string.Equals(_lastLevelGraphReloadPayload, payload, StringComparison.Ordinal) &&
+                    now - _lastLevelGraphReloadTick < LevelGraphReloadThrottleMs)
+                {
+                    return false;
+                }
+
+                _lastLevelGraphReloadLevelId = levelId;
+                _lastLevelGraphReloadPayload = payload;
+                _lastLevelGraphReloadTick = now;
+                return true;
+            }
         }
 
         private static void TryTriggerBossRuneReload(string graphLevelId)
@@ -256,6 +347,25 @@ namespace DeadCellsMultiplayerMod
             var roomY = 0;
             try { roomX = anchorRoom.x; } catch { }
             try { roomY = anchorRoom.y; } catch { }
+
+            return (heroCx - roomX, heroCy - roomY);
+        }
+
+        private static (int OffsetCx, int OffsetCy) ComputeCurrentLevelReloadOffsets(Hero hero, Level level)
+        {
+            var heroCx = 0;
+            var heroCy = 0;
+            try { heroCx = hero.cx; } catch { }
+            try { heroCy = hero.cy; } catch { }
+
+            var room = TryGetRoomAt(level, heroCx, heroCy);
+            if (room == null)
+                return (0, 0);
+
+            var roomX = 0;
+            var roomY = 0;
+            try { roomX = room.x; } catch { }
+            try { roomY = room.y; } catch { }
 
             return (heroCx - roomX, heroCy - roomY);
         }
