@@ -179,8 +179,96 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
+        private bool ShouldSuppressVanillaHeroDeathCinematic(Hero? lostBody)
+        {
+            return _netRole != NetRole.None &&
+                   _net != null &&
+                   _net.IsAlive &&
+                   me != null &&
+                   lostBody != null &&
+                   ReferenceEquals(lostBody, me);
+        }
+
+        private bool SuppressVanillaHeroDeathCinematic(Hero? lostBody, dc.GameCinematic? cine)
+        {
+            if (!ShouldSuppressVanillaHeroDeathCinematic(lostBody))
+                return false;
+
+            if (!_localFakeDead && lostBody != null && _net != null)
+                EnterLocalFakeDeath(lostBody, _net);
+
+            try
+            {
+                var game = dc.pr.Game.Class.ME;
+                if (game != null && cine != null && ReferenceEquals(game.curCine, cine))
+                    game.curCine = null;
+            }
+            catch
+            {
+            }
+
+            try { cine?.destroy(); } catch { }
+            try { cine?.disposeImmediately(); } catch { }
+            return true;
+        }
+
+        private void Hook__HeroDeath__constructor__(Hook__HeroDeath.orig___constructor__ orig, HeroDeath e, Hero lostBody, bool fromMob)
+        {
+            if (SuppressVanillaHeroDeathCinematic(lostBody, e))
+                return;
+
+            orig(e, lostBody, fromMob);
+        }
+
+        private void Hook__HeroDeathBase__constructor__(Hook__HeroDeathBase.orig___constructor__ orig, HeroDeathBase e, Hero lostBody, bool mob)
+        {
+            if (SuppressVanillaHeroDeathCinematic(lostBody, e))
+                return;
+
+            orig(e, lostBody, mob);
+        }
+
+        private void Hook__HeroDeathContinue__constructor__(Hook__HeroDeathContinue.orig___constructor__ orig, HeroDeathContinue e, Hero lostBody, bool keepBody)
+        {
+            if (SuppressVanillaHeroDeathCinematic(lostBody, e))
+                return;
+
+            orig(e, lostBody, keepBody);
+        }
+
+        private void Hook__HeroDeathRespawn__constructor__(Hook__HeroDeathRespawn.orig___constructor__ orig, HeroDeathRespawn e, Hero lostBody)
+        {
+            if (SuppressVanillaHeroDeathCinematic(lostBody, e))
+                return;
+
+            orig(e, lostBody);
+        }
+
+        private void Hook__HeroDeathDLCP__constructor__(Hook__HeroDeathDLCP.orig___constructor__ orig, HeroDeathDLCP e, Hero lostBody, bool fromMob)
+        {
+            if (SuppressVanillaHeroDeathCinematic(lostBody, e))
+                return;
+
+            orig(e, lostBody, fromMob);
+        }
+
         private void Hook_Hero_startDeathCine(Hook_Hero.orig_startDeathCine orig, Hero self)
         {
+            var net = _net;
+            if (_netRole != NetRole.None &&
+                net != null &&
+                me != null &&
+                ReferenceEquals(self, me))
+            {
+                if (_localFakeDead)
+                    return;
+
+                // Cursed deaths can route straight into vanilla death cine and destroy hero.
+                // In multiplayer we always redirect local death cine to fake-death flow.
+                EnterLocalFakeDeath(self, net);
+                return;
+            }
+
             if (me != null && ReferenceEquals(self, me) && _localFakeDead)
                 return;
 
@@ -608,8 +696,31 @@ namespace DeadCellsMultiplayerMod
             _localFakeDead = true;
             _localExitPenaltyApplied = false;
             _localFakeDeadStartedTicks = Stopwatch.GetTimestamp();
-            _localDownedX = hero.spr?.x ?? 0;
-            _localDownedY = hero.spr?.y ?? 0;
+            double sprX, sprY;
+            if (hero.spr != null)
+            {
+                sprX = hero.spr.x;
+                sprY = hero.spr.y;
+            }
+            else
+            {
+                try
+                {
+                    var cx = hero.cx;
+                    var xr = hero.xr;
+                    var cy = hero.cy;
+                    var yr = hero.yr;
+                    sprX = (cx + xr) * 24.0;
+                    sprY = (cy + yr) * 24.0;
+                }
+                catch
+                {
+                    sprX = 0;
+                    sprY = 0;
+                }
+            }
+            _localDownedX = sprX;
+            _localDownedY = sprY;
             _localHeldX = _localDownedX;
             _localHeldY = _localDownedY;
             _localDownedAnchorX = _localDownedX;
@@ -631,6 +742,7 @@ namespace DeadCellsMultiplayerMod
             try { hero.cancelVelocities(); } catch { }
             try { hero.lockControlsS(10.0); } catch { }
             try { hero.cancelSkillControlLock(); } catch { }
+            SnapHeroToDownedPosition(hero, _localDownedX, _localDownedY, clampToGround: false);
             StartLocalDeadCine(hero);
 
             SendLocalDownedState(net, isDowned: true, force: true);
@@ -920,8 +1032,6 @@ namespace DeadCellsMultiplayerMod
             }
 
             net.SendPlayerReviveRequest(nearest.UserId);
-            _remoteDowned.Remove(nearest.UserId);
-            _downedAnnouncements.Remove(nearest.UserId);
             _nextReviveAttemptTicks = now + (long)(Stopwatch.Frequency * ReviveAttemptCooldownSeconds);
             ResetReviveHold();
             ClearReviveHints();
@@ -1115,6 +1225,16 @@ namespace DeadCellsMultiplayerMod
 
         private string GetCurrentLevelId()
         {
+            try
+            {
+                var currentLevelId = me?._level?.map?.id?.ToString();
+                if (!string.IsNullOrWhiteSpace(currentLevelId))
+                    return currentLevelId.Trim();
+            }
+            catch
+            {
+            }
+
             if (!string.IsNullOrWhiteSpace(levelId))
                 return levelId.Trim();
 
@@ -1332,6 +1452,8 @@ namespace DeadCellsMultiplayerMod
             _localDownedY = corpseY;
             _localHeldX = _localDownedX;
             _localHeldY = _localDownedY;
+            _localDownedAnchorX = corpseX;
+            _localDownedAnchorY = corpseY;
             return true;
         }
 

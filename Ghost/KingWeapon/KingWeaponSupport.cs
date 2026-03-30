@@ -16,8 +16,18 @@ internal static class KingWeaponSupport
 
     [ThreadStatic]
     private static int _contextDepth;
+    [ThreadStatic]
+    private static int _allowLocalHeroDamageDepth;
+    [ThreadStatic]
+    private static KingSkin? _currentContextSource;
 
     internal static bool IsInKingContext => _contextDepth > 0;
+    internal static bool IsLocalHeroDamageAllowedInKingContext => _allowLocalHeroDamageDepth > 0;
+    internal static bool TryGetCurrentContextSource(out KingSkin source)
+    {
+        source = _currentContextSource!;
+        return source != null;
+    }
 
     private sealed class SkillHooks
     {
@@ -120,7 +130,48 @@ internal static class KingWeaponSupport
             return;
         }
 
-        var hero = weapon?.owner;
+        WithKingContextCore(weapon?.owner, src, action);
+    }
+
+    public static void WithKingContext(Hero hero, KingSkin source, Action action)
+    {
+        if(action == null)
+            return;
+
+        if(_contextDepth > 0)
+        {
+            action();
+            return;
+        }
+
+        WithKingContextCore(hero, source, action);
+    }
+
+    public static T WithKingContext<T>(Hero hero, KingSkin source, Func<T> func)
+    {
+        T result = default!;
+        WithKingContext(hero, source, () => { result = func(); });
+        return result;
+    }
+
+    public static void WithLocalHeroDamageAllowed(Action action)
+    {
+        if(action == null)
+            return;
+
+        _allowLocalHeroDamageDepth++;
+        try
+        {
+            action();
+        }
+        finally
+        {
+            _allowLocalHeroDamageDepth--;
+        }
+    }
+
+    private static void WithKingContextCore(Hero? hero, KingSkin? src, Action action)
+    {
         if(hero == null || src == null)
         {
             action();
@@ -128,6 +179,8 @@ internal static class KingWeaponSupport
         }
 
         _contextDepth++;
+        var previousSource = _currentContextSource;
+        _currentContextSource = src;
 
         var savedSpr = hero.spr;
         var savedLevel = hero._level;
@@ -165,6 +218,7 @@ internal static class KingWeaponSupport
             hero.dir = savedDir;
             hero.dx = savedDx;
             hero.dy = savedDy;
+            _currentContextSource = previousSource;
             _contextDepth--;
         }
     }

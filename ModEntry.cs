@@ -4,48 +4,44 @@ using ModCore.Events.Interfaces.Game.Hero;
 using ModCore.Mods;
 using System.Diagnostics;
 using System.Net;
+using System.Threading;
 using dc.en;
 using dc.en.inter;
 using dc.pr;
 using ModCore.Utilities;
-using ModCore.Modules;
 using dc.level;
 using dc.hl.types;
 using dc;
-using dc.shader;
 using dc.libs.heaps.slib;
 using Rand = dc.libs.Rand;
-using dc.h3d.mat;
 using dc.ui.hud;
 using dc.h2d;
-using dc.hxbit;
 using Hashlink.Virtuals;
 using dc.tool;
-using dc.tool.weap;
-using dc.tool.atk;
 using dc.tool.mainSkills;
-using dc.hxd;
-using System.Timers;
 using HaxeProxy.Runtime;
-using dc.en.mob;
-using dc.haxe;
 using dc.cine;
+using dc.cine.coll;
+using dc.cine.dlcp;
+using dc.cine.kf;
+using dc.cine.queen;
 using CineHookInitialize;
-using Serilog.Core;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using ModCore.Events;
 using DeadCellsMultiplayerMod.Mobs.MobsSynchronization;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
-using DeadCellsMultiplayerMod.MultiplayerModUI;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Minimap;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using DeadCellsMultiplayerMod.MultiplayerModUI.LevelExit;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
 using DeadCellsMultiplayerMod.Tools.ModLang;
 using DeadCellsMultiplayerMod.KingHead;
-using dc.steam.ugc;
 using DeadCellsMultiplayerMod.Mobs.Levelinit;
 using dc.en.inter.door;
+using dc.en.mob.boss;
+using Steamworks;
+using System.Reflection;
+using DeadCellsMultiplayerMod.Interaction;
 
 
 namespace DeadCellsMultiplayerMod
@@ -61,7 +57,20 @@ namespace DeadCellsMultiplayerMod
         public static ModEntry? Instance { get; private set; }
         private bool _ready;
         private static bool s_hooksInstalled;
-
+        private static IDisposable? s_steamOverlayJoinCallback;
+        private static IDisposable? s_steamRichPresenceJoinCallback;
+        private static bool s_steamOverlayCallbackPending;
+        private static Timer? s_steamCallbackPumpTimer;
+        private static int s_steamOverlayCallbackRetryCount;
+        private static bool s_steamApiReady;
+        private static string s_lastSteamLaunchCommand = string.Empty;
+        private static string s_lastSteamLaunchConnectLobbyParam = string.Empty;
+        private static ulong s_lastOverlayJoinLobbyId;
+        private static long s_lastOverlayJoinTicks;
+        private static long s_nextSteamLaunchPollTicks;
+        private const int SteamOverlayCallbackMaxRetries = 600;
+        private const int SteamOverlayLaunchPollIntervalMs = 500;
+        private const int SteamOverlayJoinDedupMs = 3000;
         private NetRole _netRole = NetRole.None;
         public static NetNode? _net;
 
@@ -82,8 +91,6 @@ namespace DeadCellsMultiplayerMod
         private string? _lastAnimSent;
         private int? _lastAnimQueueSent;
         private bool? _lastAnimGSent;
-        private double _animResendElapsed;
-        private double? _lastAnimPlayRatio;
         private long _suppressHeroAnimUntilTicks;
         private string? _lastSentHeroSkin;
         private string? _lastSentHeroHeadSkin;
@@ -166,6 +173,52 @@ namespace DeadCellsMultiplayerMod
         private const double ClientDisposeTransitionSeconds = 0.28;
         private const double PendingDoorMarkerHideMaxSeconds = 1.5;
 
+        private static readonly HashSet<string> BossLevelIds = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "BeholderPit", "Throne", "DeathArena", "DookuArena", "QueenArena", "Observatory",
+            "SwampHeart", "CastleAlchemy", "LighthouseTop", "LighthouseBottom", "Giant",
+            "DookuCastle", "RichterCastle", "BossRushZone", "Bridge", "TopClockTower"
+        };
+
+        internal static bool IsBossLevel(string? levelId)
+        {
+            return !string.IsNullOrWhiteSpace(levelId) && BossLevelIds.Contains(levelId);
+        }
+
+        /// <summary>Known boss-room genericEventIds from game's HiddenTrigger (set via marker.customId in level data).</summary>
+        private static readonly HashSet<string> BossRoomGenericEventIds = new(StringComparer.Ordinal)
+        {
+            "roomDeath", "roomBeholder", "roomBerserk", "roomCollectorBoss", "roomDooku",
+            "roomGardenerBoss", "roomGiant", "roomKingsHand", "roomQueen", "roomBehemoth",
+            "roomMamaTick", "roomKingsHandAsKing"
+        };
+        private static readonly HashSet<string> BossDeathCineTypeNames = new(StringComparer.Ordinal)
+        {
+            "BeholderDeath", "GiantDeath", "GiantDeath4", "KillKingCinem", "KillQueenCinem",
+            "QueenDefeated", "KillDookuBeastCinem", "FakeKillDooku", "RichterDeath",
+            "EndCollectorPreSmash", "SmashCinem", "EndCollectorPostSmash", "EndCollectorPostSmashKS"
+        };
+        private static readonly HashSet<string> BossIntroCineTypeNames = new(StringComparer.Ordinal)
+        {
+            "EnterRoomBoss", "EnterRoomDeathBoss", "EnterRoomGardenerBoss", "EnterRoomQueenBoss",
+            "EnterThroneRoom", "EnterThroneBossRush", "EnterThroneRoomAsKing", "EnterGiantRoom",
+            "EnterModifiedGiantRoom", "EnterDualBehemoth", "StartCollectorFight", "StartCollectorFightAlt",
+            "MeetCollectorEnd"
+        };
+        private string? _lastBossCineSentLevelId;
+        private long _lastBossCineSentTick;
+        private const double BossCineSendCooldownSeconds = 2.0;
+        private readonly Dictionary<string, long> _pendingBossCineApplyByLevel = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, long> _suppressBossCineEchoByLevel = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _completedBossCineLevels = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _appliedBossHeroTeleportLevels = new(StringComparer.OrdinalIgnoreCase);
+        private const double BossCineApplyPendingTtlSeconds = 20.0;
+        private const double BossCineEchoSuppressSeconds = 12.0;
+        private const double BossHeroTeleportYOffsetPx = 20.0;
+        private const double BossHeroTeleportEchoSuppressSeconds = 1.5;
+        private int _suppressBossCineSendDepth;
+        private long _suppressBossTriggerNetSendUntilTick;
+
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
         {
@@ -190,7 +243,7 @@ namespace DeadCellsMultiplayerMod
             if (instance == null)
                 return;
 
-            instance.remoteHeadSkin = NormalizeHeadSkin(skin);
+            instance.remoteHeadSkin = NormalizeSkin(skin, "BaseFlame");
         }
 
         public static string GetClientLabel(int slotIndex)
@@ -201,9 +254,24 @@ namespace DeadCellsMultiplayerMod
             return clientLabels[slotIndex] ?? string.Empty;
         }
 
+        /// <summary>Assigned id for the listen-server host (<see cref="NetNode"/>).</summary>
+        internal const int MultiplayerHostAssignedId = 1;
+
         internal static bool IsLocalPlayerDowned()
         {
             return Instance != null && Instance._localFakeDead;
+        }
+
+        /// <summary>
+        /// True when the session host is fake-dead (on host) or their down state was received (on client).
+        /// </summary>
+        internal static bool IsSessionHostDowned(NetNode? net)
+        {
+            if (net == null || !net.IsAlive)
+                return false;
+            if (net.IsHost)
+                return IsLocalPlayerDowned();
+            return IsRemotePlayerDowned(MultiplayerHostAssignedId);
         }
 
         internal static void ApplyLocalDownedExitPenaltyIfNeeded()
@@ -305,6 +373,325 @@ namespace DeadCellsMultiplayerMod
         {
             _ready = true;
             GameMenu.SetRole(NetRole.None);
+            s_steamOverlayCallbackPending = true;
+            s_steamOverlayCallbackRetryCount = 0;
+            TryEnsureSteamApiInitialized("OnGameEndInit", logFailure: true);
+            TryParseConnectLobbyFromCommandLine();
+        }
+
+        private static void TryParseConnectLobbyFromCommandLine()
+        {
+            try
+            {
+                var args = Environment.GetCommandLineArgs();
+                for (var i = 0; i < args.Length - 1; i++)
+                {
+                    if (string.Equals(args[i], "+connect_lobby", StringComparison.OrdinalIgnoreCase) &&
+                        ulong.TryParse(args[i + 1], out var lobbyId) && lobbyId > 0)
+                    {
+                        Instance?.Logger.Information("[NetMod][Steam] Launch parameter +connect_lobby detected lobbyId={LobbyId}", lobbyId);
+                        GameMenu.EnqueueMainThread(() => GameMenu.HandleSteamOverlayJoinRequest(lobbyId));
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Instance?.Logger.Debug(ex, "[NetMod] Failed to parse +connect_lobby from command line");
+            }
+        }
+
+        private static void TryDeferredSteamOverlayCallbackRegistration()
+        {
+            if (!s_steamOverlayCallbackPending || (s_steamOverlayJoinCallback != null && s_steamRichPresenceJoinCallback != null))
+                return;
+            if (s_steamOverlayCallbackRetryCount >= SteamOverlayCallbackMaxRetries)
+            {
+                s_steamOverlayCallbackPending = false;
+                Instance?.Logger.Warning("[NetMod] Steam overlay join callback registration gave up after {Count} retries", SteamOverlayCallbackMaxRetries);
+                return;
+            }
+            s_steamOverlayCallbackRetryCount++;
+            try
+            {
+                var shouldLogFailure = s_steamOverlayCallbackRetryCount == 1 || s_steamOverlayCallbackRetryCount % 60 == 0;
+                if (!TryEnsureSteamApiInitialized($"callback registration attempt {s_steamOverlayCallbackRetryCount}", shouldLogFailure))
+                {
+                    if (shouldLogFailure)
+                        Instance?.Logger.Debug("[NetMod] Steam overlay: SteamAPI.Init()=false (attempt {Attempt}). Trying callback without Init (game may have Steam).", s_steamOverlayCallbackRetryCount);
+                    try
+                    {
+                        s_steamOverlayJoinCallback = Callback<GameLobbyJoinRequested_t>.Create(OnGameLobbyJoinRequested);
+                        s_steamRichPresenceJoinCallback = Callback<GameRichPresenceJoinRequested_t>.Create(OnGameRichPresenceJoinRequested);
+                        s_steamOverlayCallbackPending = false;
+                        StartSteamCallbackPumpTimer();
+                        Instance?.Logger.Information("[NetMod] Steam overlay join callbacks registered (game had Steam initialized)");
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        Instance?.Logger.Warning(ex, "[NetMod] Steam overlay: callback registration failed (Init was false): {Message}", ex.Message);
+                        WriteOverlayCallbackFailedDiagnostics(ex);
+                        return;
+                    }
+                }
+                s_steamOverlayJoinCallback = Callback<GameLobbyJoinRequested_t>.Create(OnGameLobbyJoinRequested);
+                s_steamRichPresenceJoinCallback = Callback<GameRichPresenceJoinRequested_t>.Create(OnGameRichPresenceJoinRequested);
+                s_steamOverlayCallbackPending = false;
+                StartSteamCallbackPumpTimer();
+                Instance?.Logger.Information("[NetMod] Steam overlay join callbacks registered (attempt {Attempt})", s_steamOverlayCallbackRetryCount);
+            }
+            catch (Exception ex)
+            {
+                if (s_steamOverlayCallbackRetryCount == 1 || s_steamOverlayCallbackRetryCount % 60 == 0)
+                {
+                    Instance?.Logger.Warning(ex, "[NetMod] Steam overlay callback registration attempt {Attempt} failed: {Message}", s_steamOverlayCallbackRetryCount, ex.Message);
+                    WriteOverlayCallbackFailedDiagnostics(ex);
+                }
+            }
+        }
+
+        private static void WriteOverlayJoinDiagnostic(string callbackType, string data)
+        {
+            try
+            {
+                var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dccm_overlay_join_fired.txt");
+                System.IO.File.WriteAllText(path, $"{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}Z | {callbackType} | {data}");
+            }
+            catch { }
+        }
+
+        private static void WriteOverlayCallbackFailedDiagnostics(Exception ex)
+        {
+            try
+            {
+                var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dccm_overlay_callback_failed.txt");
+                var lines = new[]
+                {
+                    $"DCCM Steam overlay callback registration failed - {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}Z",
+                    $"Message: {ex.Message}",
+                    $"Type: {ex.GetType().FullName}",
+                    ex.StackTrace ?? "(no stack trace)"
+                };
+                System.IO.File.WriteAllLines(path, lines);
+            }
+            catch
+            {
+                // Best-effort diagnostics
+            }
+        }
+
+        private static void TryRegisterSteamOverlayJoinCallback()
+        {
+            if (s_steamOverlayJoinCallback != null)
+                return;
+            try
+            {
+                s_steamOverlayJoinCallback = Callback<GameLobbyJoinRequested_t>.Create(OnGameLobbyJoinRequested);
+            }
+            catch (Exception ex)
+            {
+                Instance?.Logger.Warning("[NetMod] Steam overlay join callback not registered: {Error}", ex.Message);
+            }
+        }
+
+        private static void OnGameLobbyJoinRequested(GameLobbyJoinRequested_t data)
+        {
+            WriteOverlayJoinDiagnostic("GameLobbyJoinRequested_t", data.m_steamIDLobby.m_SteamID.ToString());
+            Instance?.Logger.Information("[NetMod][Steam] GameLobbyJoinRequested_t callback fired");
+            var lobbyId = data.m_steamIDLobby.m_SteamID;
+            if (lobbyId == 0UL)
+                return;
+            Instance?.Logger.Information("[NetMod][Steam] Overlay lobby join requested lobbyId={LobbyId}", lobbyId);
+            EnqueueAndProcessOverlayJoin(lobbyId, "GameLobbyJoinRequested_t");
+        }
+
+        private static void OnGameRichPresenceJoinRequested(GameRichPresenceJoinRequested_t data)
+        {
+            var connect = data.m_rgchConnect ?? string.Empty;
+            WriteOverlayJoinDiagnostic("GameRichPresenceJoinRequested_t", connect);
+            Instance?.Logger.Information("[NetMod][Steam] GameRichPresenceJoinRequested_t callback fired");
+            if (string.IsNullOrWhiteSpace(connect))
+            {
+                Instance?.Logger.Information("[NetMod][Steam] Rich Presence join requested but connect string is empty (host may not have set Rich Presence)");
+                return;
+            }
+            Instance?.Logger.Information("[NetMod][Steam] Overlay Rich Presence join requested connect={Connect}", connect);
+            var lobbyId = TryParseLobbyIdFromConnectString(connect);
+            if (lobbyId == 0UL)
+            {
+                Instance?.Logger.Warning("[NetMod][Steam] Could not parse lobby ID from connect string: {Connect}", connect);
+                return;
+            }
+            EnqueueAndProcessOverlayJoin(lobbyId, "GameRichPresenceJoinRequested_t");
+        }
+
+        private static void EnqueueAndProcessOverlayJoin(ulong lobbyId, string source)
+        {
+            var nowTicks = Environment.TickCount64;
+            if (lobbyId == s_lastOverlayJoinLobbyId &&
+                nowTicks - s_lastOverlayJoinTicks < SteamOverlayJoinDedupMs)
+            {
+                Instance?.Logger.Debug("[NetMod][Steam] Ignoring duplicate overlay join request lobbyId={LobbyId} source={Source}", lobbyId, source);
+                return;
+            }
+
+            s_lastOverlayJoinLobbyId = lobbyId;
+            s_lastOverlayJoinTicks = nowTicks;
+            Instance?.Logger.Information("[NetMod][Steam] Queueing overlay join request lobbyId={LobbyId} source={Source}", lobbyId, source);
+            GameMenu.EnqueueMainThread(() => GameMenu.HandleSteamOverlayJoinRequest(lobbyId));
+        }
+
+        private static ulong TryParseLobbyIdFromConnectString(string connect)
+        {
+            if (string.IsNullOrWhiteSpace(connect))
+                return 0UL;
+            var parts = connect.Split((char[]?)[' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < parts.Length - 1; i++)
+            {
+                if (string.Equals(parts[i], "+connect_lobby", StringComparison.OrdinalIgnoreCase) &&
+                    ulong.TryParse(parts[i + 1], out var lobbyId) && lobbyId > 0)
+                    return lobbyId;
+            }
+            if (ulong.TryParse(connect.Trim(), out var direct) && direct > 0)
+                return direct;
+            return 0UL;
+        }
+
+        private static void TryRunSteamCallbacks()
+        {
+            try
+            {
+                SteamAPI.RunCallbacks();
+            }
+            catch
+            {
+            }
+        }
+
+        /// <summary>
+        /// Call from GameMenu when at main menu so Steam overlay join callbacks are pumped even if frame update is throttled.
+        /// </summary>
+        internal static void PumpSteamCallbacksForOverlay()
+        {
+            TryRunSteamCallbacks();
+            TryDeferredSteamOverlayCallbackRegistration();
+            TryPollSteamOverlayJoinFromLaunchData();
+        }
+
+        private static bool TryEnsureSteamApiInitialized(string source, bool logFailure)
+        {
+            if (s_steamApiReady)
+                return true;
+
+            try
+            {
+                SteamConnect.PrepareSteamNativePathForRuntime();
+                if (SteamAPI.Init())
+                {
+                    s_steamApiReady = true;
+                    Instance?.Logger.Information("[NetMod][Steam] SteamAPI.Init succeeded ({Source})", source);
+                    return true;
+                }
+
+                if (logFailure)
+                    Instance?.Logger.Debug("[NetMod][Steam] SteamAPI.Init returned false ({Source})", source);
+            }
+            catch (Exception ex)
+            {
+                if (logFailure)
+                    Instance?.Logger.Warning(ex, "[NetMod][Steam] SteamAPI.Init failed ({Source}): {Message}", source, ex.Message);
+            }
+
+            return false;
+        }
+
+        private static void TryPollSteamOverlayJoinFromLaunchData()
+        {
+            if (!s_steamApiReady)
+                return;
+
+            var nowTicks = Environment.TickCount64;
+            if (nowTicks < s_nextSteamLaunchPollTicks)
+                return;
+
+            s_nextSteamLaunchPollTicks = nowTicks + SteamOverlayLaunchPollIntervalMs;
+
+            try
+            {
+                string steamLaunchCommand = string.Empty;
+                var launchCommandLength = SteamApps.GetLaunchCommandLine(out steamLaunchCommand, 2048);
+                steamLaunchCommand = (steamLaunchCommand ?? string.Empty).Trim();
+                if (launchCommandLength > 0 &&
+                    !string.IsNullOrWhiteSpace(steamLaunchCommand) &&
+                    !string.Equals(steamLaunchCommand, s_lastSteamLaunchCommand, StringComparison.Ordinal))
+                {
+                    s_lastSteamLaunchCommand = steamLaunchCommand;
+                    var lobbyId = TryParseLobbyIdFromConnectString(steamLaunchCommand);
+                    if (lobbyId > 0UL)
+                    {
+                        Instance?.Logger.Information("[NetMod][Steam] Detected overlay join from Steam launch command: {Command}", steamLaunchCommand);
+                        EnqueueAndProcessOverlayJoin(lobbyId, "SteamApps.GetLaunchCommandLine");
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Instance?.Logger.Debug(ex, "[NetMod][Steam] GetLaunchCommandLine poll failed");
+            }
+
+            try
+            {
+                var connectLobby = (SteamApps.GetLaunchQueryParam("connect_lobby") ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(connectLobby) ||
+                    string.Equals(connectLobby, s_lastSteamLaunchConnectLobbyParam, StringComparison.Ordinal))
+                    return;
+
+                s_lastSteamLaunchConnectLobbyParam = connectLobby;
+                if (ulong.TryParse(connectLobby, out var lobbyId) && lobbyId > 0UL)
+                {
+                    Instance?.Logger.Information("[NetMod][Steam] Detected overlay join from Steam launch query param connect_lobby={LobbyId}", lobbyId);
+                    EnqueueAndProcessOverlayJoin(lobbyId, "SteamApps.GetLaunchQueryParam");
+                }
+            }
+            catch (Exception ex)
+            {
+                Instance?.Logger.Debug(ex, "[NetMod][Steam] GetLaunchQueryParam poll failed");
+            }
+        }
+
+        /// <summary>
+        /// Background timer pumps Steam callbacks so overlay Join works even when game loop is paused (overlay open).
+        /// Callbacks run on timer thread; we EnqueueMainThread for game ops.
+        /// </summary>
+        private static void StartSteamCallbackPumpTimer()
+        {
+            if (s_steamCallbackPumpTimer != null)
+                return;
+            try
+            {
+                s_steamCallbackPumpTimer = new Timer(
+                    _ =>
+                    {
+                        try
+                        {
+                            SteamAPI.RunCallbacks();
+                        }
+                        catch
+                        {
+                            // Ignore - Steam may not be ready
+                        }
+                    },
+                    null,
+                    TimeSpan.FromMilliseconds(100),
+                    TimeSpan.FromMilliseconds(100));
+                Instance?.Logger.Debug("[NetMod] Steam callback pump timer started");
+            }
+            catch (Exception ex)
+            {
+                Instance?.Logger.Warning(ex, "[NetMod] Failed to start Steam callback pump timer");
+            }
         }
 
         public override void Initialize()
@@ -319,8 +706,11 @@ namespace DeadCellsMultiplayerMod
             MobsSynchronization mobs = new MobsSynchronization(this);
             Minimapreveal minimapreveal = new Minimapreveal();
             LevelExitSync levelExitSync = new LevelExitSync(this);
+            InteractionSync interactionSync = new InteractionSync(this);
             ConnectionUI.Initialize(this);
             GameMenu.Initialize(Logger);
+            s_steamOverlayCallbackPending = true;
+            s_steamOverlayCallbackRetryCount = 0;
             EventSystem.BroadcastEvent<IOnAdvancedModuleInitializing, ModEntry>(this);
         }
 
@@ -330,7 +720,7 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             s_hooksInstalled = true;
-            entry.Logger.Information("\x1b[32m[[ModEntry] Mod Initializing Hooks...]\x1b[0m ");
+            entry.Logger.Information("\x1b[32m[[ModEntry] Initializing ModEntry...]\x1b[0m ");
             Hook_Game.init += Hook_gameinit;
             Hook_Hero.wakeup += hook_hero_wakeup;
             Hook_Hero.onLevelChanged += hook_level_changed;
@@ -338,6 +728,17 @@ namespace DeadCellsMultiplayerMod
             Hook_User.unserialize += Hook_User_unserialize;
             Hook_Game.onDispose += Hook_Game_onDispose;
             Hook__Save.save += Hook__Save_save;
+            Hook_ItemMetaManager.revealItem += Hook_ItemMetaManager_revealItem;
+            Hook_ItemMetaManager.unlockItem += Hook_ItemMetaManager_unlockItem;
+            Hook_ItemMetaManager.addPermanentItem += Hook_ItemMetaManager_addPermanentItem;
+            Hook_ItemMetaManager.investOnItemProgress += Hook_ItemMetaManager_investOnItemProgress;
+            Hook_ItemMetaManager.f_investOn += Hook_ItemMetaManager_f_investOn;
+            Hook_StoryManager.incNpcProgress += Hook_StoryManager_incNpcProgress;
+            Hook_StoryManager.setNpcProgress += Hook_StoryManager_setNpcProgress;
+            Hook_StoryManager.setBitFlag += Hook_StoryManager_setBitFlag;
+            Hook_StoryManager.markLoreRoomAsVisited += Hook_StoryManager_markLoreRoomAsVisited;
+            Hook_StoryManager.markLoreRoomAsGenerated += Hook_StoryManager_markLoreRoomAsGenerated;
+            Hook_StoryManager.cleanStoryData += Hook_StoryManager_cleanStoryData;
             Hook_AnimManager.play += Hook_AnimManager_play;
             Hook_MiniMap.track += Hook_MiniMap_track;
             Hook__LevelStruct.get += Hook__LevelStruct_get;
@@ -353,8 +754,28 @@ namespace DeadCellsMultiplayerMod
             Hook_BossRushDoor.initGfx += Hook_BossRushDoor_initGfx;
             Hook_Hero.applySkin += Hook_Hero_applySkin;
             Hook_HeroHead.initCustomHead += Hook_HeroHead_initCustomHead;
+            Hook_DiveAttack.onStart += Hook_DiveAttack_onStart;
+            Hook_DiveAttack.onOwnerLand += Hook_DiveAttack_onOwnerLand;
+            Hook_HiddenTrigger.trigger += Hook_HiddenTrigger_trigger;
+            Hook__HeroDeath.__constructor__ += Hook__HeroDeath__constructor__;
+            Hook__HeroDeathBase.__constructor__ += Hook__HeroDeathBase__constructor__;
+            Hook__HeroDeathContinue.__constructor__ += Hook__HeroDeathContinue__constructor__;
+            Hook__HeroDeathRespawn.__constructor__ += Hook__HeroDeathRespawn__constructor__;
+            Hook__HeroDeathDLCP.__constructor__ += Hook__HeroDeathDLCP__constructor__;
+            Hook__BeholderDeath.__constructor__ += Hook__BeholderDeath__constructor__;
+            Hook__GiantDeath.__constructor__ += Hook__GiantDeath__constructor__;
+            Hook__GiantDeath4.__constructor__ += Hook__GiantDeath4__constructor__;
+            Hook__KillKingCinem.__constructor__ += Hook__KillKingCinem__constructor__;
+            Hook__KillQueenCinem.__constructor__ += Hook__KillQueenCinem__constructor__;
+            Hook__QueenDefeated.__constructor__ += Hook__QueenDefeated__constructor__;
+            Hook__KillDookuBeastCinem.__constructor__ += Hook__KillDookuBeastCinem__constructor__;
+            Hook__FakeKillDooku.__constructor__ += Hook__FakeKillDooku__constructor__;
+            Hook__RichterDeath.__constructor__ += Hook__RichterDeath__constructor__;
+            Hook__EndCollectorPreSmash.__constructor__ += Hook__EndCollectorPreSmash__constructor__;
+            Hook__SmashCinem.__constructor__ += Hook__SmashCinem__constructor__;
+            Hook__EndCollectorPostSmash.__constructor__ += Hook__EndCollectorPostSmash__constructor__;
+            Hook__EndCollectorPostSmashKS.__constructor__ += Hook__EndCollectorPostSmashKS__constructor__;
             // Hook_Hero.tryToApplyYoloPerk += Hook_Hero_tryToApplyYoloPerk;
-            Hook__TitleScreen.__constructor__ += Hook_TitleScreen__constructor__;
             // Hook_Hero.onEnterRoom += 
             Ghost.KingWeaponHooks.Install();
         }
@@ -378,7 +799,7 @@ namespace DeadCellsMultiplayerMod
                     try { rawSkin = self.getSkinInfo()?.consoleCmdId?.ToString(); } catch { }
                 }
 
-                var skin = NormalizeBodySkin(rawSkin);
+                var skin = NormalizeSkin(rawSkin, "PrisonerDefault");
 
                 if (string.Equals(_lastSentHeroSkin, skin, StringComparison.Ordinal))
                     return;
@@ -409,7 +830,7 @@ namespace DeadCellsMultiplayerMod
 
             try
             {
-                var skin = NormalizeHeadSkin(dc.Main.Class.ME?.user?.heroHeadSkin?.ToString());
+                var skin = NormalizeSkin(dc.Main.Class.ME?.user?.heroHeadSkin?.ToString(), "BaseFlame");
                 if (string.Equals(_lastSentHeroHeadSkin, skin, StringComparison.Ordinal))
                     return;
 
@@ -422,30 +843,126 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
+        private void TrySendLiveProgressSync(User? user)
+        {
+            if (_netRole != NetRole.Host)
+                return;
+
+            var net = _net;
+            if (net == null || !net.IsAlive || user == null)
+                return;
+
+            var activeUser = dc.Main.Class.ME?.user;
+            if (activeUser == null || !ReferenceEquals(activeUser, user))
+                return;
+
+            GameDataSync.MarkProgressPayloadDirty();
+            GameDataSync.SendProgressSync(user, net);
+        }
+
+        private void TrySendLiveProgressSync(ItemMetaManager? itemMeta)
+        {
+            var user = itemMeta?._user ?? dc.Main.Class.ME?.user;
+            TrySendLiveProgressSync(user);
+        }
+
+        private void TrySendLiveProgressSync(StoryManager? story)
+        {
+            var user = dc.Main.Class.ME?.user;
+            if (user == null || story == null || !ReferenceEquals(user.story, story))
+                return;
+
+            TrySendLiveProgressSync(user);
+        }
+
+        private bool Hook_ItemMetaManager_revealItem(Hook_ItemMetaManager.orig_revealItem orig, ItemMetaManager self, dc.String showAsNew, bool e)
+        {
+            var changed = orig(self, showAsNew, e);
+            if (changed)
+                TrySendLiveProgressSync(self);
+            return changed;
+        }
+
+        private bool Hook_ItemMetaManager_unlockItem(Hook_ItemMetaManager.orig_unlockItem orig, ItemMetaManager self, dc.String e)
+        {
+            var changed = orig(self, e);
+            if (changed)
+                TrySendLiveProgressSync(self);
+            return changed;
+        }
+
+        private bool Hook_ItemMetaManager_addPermanentItem(Hook_ItemMetaManager.orig_addPermanentItem orig, ItemMetaManager self, dc.String k)
+        {
+            var changed = orig(self, k);
+            if (changed)
+                TrySendLiveProgressSync(self);
+            return changed;
+        }
+
+        private bool Hook_ItemMetaManager_investOnItemProgress(Hook_ItemMetaManager.orig_investOnItemProgress orig, ItemMetaManager self, dc.String e)
+        {
+            var changed = orig(self, e);
+            if (changed)
+                TrySendLiveProgressSync(self);
+            return changed;
+        }
+
+        private bool Hook_ItemMetaManager_f_investOn(Hook_ItemMetaManager.orig_f_investOn orig, ItemMetaManager self, int upLevel)
+        {
+            var changed = orig(self, upLevel);
+            if (changed)
+                TrySendLiveProgressSync(self);
+            return changed;
+        }
+
+        private void Hook_StoryManager_incNpcProgress(Hook_StoryManager.orig_incNpcProgress orig, StoryManager self, NpcId id)
+        {
+            orig(self, id);
+            TrySendLiveProgressSync(self);
+        }
+
+        private void Hook_StoryManager_setNpcProgress(Hook_StoryManager.orig_setNpcProgress orig, StoryManager self, NpcId id, int v)
+        {
+            orig(self, id, v);
+            TrySendLiveProgressSync(self);
+        }
+
+        private void Hook_StoryManager_setBitFlag(Hook_StoryManager.orig_setBitFlag orig, StoryManager self, dc.String slot, int value, bool curValue)
+        {
+            orig(self, slot, value, curValue);
+            TrySendLiveProgressSync(self);
+        }
+
+        private void Hook_StoryManager_markLoreRoomAsVisited(Hook_StoryManager.orig_markLoreRoomAsVisited orig, StoryManager self, dc.String k)
+        {
+            orig(self, k);
+            TrySendLiveProgressSync(self);
+        }
+
+        private void Hook_StoryManager_markLoreRoomAsGenerated(Hook_StoryManager.orig_markLoreRoomAsGenerated orig, StoryManager self, virtual_baseLootLevel_biome_bonusTripleScrollAfterBC_cellBonus_dlc_doubleUps_eliteRoomChance_eliteWanderChance_flagsProps_group_icon_id_index_loreDescriptions_mapDepth_minGold_mobDensity_mobs_name_nextLevels_parallax_props_quarterUpsBC3_quarterUpsBC4_specificLoots_specificSubBiome_transitionTo_tripleUps_worldDepth_ l, dc.String k)
+        {
+            orig(self, l, k);
+            TrySendLiveProgressSync(self);
+        }
+
+        private void Hook_StoryManager_cleanStoryData(Hook_StoryManager.orig_cleanStoryData orig, StoryManager self)
+        {
+            orig(self);
+            TrySendLiveProgressSync(self);
+        }
+
         private void Hook_ZDoor_onActivate(Hook_ZDoor.orig_onActivate orig, ZDoor self, Hero lp, bool mob)
         {
-            var shouldRefresh = false;
+            orig(self, lp, mob);
+
             if (_netRole != NetRole.None &&
                 _net != null &&
                 me != null &&
                 lp != null &&
-                ReferenceEquals(lp, me) &&
-                self != null)
+                ReferenceEquals(lp, me))
             {
-                try
-                {
-                    shouldRefresh = SendDoorMarkerFromActivation(self);
-                }
-                catch
-                {
-                }
-            }
-
-            orig(self, lp, mob);
-
-            if (shouldRefresh)
-            {
-                try { ReceiveGhostCoords(); } catch { }
+                try { SendCurrentRoomTarget(force: true); } catch { }
+                try { ReceiveGhostCoords(); } catch (Exception ex) { Logger.Warning(ex, "[NetMod] ReceiveGhostCoords failed"); }
             }
         }
 
@@ -468,9 +985,69 @@ namespace DeadCellsMultiplayerMod
                     levelId,
                     bossRushType ?? "null",
                     ex.Message);
-                try { self.spr = null; } catch { }
+                try { self.spr = null; } catch (Exception ex2) { Logger.Warning(ex2, "[NetMod] BossRushDoor spr=null failed"); }
                 return;
             }
+        }
+
+        private void Hook_HiddenTrigger_trigger(Hook_HiddenTrigger.orig_trigger orig, HiddenTrigger self, Entity dh)
+        {
+            var senderLevelId = string.IsNullOrWhiteSpace(levelId) ? string.Empty : levelId.Trim();
+            string? senderGenericEventId = null;
+            double? senderPreX = null;
+            double? senderPreY = null;
+            int? senderPreDir = null;
+            double? senderPostX = null;
+            double? senderPostY = null;
+            int? senderPostDir = null;
+
+            if (self != null)
+            {
+                try { senderGenericEventId = self.genericEventId?.ToString()?.Trim(); } catch { }
+            }
+
+            if (dh != null && me != null && ReferenceEquals(dh, me))
+                TryCaptureBossCineHeroPosition(me, out senderPreX, out senderPreY, out senderPreDir);
+
+            orig(self, dh);
+
+            if (_suppressBossCineSendDepth > 0)
+                return;
+            if (_suppressBossTriggerNetSendUntilTick != 0 &&
+                Stopwatch.GetTimestamp() < _suppressBossTriggerNetSendUntilTick)
+                return;
+            if (_netRole == NetRole.None || _net == null || !_net.IsAlive)
+                return;
+            if (self == null || dh == null || me == null || !ReferenceEquals(dh, me))
+                return;
+
+            if (!BossLevelIds.Contains(senderLevelId))
+                return;
+            if (IsBossCineCompleted(senderLevelId) ||
+                IsBossCineSendSuppressed(senderLevelId) ||
+                HasAppliedBossHeroTeleport(senderLevelId))
+                return;
+            if (string.IsNullOrWhiteSpace(senderGenericEventId))
+                return;
+            if (!BossRoomGenericEventIds.Contains(senderGenericEventId))
+                return;
+            if (!DidBossTriggerStart(dc.pr.Game.Class.ME, self))
+                return;
+
+            TryCaptureBossCineHeroPosition(me, out senderPostX, out senderPostY, out senderPostDir);
+            if (senderPreX.HasValue && senderPreY.HasValue)
+                _net.SendBossHeroTeleport(senderPreX.Value, senderPreY.Value, senderPreDir ?? 0);
+
+            if (TrySendBossCinePayload(BuildBossCinePayload(
+                senderLevelId,
+                senderGenericEventId,
+                senderPreX,
+                senderPreY,
+                senderPreDir,
+                senderPostX,
+                senderPostY,
+                senderPostDir)))
+                MarkBossCineCompleted(senderLevelId);
         }
 
         private static bool ContainsBossRushFrameCrash(Exception ex)
@@ -526,42 +1103,36 @@ namespace DeadCellsMultiplayerMod
             {
                 orig(u, onlyGameData);
                 if (u != null)
-                    GameDataSync.SendHostStorySync(u, _net);
+                {
+                    GameDataSync.MarkProgressPayloadDirty();
+                    GameDataSync.SendProgressSync(u, _net);
+                }
                 return;
             }
 
             if (_netRole == NetRole.Client)
             {
-                if (u != null)
-                {
-                    GameDataSync.CaptureSessionStory(u);
-                    GameDataSync.CaptureOriginalUserData(u, allowReplaceWhenBetter: true);
-                }
-
-                var swapped = u != null && GameDataSync.RestoreOriginalUserState(u, clearRemote: false);
                 var serializerSwapped = GameDataSync.SwapToLocalSerializerSync();
-                if (!swapped && u != null && _net != null && _net.IsAlive)
+                User? saveUser = u;
+                if (u != null)
+                    GameDataSync.CaptureOriginalUserData(u, allowReplaceWhenBetter: true);
+
+                if (u != null && !GameDataSync.TryBuildSafeSaveUser(u, onlyGameData, out saveUser))
                 {
-                    Logger.Warning("[NetMod] Skipping client save: local snapshot is unavailable, preventing host progress overwrite");
+                    Logger.Warning("[NetMod] Skipping client save: local progress snapshot clone is unavailable, preventing host progress overwrite");
                     if (serializerSwapped)
                         GameDataSync.RestoreRemoteSerializerSync();
-                    GameDataSync.RestoreRemoteUserData(u);
-                    GameDataSync.RestoreSessionStory(u);
                     return;
                 }
 
                 try
                 {
-                    orig(u, onlyGameData);
+                    orig(saveUser, onlyGameData);
                 }
                 finally
                 {
                     if (serializerSwapped)
                         GameDataSync.RestoreRemoteSerializerSync();
-                    if (u != null)
-                        GameDataSync.RestoreRemoteUserData(u);
-                    if (u != null)
-                        GameDataSync.RestoreSessionStory(u);
                 }
                 return;
             }
@@ -624,14 +1195,6 @@ namespace DeadCellsMultiplayerMod
         }
 
 
-        private void Hook_TitleScreen__constructor__(Hook__TitleScreen.orig___constructor__ orig, TitleScreen playMusic, bool? titleLib)
-        {
-            orig(playMusic, titleLib);
-            ConnectionUI connectionUI = new ConnectionUI(playMusic);
-            playMusic.addChild(connectionUI);
-            connectionUI.root.set_visible(false);
-
-        }
 
         private void Hook_Game_pause(Hook_Game.orig_pause orig, dc.pr.Game self)
         {
@@ -639,29 +1202,6 @@ namespace DeadCellsMultiplayerMod
             return; 
         }
 
-
-        private void Hook_MobsGen_addElites(Hook_MobsGen.orig_addElites orig, MobsGen self, ArrayObj mobsPerRooms)
-        {
-            orig(self, mobsPerRooms);
-            dynamic mobs = mobsPerRooms.array.Count;
-            dynamic b = mobsPerRooms.array;
-            for (int i = 0; i < mobs; i++)
-            {
-                var m = b[i];
-                // Logger.Information($"[DEBUG|MOB] mobs at index {i}: {m}");
-
-            }
-        }
-
-        private void Hook_LevelGen_genmobs(Hook_LevelGen.orig_genMobs orig, LevelGen self, User maps, ArrayObj extraMobs, ArrayObj bonusTotalMobCount1, Ref<int> bonusTotalMobCount)
-        {
-            orig(self, maps, extraMobs, bonusTotalMobCount1, bonusTotalMobCount);
-            dynamic count = extraMobs.array.Count;
-            for (int i = 0; i < count; i++)
-            {
-                var mobs = extraMobs.array[i];
-            }
-        }
 
         private void hook_boot_update(Hook_Boot.orig_update orig, Boot self, double dt)
         {
@@ -713,6 +1253,9 @@ namespace DeadCellsMultiplayerMod
                 try
                 {
                     GameDataSync.SendLevelGraph(graphLevelId, root, graph, rng, _net);
+                    var activeUser = user ?? game?.user ?? dc.Main.Class.ME?.user;
+                    if (activeUser != null)
+                        GameDataSync.SendBossRune(activeUser, _net);
                 }
                 catch (Exception ex)
                 {
@@ -723,7 +1266,7 @@ namespace DeadCellsMultiplayerMod
             {
                 try
                 {
-                    const int graphSyncWaitMs = 6000;
+                    const int graphSyncWaitMs = 10000;
                     if (GameDataSync.TryApplyRemoteLevelGraph(graphLevelId, graph, rng, graphSyncWaitMs, out var remoteRoot, out var reason))
                     {
                         Logger.Information("[NetMod] Applied remote level graph+rand for {LevelId}", graphLevelId);
@@ -764,9 +1307,8 @@ namespace DeadCellsMultiplayerMod
             if (me != null && me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
             {
                 if (!DeadCellsMultiplayerMod.Ghost.KingWeaponSupport.IsInKingContext &&
-                    Stopwatch.GetTimestamp() >= _suppressHeroAnimUntilTicks &&
                     !IsAttackAnim(play))
-                    SendHeroAnim(play, queueAnim, g, force: true);
+                    SendHeroAnim(play, queueAnim, g);
             }
             if(me != null && me.heroHead.customHeadSpr != null && ReferenceEquals(self, me.heroHead.customHeadSpr._animManager))
             {
@@ -801,19 +1343,27 @@ namespace DeadCellsMultiplayerMod
         {
             kingInitialized = false;
             DeadCellsMultiplayerMod.Mobs.MobsSynchronization.MobsSynchronization.ClearTrackingForLevelChange();
-            try { _net?.ClearMobSyncQueues(); } catch { }
+            try { _net?.ClearMobSyncQueues(); } catch (Exception ex) { Logger.Warning(ex, "[NetMod] ClearMobSyncQueues failed"); }
+            _pendingBossCineApplyByLevel.Clear();
+            _suppressBossCineEchoByLevel.Clear();
+            _completedBossCineLevels.Clear();
+            _appliedBossHeroTeleportLevels.Clear();
+            _lastBossCineSentLevelId = null;
+            _lastBossCineSentTick = 0;
             ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false, clearRemoteDownedTracking: false, clearDownedAnnouncements: false);
             me = self;
             try { me._targetable = true; } catch { }
-            SendLevel(levelId);
             orig(self, oldLevel);
-            try { _net?.ClearMobSyncQueues(); } catch { }
+            var currentLevelId = GetCurrentLevelId();
+            if (!string.IsNullOrWhiteSpace(currentLevelId))
+                SendLevel(currentLevelId);
+            SendCurrentRoomTarget(force: true);
+            try { _net?.ClearMobSyncQueues(); } catch (Exception ex) { Logger.Warning(ex, "[NetMod] ClearMobSyncQueues failed"); }
             EnsureHeroVisibilityAfterRoomChange(me);
             if (_netRole == NetRole.None) return;
             var net = _net;
             var localId = net?.id ?? 0;
-            if (_ghost == null)
-                _ghost = new GhostHero(localId, game!, me, Logger, this);
+            _ghost = new GhostHero(localId, game!, me, Logger, this);
             _ghost.SetLabel(me, GameMenu.Username);
 
             for (int i = 0; i < clients.Length; i++)
@@ -823,6 +1373,7 @@ namespace DeadCellsMultiplayerMod
                 rLastY[i] = 0;
             }
 
+            DrainRemoteCombatQueuesAfterLevelChange();
             ReceiveGhostCoords();
         }
 
@@ -833,6 +1384,7 @@ namespace DeadCellsMultiplayerMod
             try { me._targetable = true; } catch { }
             orig(self, lvl, cx, cy);
             EnsureHeroVisibilityAfterRoomChange(me);
+            SendCurrentRoomTarget(force: true);
             SendEquippedWeapons(self.inventory);
         }
 
@@ -852,8 +1404,1088 @@ namespace DeadCellsMultiplayerMod
         public void OnFrameUpdate(double dt)
         {
             if (!_ready) return;
+            GameMenu.ProcessMainThreadQueue();
             GameMenu.TickMenu(dt);
+            DetectAndSendBossCine();
+            ApplyReceivedBossHeroTeleport();
+            ApplyReceivedBossCine();
+            SuppressRemoteBossDeathCineIfNeeded();
+        }
 
+        private void DetectAndSendBossCine()
+        {
+            if (_netRole == NetRole.None || _net == null || !_net.IsAlive)
+                return;
+
+            var currentLevelId = string.IsNullOrWhiteSpace(levelId) ? null : levelId.Trim();
+            if (string.IsNullOrEmpty(currentLevelId) || !BossLevelIds.Contains(currentLevelId))
+                return;
+            if (IsBossCineCompleted(currentLevelId))
+                return;
+
+            try
+            {
+                var game = dc.pr.Game.Class.ME;
+                var cine = game?.curCine;
+                if (cine == null || cine.destroyed)
+                    return;
+
+                if (cine is DeadBase || cine is RemoteDownedCorpse)
+                    return;
+
+                try
+                {
+                    if (cine is HeroDeath || cine is HeroDeathBase || cine is HeroDeathContinue ||
+                        cine is HeroDeathRespawn || cine is HeroDeathDLCP)
+                        return;
+                }
+                catch
+                {
+                    var typeName = cine.GetType().FullName ?? string.Empty;
+                    if (typeName.IndexOf("HeroDeath", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return;
+                }
+
+                if (TrySendBossCinePayload(BuildBossCinePayload(currentLevelId, null)))
+                    MarkBossCineCompleted(currentLevelId);
+            }
+            catch
+            {
+            }
+        }
+
+        private bool TrySendBossCinePayload(string payload)
+        {
+            if (_netRole == NetRole.None || _net == null || !_net.IsAlive)
+                return false;
+
+            if (!TryParseBossCinePayload(payload, out var levelId, out var _, out var _, out var _, out var _, out var _, out var _, out var _))
+                return false;
+
+            if (IsBossCineCompleted(levelId))
+                return false;
+
+            if (IsBossCineSendSuppressed(levelId))
+                return false;
+
+            var now = Stopwatch.GetTimestamp();
+            var cooldownTicks = (long)(Stopwatch.Frequency * BossCineSendCooldownSeconds);
+            if (_lastBossCineSentLevelId == levelId && now - _lastBossCineSentTick < cooldownTicks)
+                return false;
+
+            _lastBossCineSentLevelId = levelId;
+            _lastBossCineSentTick = now;
+            _net.SendBossCine(payload);
+            return true;
+        }
+
+        private string BuildBossCinePayload(string levelId, string? genericEventId)
+        {
+            double? x = null;
+            double? y = null;
+            int? dir = null;
+            if (me != null)
+            {
+                TryCaptureBossCineHeroPosition(me, out x, out y, out dir);
+            }
+
+            return BuildBossCinePayload(levelId, genericEventId, x, y, dir, null, null, null);
+        }
+
+        private string BuildBossCinePayload(string levelId, string? genericEventId, double? x, double? y, int? dir)
+        {
+            return BuildBossCinePayload(levelId, genericEventId, x, y, dir, null, null, null);
+        }
+
+        private string BuildBossCinePayload(
+            string levelId,
+            string? genericEventId,
+            double? x,
+            double? y,
+            int? dir,
+            double? finalX,
+            double? finalY,
+            int? finalDir)
+        {
+            var safeLevelId = string.IsNullOrWhiteSpace(levelId)
+                ? string.Empty
+                : levelId.Replace("\r", string.Empty, StringComparison.Ordinal)
+                    .Replace("\n", string.Empty, StringComparison.Ordinal)
+                    .Trim();
+            if (string.IsNullOrEmpty(safeLevelId))
+                return string.Empty;
+
+            var safeEventId = string.IsNullOrWhiteSpace(genericEventId)
+                ? string.Empty
+                : genericEventId.Replace("\r", string.Empty, StringComparison.Ordinal)
+                    .Replace("\n", string.Empty, StringComparison.Ordinal)
+                    .Trim();
+
+            if (!x.HasValue || !y.HasValue)
+                return string.IsNullOrEmpty(safeEventId) ? safeLevelId : $"{safeLevelId}|{safeEventId}";
+
+            var resolvedFinalX = finalX ?? x.Value;
+            var resolvedFinalY = finalY ?? y.Value;
+            var resolvedFinalDir = finalDir ?? dir ?? 0;
+
+            return string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{safeLevelId}|{safeEventId}|{x.Value}|{y.Value}|{dir ?? 0}|{resolvedFinalX}|{resolvedFinalY}|{resolvedFinalDir}");
+        }
+
+        private static bool TryParseBossCinePayload(
+            string? payload,
+            out string levelId,
+            out string? genericEventId,
+            out double? snapX,
+            out double? snapY,
+            out int? snapDir,
+            out double? finalX,
+            out double? finalY,
+            out int? finalDir)
+        {
+            levelId = string.Empty;
+            genericEventId = null;
+            snapX = null;
+            snapY = null;
+            snapDir = null;
+            finalX = null;
+            finalY = null;
+            finalDir = null;
+
+            if (string.IsNullOrWhiteSpace(payload))
+                return false;
+
+            var normalized = payload
+                .Replace("\r", string.Empty, StringComparison.Ordinal)
+                .Replace("\n", string.Empty, StringComparison.Ordinal)
+                .Trim();
+            if (normalized.Length == 0)
+                return false;
+
+            var parts = normalized.Split('|');
+            if (parts.Length == 0)
+                return false;
+
+            levelId = parts[0].Trim();
+            if (string.IsNullOrWhiteSpace(levelId))
+                return false;
+
+            if (parts.Length >= 2)
+            {
+                var eventId = parts[1].Trim();
+                if (eventId.Length > 0)
+                    genericEventId = eventId;
+            }
+
+            if (parts.Length >= 4)
+            {
+                if (double.TryParse(parts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsedX))
+                    snapX = parsedX;
+                if (double.TryParse(parts[3], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsedY))
+                    snapY = parsedY;
+            }
+
+            if (parts.Length >= 5 &&
+                int.TryParse(parts[4], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedDir))
+            {
+                snapDir = parsedDir;
+            }
+
+            if (parts.Length >= 7)
+            {
+                if (double.TryParse(parts[5], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsedFinalX))
+                    finalX = parsedFinalX;
+                if (double.TryParse(parts[6], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsedFinalY))
+                    finalY = parsedFinalY;
+            }
+
+            if (parts.Length >= 8 &&
+                int.TryParse(parts[7], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedFinalDir))
+            {
+                finalDir = parsedFinalDir;
+            }
+
+            return true;
+        }
+
+        private static void TryCaptureBossCineHeroPosition(Hero? hero, out double? x, out double? y, out int? dir)
+        {
+            x = null;
+            y = null;
+            dir = null;
+
+            if (hero == null)
+                return;
+
+            try
+            {
+                if (hero.spr != null)
+                {
+                    x = hero.spr.x;
+                    y = hero.spr.y;
+                }
+                else
+                {
+                    x = hero.get_targetSprPosX();
+                    y = hero.get_targetSprPosY();
+                }
+            }
+            catch
+            {
+            }
+
+            try { dir = hero.dir; } catch { }
+        }
+
+        private void ApplyReceivedBossCine()
+        {
+            var net = _net;
+            if (net == null || !net.IsAlive)
+            {
+                _pendingBossCineApplyByLevel.Clear();
+                _suppressBossCineEchoByLevel.Clear();
+                _completedBossCineLevels.Clear();
+                _appliedBossHeroTeleportLevels.Clear();
+                return;
+            }
+
+            if (net.TryConsumeBossCineLevelIds(out var levelIds) && levelIds.Count > 0)
+            {
+                var defaultExpiry = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * BossCineApplyPendingTtlSeconds);
+                for (int i = 0; i < levelIds.Count; i++)
+                {
+                    var receivedPayload = levelIds[i];
+                    if (!TryParseBossCinePayload(receivedPayload, out var receivedLevelId, out var receivedGenericEventId, out var receivedSnapX, out var receivedSnapY, out var _, out var _, out var _, out var _))
+                        continue;
+
+                    ClearBossCineCompleted(receivedLevelId);
+                    if (!string.IsNullOrWhiteSpace(receivedGenericEventId) && receivedSnapX.HasValue && receivedSnapY.HasValue)
+                        SuppressBossCineSend(receivedLevelId);
+
+                    var normalized = receivedPayload
+                        .Replace("\r", string.Empty, StringComparison.Ordinal)
+                        .Replace("\n", string.Empty, StringComparison.Ordinal)
+                        .Trim();
+
+                    var expiry = defaultExpiry;
+                    if (_pendingBossCineApplyByLevel.TryGetValue(normalized, out var oldExpiry) && oldExpiry > expiry)
+                        expiry = oldExpiry;
+
+                    _pendingBossCineApplyByLevel[normalized] = expiry;
+                }
+            }
+
+            if (_pendingBossCineApplyByLevel.Count == 0)
+                return;
+
+            var now = Stopwatch.GetTimestamp();
+            var currentLevelId = string.IsNullOrWhiteSpace(levelId) ? string.Empty : levelId.Trim();
+            List<string>? remove = null;
+            foreach (var kv in _pendingBossCineApplyByLevel)
+            {
+                var pendingPayload = kv.Key;
+                var expiryTicks = kv.Value;
+                if (now >= expiryTicks)
+                {
+                    (remove ??= new List<string>()).Add(pendingPayload);
+                    continue;
+                }
+
+                if (!TryParseBossCinePayload(pendingPayload, out var pendingLevelId, out var genericEventId, out var snapX, out var snapY, out var snapDir, out var finalX, out var finalY, out var finalDir))
+                {
+                    (remove ??= new List<string>()).Add(pendingPayload);
+                    continue;
+                }
+
+                if (string.IsNullOrEmpty(currentLevelId) ||
+                    !string.Equals(pendingLevelId, currentLevelId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var triggered =
+                    !string.IsNullOrWhiteSpace(genericEventId) &&
+                    snapX.HasValue &&
+                    snapY.HasValue
+                        ? TrySyncBossCinematicFromLocalTrigger(pendingLevelId, genericEventId)
+                        : TryTriggerBossCinematic(pendingLevelId, genericEventId, snapX, snapY, snapDir, finalX, finalY, finalDir);
+
+                if (triggered)
+                {
+                    MarkBossCineCompleted(pendingLevelId);
+                    SuppressBossCineSend(pendingLevelId);
+                    (remove ??= new List<string>()).Add(pendingPayload);
+                }
+            }
+
+            if (remove == null || remove.Count == 0)
+                return;
+
+            for (int i = 0; i < remove.Count; i++)
+                _pendingBossCineApplyByLevel.Remove(remove[i]);
+        }
+
+        private void ApplyReceivedBossHeroTeleport()
+        {
+            var net = _net;
+            if (net == null || !net.IsAlive)
+                return;
+
+            if (!net.TryConsumeBossHeroTeleportEvents(out var teleports) || teleports.Count == 0)
+                return;
+
+            var localHero = me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+            if (localHero == null)
+                return;
+
+            var localId = net.id;
+            var currentLevelId = GetCurrentLevelId();
+            foreach (var teleport in teleports)
+            {
+                if (teleport.UserId > 0 && teleport.UserId == localId)
+                    continue;
+                if (HasAppliedBossHeroTeleport(currentLevelId))
+                    continue;
+
+                MarkBossHeroTeleportApplied(currentLevelId);
+                SuppressBossCineSend(currentLevelId);
+                _suppressBossTriggerNetSendUntilTick =
+                    Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * BossHeroTeleportEchoSuppressSeconds);
+                try { localHero.cancelVelocities(); } catch { }
+                try { localHero.setPosPixel(teleport.X, teleport.Y - BossHeroTeleportYOffsetPx); } catch { }
+                try { localHero.dir = teleport.Dir; } catch { }
+            }
+        }
+
+        private bool TrySyncBossCinematicFromLocalTrigger(
+            string levelId,
+            string? genericEventId)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(levelId) || !BossLevelIds.Contains(levelId))
+                    return false;
+
+                var game = dc.pr.Game.Class.ME;
+                var hero = game?.hero ?? me;
+                var level = hero?._level;
+                if (game == null || hero == null || level == null)
+                    return false;
+
+                var currentCine = game.curCine;
+                if (currentCine != null && !currentCine.destroyed)
+                    return IsBossIntroCinematic(currentCine);
+
+                if (GameHasAnyCinematic(game))
+                    return false;
+
+                if (!DidBossHiddenTriggerStart(level, genericEventId))
+                    return false;
+
+                _lastBossCineSentLevelId = levelId;
+                _lastBossCineSentTick = Stopwatch.GetTimestamp();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool DidBossHiddenTriggerStart(Level level, string? genericEventId)
+        {
+            if (level == null || string.IsNullOrWhiteSpace(genericEventId))
+                return false;
+
+            try
+            {
+                var entitiesByClass = level.entitiesByClass;
+                var triggerClid = HiddenTrigger.Class.__clid;
+                var entries = entitiesByClass?.get(triggerClid) as dc.hl.types.ArrayObj;
+                if (entries == null)
+                    return false;
+
+                for (var i = 0; i < entries.length; i++)
+                {
+                    if (entries.getDyn(i) is not HiddenTrigger ht)
+                        continue;
+
+                    var evId = ht.genericEventId?.ToString();
+                    if (!string.Equals(evId, genericEventId, StringComparison.Ordinal))
+                        continue;
+
+                    if (ht.used)
+                        return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private bool TryTriggerBossCinematic(
+            string levelId,
+            string? genericEventId,
+            double? snapX,
+            double? snapY,
+            int? snapDir,
+            double? finalX,
+            double? finalY,
+            int? finalDir)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(levelId))
+                    return false;
+
+                if (!BossLevelIds.Contains(levelId))
+                    return false;
+
+                var game = dc.pr.Game.Class.ME;
+                var hero = game?.hero ?? me;
+                var level = hero?._level;
+                if (game == null || level == null || hero == null)
+                    return false;
+
+                var currentCine = game.curCine;
+                if (currentCine != null && !currentCine.destroyed)
+                    return IsBossIntroCinematic(currentCine);
+
+                var entitiesByClass = level.entitiesByClass;
+                if (entitiesByClass != null)
+                {
+                    var triggerClid = HiddenTrigger.Class.__clid;
+                    var entries = entitiesByClass.get(triggerClid) as dc.hl.types.ArrayObj;
+                    if (entries != null)
+                    {
+                        HiddenTrigger? usedReplayCandidate = null;
+                        for (var i = 0; i < entries.length; i++)
+                        {
+                            if (entries.getDyn(i) is not HiddenTrigger ht)
+                                continue;
+
+                            var evId = ht.genericEventId?.ToString();
+                            if (string.IsNullOrEmpty(evId))
+                                continue;
+                            if (!string.IsNullOrWhiteSpace(genericEventId))
+                            {
+                                if (!string.Equals(evId, genericEventId, StringComparison.Ordinal))
+                                    continue;
+                            }
+                            else if (!BossRoomGenericEventIds.Contains(evId))
+                            {
+                                continue;
+                            }
+
+                            if (ht.used)
+                            {
+                                usedReplayCandidate ??= ht;
+                                continue;
+                            }
+
+                            if (GameHasAnyCinematic(game))
+                                return false;
+
+                            TrySnapHeroToBossCinePosition(hero, snapX, snapY, snapDir);
+                            RunWithSuppressedBossCineSend(() => ht.trigger(hero));
+                            if (DidBossTriggerStart(game, ht))
+                            {
+                                TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
+                                _lastBossCineSentLevelId = levelId;
+                                _lastBossCineSentTick = Stopwatch.GetTimestamp();
+                                return true;
+                            }
+
+                            return false;
+                        }
+
+                        if (usedReplayCandidate != null && TryReplayBossHiddenTrigger(usedReplayCandidate, hero, snapX, snapY, snapDir, finalX, finalY, finalDir))
+                        {
+                            _lastBossCineSentLevelId = levelId;
+                            _lastBossCineSentTick = Stopwatch.GetTimestamp();
+                            return true;
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(genericEventId) &&
+                    TryCreateBossCinematicDirectly(level, hero, genericEventId, snapX, snapY, snapDir, finalX, finalY, finalDir))
+                {
+                    MarkBossRoomHiddenTriggersUsed(level, genericEventId);
+                    _lastBossCineSentLevelId = levelId;
+                    _lastBossCineSentTick = Stopwatch.GetTimestamp();
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private bool TryReplayBossHiddenTrigger(
+            HiddenTrigger trigger,
+            Hero hero,
+            double? snapX,
+            double? snapY,
+            int? snapDir,
+            double? finalX,
+            double? finalY,
+            int? finalDir)
+        {
+            if (trigger == null || hero == null)
+                return false;
+
+            try
+            {
+                var wasUsed = trigger.used;
+                var game = dc.pr.Game.Class.ME;
+                if (GameHasAnyCinematic(game))
+                    return false;
+
+                trigger.used = false;
+                TrySnapHeroToBossCinePosition(hero, snapX, snapY, snapDir);
+                RunWithSuppressedBossCineSend(() => trigger.trigger(hero));
+
+                if (DidBossTriggerStart(game, trigger))
+                {
+                    TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
+                    return true;
+                }
+
+                trigger.used = wasUsed;
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool DidBossTriggerStart(dc.pr.Game? game, HiddenTrigger trigger)
+        {
+            if (trigger != null)
+            {
+                try
+                {
+                    if (trigger.used)
+                        return true;
+                }
+                catch
+                {
+                }
+            }
+
+            var currentCine = game?.curCine;
+            return currentCine != null && !currentCine.destroyed && IsBossIntroCinematic(currentCine);
+        }
+
+        private static bool GameHasAnyCinematic(dc.pr.Game? game)
+        {
+            if (game == null)
+                return false;
+
+            try
+            {
+                return game.hasCinematic();
+            }
+            catch
+            {
+                var currentCine = game.curCine;
+                return currentCine != null && !currentCine.destroyed;
+            }
+        }
+
+        private void TrySnapHeroToBossCinePosition(Hero hero, double? snapX, double? snapY, int? snapDir)
+        {
+            if (hero == null || !snapX.HasValue || !snapY.HasValue)
+                return;
+
+            try { hero.cancelVelocities(); } catch { }
+            SnapHeroToDownedPosition(hero, snapX.Value, snapY.Value, clampToGround: false);
+            if (snapDir.HasValue)
+            {
+                try { hero.dir = snapDir.Value; } catch { }
+            }
+        }
+
+        private static bool IsBossIntroCinematic(dc.GameCinematic? cine)
+        {
+            if (cine == null)
+                return false;
+
+            try
+            {
+                var typeName = cine.GetType().Name ?? string.Empty;
+                return BossIntroCineTypeNames.Contains(typeName);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool TryCreateBossCinematicDirectly(
+            Level level,
+            Hero hero,
+            string genericEventId,
+            double? snapX,
+            double? snapY,
+            int? snapDir,
+            double? finalX,
+            double? finalY,
+            int? finalDir)
+        {
+            if (level == null || hero == null || string.IsNullOrWhiteSpace(genericEventId))
+                return false;
+
+            try
+            {
+                TrySnapHeroToBossCinePosition(hero, snapX, snapY, snapDir);
+                switch (genericEventId.Trim())
+                {
+                    case "roomDeath":
+                        RunWithSuppressedBossCineSend(() => _ = new EnterRoomDeathBoss(hero));
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
+                        return true;
+
+                    case "roomBeholder":
+                    case "roomBerserk":
+                        RunWithSuppressedBossCineSend(() => _ = new EnterRoomBoss(hero));
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
+                        return true;
+
+                    case "roomCollectorBoss":
+                        RunWithSuppressedBossCineSend(() =>
+                        {
+                            var story = level.game?.user?.story;
+                            var counters = story?.counters;
+                            var key = "collectorMet".AsHaxeString();
+                            var collectorMet = 0;
+                            if (counters != null && counters.exists(key))
+                            {
+                                var rawValue = counters.get(key)?.ToString();
+                                int.TryParse(rawValue, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out collectorMet);
+                            }
+                            if (collectorMet == 1)
+                                _ = new StartCollectorFightAlt(hero);
+                            else
+                                _ = new MeetCollectorEnd(null);
+                        });
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
+                        return true;
+
+                    case "roomDooku":
+                        RunWithSuppressedBossCineSend(() => _ = new EnterDookuBossRoom(hero));
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
+                        return true;
+
+                    case "roomGardenerBoss":
+                        RunWithSuppressedBossCineSend(() => _ = new EnterRoomGardenerBoss(hero));
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
+                        return true;
+
+                    case "roomGiant":
+                        RunWithSuppressedBossCineSend(() =>
+                        {
+                            if (level.boss is Giant giant)
+                            {
+                                var modifiers = giant.bossRushModifiers;
+                                if (modifiers != null && modifiers.enabled)
+                                {
+                                    _ = new EnterModifiedGiantRoom(hero);
+                                    return;
+                                }
+                            }
+
+                            _ = new EnterGiantRoom(hero);
+                        });
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
+                        return true;
+
+                    case "roomKingsHand":
+                        RunWithSuppressedBossCineSend(() =>
+                        {
+                            if (level.game.isBossRush())
+                            {
+                                _ = new EnterThroneBossRush(hero);
+                                return;
+                            }
+
+                            if (hero.hasSkin("king".AsHaxeString(), null))
+                                return;
+
+                            _ = new EnterThroneRoom(hero);
+                        });
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
+                        return true;
+
+                    case "roomKingsHandAsKing":
+                        if (!hero.hasSkin("king".AsHaxeString(), null))
+                            return false;
+
+                        RunWithSuppressedBossCineSend(() => _ = new EnterThroneRoomAsKing(hero));
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
+                        return true;
+
+                    case "roomMamaTick":
+                        RunWithSuppressedBossCineSend(() =>
+                        {
+                            var storyProgress = 0;
+                            try { storyProgress = (int)level.game.user.story.getNpcProgress(new NpcId.TickPriest()); } catch { }
+
+                            if (storyProgress > 0 && level.boss is MamaTick mamaTick)
+                            {
+                                mamaTick.publicEmerge();
+                                return;
+                            }
+
+                            _ = new EnterRoomBoss(hero);
+                        });
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
+                        return true;
+
+                    case "roomQueen":
+                        RunWithSuppressedBossCineSend(() => _ = new EnterRoomQueenBoss());
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
+                        return true;
+
+                    case "roomBehemoth":
+                        RunWithSuppressedBossCineSend(() =>
+                        {
+                            if (level.boss is Behemoth behemoth)
+                            {
+                                var modifiers = behemoth.bossRushModifiers;
+                                if (modifiers != null && modifiers.bossRushClone != null)
+                                {
+                                    _ = new EnterDualBehemoth(hero);
+                                    return;
+                                }
+                            }
+
+                            _ = new EnterRoomBoss(hero);
+                        });
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
+                        return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private static void MarkBossRoomHiddenTriggersUsed(Level level, string genericEventId)
+        {
+            if (level == null || string.IsNullOrWhiteSpace(genericEventId))
+                return;
+
+            try
+            {
+                var entries = level.entitiesByClass?.get(HiddenTrigger.Class.__clid) as dc.hl.types.ArrayObj;
+                if (entries == null)
+                    return;
+
+                for (var i = 0; i < entries.length; i++)
+                {
+                    if (entries.getDyn(i) is not HiddenTrigger ht)
+                        continue;
+
+                    var eventId = ht.genericEventId?.ToString();
+                    if (!string.Equals(eventId, genericEventId, StringComparison.Ordinal))
+                        continue;
+
+                    ht.used = true;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private bool IsBossCineSendSuppressed(string? levelId)
+        {
+            if (string.IsNullOrWhiteSpace(levelId))
+                return false;
+
+            var normalized = levelId.Trim();
+            if (normalized.Length == 0)
+                return false;
+
+            if (!_suppressBossCineEchoByLevel.TryGetValue(normalized, out var expiry))
+                return false;
+
+            var now = Stopwatch.GetTimestamp();
+            if (now < expiry)
+                return true;
+
+            _suppressBossCineEchoByLevel.Remove(normalized);
+            return false;
+        }
+
+        private void SuppressBossCineSend(string? levelId)
+        {
+            if (string.IsNullOrWhiteSpace(levelId))
+                return;
+
+            var normalized = levelId.Trim();
+            if (normalized.Length == 0)
+                return;
+
+            _suppressBossCineEchoByLevel[normalized] =
+                Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * BossCineEchoSuppressSeconds);
+        }
+
+        private bool IsBossCineCompleted(string? levelId)
+        {
+            if (string.IsNullOrWhiteSpace(levelId))
+                return false;
+
+            return _completedBossCineLevels.Contains(levelId.Trim());
+        }
+
+        private void MarkBossCineCompleted(string? levelId)
+        {
+            if (string.IsNullOrWhiteSpace(levelId))
+                return;
+
+            _completedBossCineLevels.Add(levelId.Trim());
+        }
+
+        private void ClearBossCineCompleted(string? levelId)
+        {
+            if (string.IsNullOrWhiteSpace(levelId))
+                return;
+
+            _completedBossCineLevels.Remove(levelId.Trim());
+        }
+
+        private void RunWithSuppressedBossCineSend(Action action)
+        {
+            if (action == null)
+                return;
+
+            _suppressBossCineSendDepth++;
+            try
+            {
+                action();
+            }
+            finally
+            {
+                _suppressBossCineSendDepth--;
+            }
+        }
+
+        private bool HasAppliedBossHeroTeleport(string? levelId)
+        {
+            if (string.IsNullOrWhiteSpace(levelId))
+                return false;
+
+            return _appliedBossHeroTeleportLevels.Contains(levelId.Trim());
+        }
+
+        private void MarkBossHeroTeleportApplied(string? levelId)
+        {
+            if (string.IsNullOrWhiteSpace(levelId))
+                return;
+
+            _appliedBossHeroTeleportLevels.Add(levelId.Trim());
+        }
+
+        private void SuppressRemoteBossDeathCineIfNeeded()
+        {
+            if (_netRole != NetRole.Client || _net == null || !_net.IsAlive)
+                return;
+
+            try
+            {
+                var game = dc.pr.Game.Class.ME;
+                var cine = game?.curCine;
+                if (cine == null || cine.destroyed)
+                    return;
+
+                if (cine is DeadBase || cine is RemoteDownedCorpse)
+                    return;
+
+                var typeName = cine.GetType().Name ?? string.Empty;
+                if (!BossDeathCineTypeNames.Contains(typeName))
+                    return;
+
+                SuppressRemoteBossDeathCineState(cine);
+            }
+            catch
+            {
+            }
+        }
+
+        private bool ShouldSuppressRemoteBossDeathCineConstruction()
+        {
+            return _netRole == NetRole.Client && _net != null && _net.IsAlive;
+        }
+
+        private void SuppressRemoteBossDeathCineState(dc.GameCinematic? cine)
+        {
+            try
+            {
+                var game = dc.pr.Game.Class.ME;
+                if (game != null && cine != null && ReferenceEquals(game.curCine, cine))
+                    game.curCine = null;
+            }
+            catch
+            {
+            }
+
+            try { cine?.destroy(); } catch { }
+            try { cine?.disposeImmediately(); } catch { }
+            try { me?.cancelSkillControlLock(); } catch { }
+            try { me?.unlockControls(); } catch { }
+            EnsureHeroVisibilityAfterRoomChange(me);
+        }
+
+        private void Hook__BeholderDeath__constructor__(Hook__BeholderDeath.orig___constructor__ orig, BeholderDeath e, Beholder boss)
+        {
+            if (ShouldSuppressRemoteBossDeathCineConstruction())
+            {
+                SuppressRemoteBossDeathCineState(e);
+                return;
+            }
+
+            orig(e, boss);
+        }
+
+        private void Hook__GiantDeath__constructor__(Hook__GiantDeath.orig___constructor__ orig, GiantDeath e, Hero heroTarget)
+        {
+            if (ShouldSuppressRemoteBossDeathCineConstruction())
+            {
+                SuppressRemoteBossDeathCineState(e);
+                return;
+            }
+
+            orig(e, heroTarget);
+        }
+
+        private void Hook__GiantDeath4__constructor__(Hook__GiantDeath4.orig___constructor__ orig, GiantDeath4 e, Hero heroTarget)
+        {
+            if (ShouldSuppressRemoteBossDeathCineConstruction())
+            {
+                SuppressRemoteBossDeathCineState(e);
+                return;
+            }
+
+            orig(e, heroTarget);
+        }
+
+        private void Hook__KillKingCinem__constructor__(Hook__KillKingCinem.orig___constructor__ orig, KillKingCinem e, HlAction tween)
+        {
+            if (ShouldSuppressRemoteBossDeathCineConstruction())
+            {
+                SuppressRemoteBossDeathCineState(e);
+                return;
+            }
+
+            orig(e, tween);
+        }
+
+        private void Hook__KillQueenCinem__constructor__(Hook__KillQueenCinem.orig___constructor__ orig, KillQueenCinem e)
+        {
+            if (ShouldSuppressRemoteBossDeathCineConstruction())
+            {
+                SuppressRemoteBossDeathCineState(e);
+                return;
+            }
+
+            orig(e);
+        }
+
+        private void Hook__QueenDefeated__constructor__(Hook__QueenDefeated.orig___constructor__ orig, QueenDefeated e, Queen queen, HlAction dialogEnd)
+        {
+            if (ShouldSuppressRemoteBossDeathCineConstruction())
+            {
+                SuppressRemoteBossDeathCineState(e);
+                return;
+            }
+
+            orig(e, queen, dialogEnd);
+        }
+
+        private void Hook__KillDookuBeastCinem__constructor__(Hook__KillDookuBeastCinem.orig___constructor__ orig, KillDookuBeastCinem e)
+        {
+            if (ShouldSuppressRemoteBossDeathCineConstruction())
+            {
+                SuppressRemoteBossDeathCineState(e);
+                return;
+            }
+
+            orig(e);
+        }
+
+        private void Hook__FakeKillDooku__constructor__(Hook__FakeKillDooku.orig___constructor__ orig, FakeKillDooku e, Hero manager, DookuManager instant, Ref<bool> instantRef)
+        {
+            if (ShouldSuppressRemoteBossDeathCineConstruction())
+            {
+                SuppressRemoteBossDeathCineState(e);
+                return;
+            }
+
+            orig(e, manager, instant, instantRef);
+        }
+
+        private void Hook__RichterDeath__constructor__(Hook__RichterDeath.orig___constructor__ orig, RichterDeath e, Hero lostBody, bool titleLib)
+        {
+            if (ShouldSuppressRemoteBossDeathCineConstruction())
+            {
+                SuppressRemoteBossDeathCineState(e);
+                return;
+            }
+
+            orig(e, lostBody, titleLib);
+        }
+
+        private void Hook__EndCollectorPreSmash__constructor__(Hook__EndCollectorPreSmash.orig___constructor__ orig, EndCollectorPreSmash e, dc.en.mob.Boss boss, HlAction lt)
+        {
+            if (ShouldSuppressRemoteBossDeathCineConstruction())
+            {
+                SuppressRemoteBossDeathCineState(e);
+                return;
+            }
+
+            orig(e, boss, lt);
+        }
+
+        private void Hook__SmashCinem__constructor__(Hook__SmashCinem.orig___constructor__ orig, SmashCinem e, bool hasKingSkin, HlAction endCb)
+        {
+            if (ShouldSuppressRemoteBossDeathCineConstruction())
+            {
+                SuppressRemoteBossDeathCineState(e);
+                return;
+            }
+
+            orig(e, hasKingSkin, endCb);
+        }
+
+        private void Hook__EndCollectorPostSmash__constructor__(Hook__EndCollectorPostSmash.orig___constructor__ orig, EndCollectorPostSmash e)
+        {
+            if (ShouldSuppressRemoteBossDeathCineConstruction())
+            {
+                SuppressRemoteBossDeathCineState(e);
+                return;
+            }
+
+            orig(e);
+        }
+
+        private void Hook__EndCollectorPostSmashKS__constructor__(Hook__EndCollectorPostSmashKS.orig___constructor__ orig, EndCollectorPostSmashKS e)
+        {
+            if (ShouldSuppressRemoteBossDeathCineConstruction())
+            {
+                SuppressRemoteBossDeathCineState(e);
+                return;
+            }
+
+            orig(e);
         }
 
 
@@ -861,6 +2493,10 @@ namespace DeadCellsMultiplayerMod
         {
             if (me == null) return;
             TryRecoverMissedFakeDeathFromLife();
+            if (_netRole == NetRole.None || _net == null)
+                return;
+            TrySendCurrentDiveSkillInfoSnapshot();
+            SendCurrentRoomTarget(force: false);
             if (!_localFakeDead)
                 SendHeroCoords();
             ReceiveGhostCoords();
@@ -953,53 +2589,101 @@ namespace DeadCellsMultiplayerMod
             _lastDoorMarkerToken = targetRoomId;
         }
 
-        private bool SendDoorMarkerFromActivation(ZDoor self)
+        private void SendCurrentRoomTarget(bool force)
         {
-            if (self == null)
-                return false;
+            if (!TryGetCurrentVisibilityContext(out var targetLevelId, out var branchToken))
+                return;
 
-            var targetLevelId = self.destMap?.id?.ToString();
-            if (string.IsNullOrWhiteSpace(targetLevelId))
-                targetLevelId = GetCurrentLevelId();
-            if (string.IsNullOrWhiteSpace(targetLevelId))
-                return false;
-
-            var sourceLevelId = GetCurrentLevelId();
-            if (string.IsNullOrWhiteSpace(sourceLevelId))
-            {
-                try { sourceLevelId = me?._level?.map?.id?.ToString() ?? string.Empty; }
-                catch { sourceLevelId = string.Empty; }
-            }
-
-            var linkId = -1;
-            var doorCx = -1;
-            var doorCy = -1;
-            try { linkId = self.linkId; } catch { }
-            try { doorCx = self.cx; } catch { }
-            try { doorCy = self.cy; } catch { }
-
-            var marker = ComputeDoorMarkerToken(sourceLevelId, targetLevelId, linkId, doorCx, doorCy);
-            if (marker < 0)
-                return false;
-
-            SendRoomTarget(targetLevelId, marker, force: true);
-            RegisterLocalDoorMarker(targetLevelId, marker);
-            return true;
+            RegisterLocalDoorMarker(targetLevelId, branchToken);
+            SendRoomTarget(targetLevelId, branchToken, force);
         }
 
-        private static int ComputeDoorMarkerToken(string? sourceLevelId, string? targetLevelId, int linkId, int doorCx, int doorCy)
+        private bool TryGetCurrentVisibilityContext(out string levelContextId, out int branchToken)
         {
-            var src = string.IsNullOrWhiteSpace(sourceLevelId) ? "?" : sourceLevelId.Trim();
-            var dst = string.IsNullOrWhiteSpace(targetLevelId) ? "?" : targetLevelId.Trim();
-            // ZDoor room placement/door visuals can differ in local coordinates even when the logical link is the same.
-            // Prefer stable linkId-based marker so remote ghosts do not stay hidden after a valid ZDoor transition.
-            var key = linkId >= 0
-                ? string.Create(
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    $"{src}>{dst}|L|{linkId}")
-                : string.Create(
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    $"{src}>{dst}|C|{doorCx}|{doorCy}");
+            levelContextId = GetCurrentLevelId();
+            branchToken = 0;
+
+            Level? currentLevel = null;
+            try { currentLevel = me?._level; } catch { }
+            if (currentLevel == null)
+            {
+                try { currentLevel = game?.curLevel; } catch { }
+            }
+
+            if (currentLevel == null)
+                return !string.IsNullOrWhiteSpace(levelContextId);
+
+            try
+            {
+                var liveLevelId = currentLevel.map?.id?.ToString();
+                if (!string.IsNullOrWhiteSpace(liveLevelId))
+                    levelContextId = liveLevelId.Trim();
+            }
+            catch
+            {
+            }
+
+            if (string.IsNullOrWhiteSpace(levelContextId))
+                return false;
+
+            branchToken = ComputeLevelBranchToken(currentLevel, levelContextId);
+            return branchToken >= 0;
+        }
+
+        private int ComputeLevelBranchToken(Level currentLevel, string levelContextId)
+        {
+            try
+            {
+                if (!currentLevel.isSubLevel)
+                    return 0;
+            }
+            catch
+            {
+                return 0;
+            }
+
+            unchecked
+            {
+                try
+                {
+                    var ownerGame = currentLevel.game ?? game;
+                    var subLevels = ownerGame?.subLevels;
+                    if (subLevels != null)
+                    {
+                        var targetUid = currentLevel.__uid;
+                        for (int i = 0; i < subLevels.length; i++)
+                        {
+                            Level? candidate = null;
+                            try { candidate = subLevels.getDyn(i) as Level; } catch { }
+                            if (candidate == null)
+                                continue;
+
+                            if (ReferenceEquals(candidate, currentLevel))
+                                return i + 1;
+
+                            try
+                            {
+                                if (candidate.__uid == targetUid)
+                                    return i + 1;
+                            }
+                            catch
+                            {
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                }
+
+                return ComputeStablePositiveToken($"SUB|{levelContextId}");
+            }
+        }
+
+        private static int ComputeStablePositiveToken(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+                return 0;
 
             unchecked
             {
@@ -1024,37 +2708,7 @@ namespace DeadCellsMultiplayerMod
                 ? string.Empty
                 : levelId.Trim();
             _localLastDoorMarkerToken = markerToken;
-
-            var knownRemoteIds = new HashSet<int>();
-            for (int i = 0; i < clientIds.Length; i++)
-            {
-                var remoteId = clientIds[i];
-                if (remoteId > 0)
-                    knownRemoteIds.Add(remoteId);
-            }
-
-            foreach (var remoteId in _remoteLastDoorMarkers.Keys)
-                knownRemoteIds.Add(remoteId);
-
-            foreach (var remoteId in knownRemoteIds)
-            {
-                if (_remoteLastDoorMarkers.TryGetValue(remoteId, out var state) &&
-                    state != null &&
-                    state.MarkerToken == markerToken &&
-                    string.Equals(state.LevelId, _localLastDoorMarkerLevelId, StringComparison.Ordinal))
-                {
-                    _remotePendingDoorMarkers.Remove(remoteId);
-                    continue;
-                }
-
-                // Local crossed a door and this remote hasn't confirmed the same door marker yet.
-                _remotePendingDoorMarkers[remoteId] = new RemoteDoorMarkerState
-                {
-                    MarkerToken = markerToken,
-                    LevelId = _localLastDoorMarkerLevelId,
-                    UpdatedAtTicks = Stopwatch.GetTimestamp()
-                };
-            }
+            _remotePendingDoorMarkers.Clear();
         }
 
         double last_x, last_y;
@@ -1101,7 +2755,7 @@ namespace DeadCellsMultiplayerMod
             if (!TryGetClientIndex(localId, remoteId, out var index))
                 return;
 
-            var cleaned = NormalizeBodySkin(skin);
+            var cleaned = NormalizeSkin(skin, "PrisonerDefault");
             var prev = clientSkins[index];
             clientSkins[index] = cleaned;
 
@@ -1149,7 +2803,7 @@ namespace DeadCellsMultiplayerMod
             if (!TryGetClientIndex(localId, remoteId, out var index))
                 return;
 
-            var cleaned = NormalizeHeadSkin(skin);
+            var cleaned = NormalizeSkin(skin, "BaseFlame");
             var prev = clientHeadSkins[index];
             clientHeadSkins[index] = cleaned;
 
@@ -1161,59 +2815,9 @@ namespace DeadCellsMultiplayerMod
                 instance.RecreateClientHead(index);
         }
 
-        private static string NormalizeHeadSkin(string? skin)
+        private static string NormalizeSkin(string? skin, string defaultSkin)
         {
-            return string.IsNullOrWhiteSpace(skin)
-                ? "BaseFlame"
-                : skin.Replace("|", "/").Trim();
-        }
-
-        private static string NormalizeBodySkin(string? skin)
-        {
-            return string.IsNullOrWhiteSpace(skin)
-                ? "PrisonerDefault"
-                : skin.Replace("|", "/").Trim();
-        }
-
-        private bool RecreateClientKing(int slot)
-        {
-            if (slot < 0 || slot >= clients.Length)
-                return false;
-
-            var existing = clients[slot];
-            if (existing == null)
-                return false;
-
-            var x = rLastX[slot];
-            var y = rLastY[slot];
-            var dir = 1;
-            var targetable = true;
-            try
-            {
-                if (existing.spr != null)
-                {
-                    x = existing.spr.x;
-                    y = existing.spr.y;
-                }
-            }
-            catch
-            {
-            }
-
-            try { dir = existing.dir; } catch { }
-            try { targetable = existing._targetable; } catch { }
-
-            DisposeClientSlot(slot, clearIdentity: false);
-            var recreated = EnsureClientKingSlot(slot);
-            if (recreated == null)
-                return false;
-
-            try { recreated.setPosPixel(x, y); } catch { }
-            try { recreated.dir = dir; } catch { }
-            try { recreated._targetable = targetable; } catch { }
-            rLastX[slot] = x;
-            rLastY[slot] = y;
-            return true;
+            return string.IsNullOrWhiteSpace(skin) ? defaultSkin : skin.Replace("|", "/").Trim();
         }
 
         private void RecreateClientHead(int slot)
@@ -1237,7 +2841,7 @@ namespace DeadCellsMultiplayerMod
                 clientHeads[slot] = null;
             }
 
-            var desiredHead = NormalizeHeadSkin(client.RemoteHeadSkinId);
+            var desiredHead = NormalizeSkin(client.RemoteHeadSkinId, "BaseFlame");
             var previousGlobalHead = remoteHeadSkin;
             remoteHeadSkin = desiredHead;
             try
@@ -1358,17 +2962,26 @@ namespace DeadCellsMultiplayerMod
                 return false;
             }
 
-            if (_remotePendingDoorMarkers.TryGetValue(remote.Id, out var pending) &&
-                pending != null)
+            if (!remote.HasRoom ||
+                !remote.RoomId.HasValue ||
+                remote.RoomId.Value < 0 ||
+                string.IsNullOrWhiteSpace(remote.RoomLevelId))
             {
-                if (pending.UpdatedAtTicks > 0 &&
-                    Stopwatch.GetElapsedTime(pending.UpdatedAtTicks).TotalSeconds > PendingDoorMarkerHideMaxSeconds)
-                {
-                    _remotePendingDoorMarkers.Remove(remote.Id);
-                    return true;
-                }
-                return false;
+                return true;
             }
+
+            if (!TryGetCurrentVisibilityContext(out var localContextLevelId, out var localBranchToken))
+            {
+                localContextLevelId = localLevelId;
+                localBranchToken = _localLastDoorMarkerToken >= 0 ? _localLastDoorMarkerToken : 0;
+            }
+
+            var remoteContextLevelId = remote.RoomLevelId.Trim();
+            if (!string.Equals(remoteContextLevelId, localContextLevelId, StringComparison.Ordinal))
+                return false;
+
+            if (remote.RoomId.Value != localBranchToken)
+                return false;
 
             return true;
         }
@@ -1402,30 +3015,7 @@ namespace DeadCellsMultiplayerMod
                 LevelId = markerLevelId,
                 UpdatedAtTicks = Stopwatch.GetTimestamp()
             };
-
-            if (IsLocalDoorMarkerMatch(markerLevelId, markerToken))
-            {
-                _remotePendingDoorMarkers.Remove(remote.Id);
-                return;
-            }
-
-            _remotePendingDoorMarkers[remote.Id] = new RemoteDoorMarkerState
-            {
-                MarkerToken = markerToken,
-                LevelId = markerLevelId,
-                UpdatedAtTicks = Stopwatch.GetTimestamp()
-            };
-        }
-
-        private bool IsLocalDoorMarkerMatch(string markerLevelId, int markerToken)
-        {
-            if (markerToken < 0 || string.IsNullOrWhiteSpace(markerLevelId))
-                return false;
-            if (_localLastDoorMarkerToken != markerToken)
-                return false;
-            if (!string.Equals(_localLastDoorMarkerLevelId, markerLevelId, StringComparison.Ordinal))
-                return false;
-            return true;
+            _remotePendingDoorMarkers.Remove(remote.Id);
         }
 
         private void QueueClientDisposeWithTransition(int slot)
@@ -1479,13 +3069,15 @@ namespace DeadCellsMultiplayerMod
                 created.ApplyRemoteSkin(knownSkin);
 
             var knownHead = clientHeadSkins[slot];
-            created.RemoteHeadSkinId = NormalizeHeadSkin(
-                !string.IsNullOrWhiteSpace(knownHead) ? knownHead : remoteHeadSkin
-            );
+            created.RemoteHeadSkinId = NormalizeSkin(
+                !string.IsNullOrWhiteSpace(knownHead) ? knownHead : remoteHeadSkin,
+                "BaseFlame");
             RecreateClientHead(slot);
 
             if (!string.IsNullOrWhiteSpace(clientLabels[slot]))
                 _ghost.SetLabel(created, clientLabels[slot]);
+
+            ApplyCachedRemoteDiveSkillInfoIfAny(clientIds[slot], created);
 
             return created;
         }
@@ -1523,6 +3115,7 @@ namespace DeadCellsMultiplayerMod
             {
                 _remoteLastDoorMarkers.Remove(previousRemoteId);
                 _remotePendingDoorMarkers.Remove(previousRemoteId);
+                ClearCachedRemoteDiveSkillInfo(previousRemoteId);
             }
 
             clientIds[slot] = 0;
@@ -1545,6 +3138,16 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
+        private void DrainRemoteCombatQueuesAfterLevelChange()
+        {
+            var net = _net;
+            if (net == null)
+                return;
+
+            try { net.TryConsumeRemoteWeaponSnapshots(out _); } catch { }
+            try { net.TryConsumeRemoteAttacks(out _); } catch { }
+        }
+
         private void ReceiveGhostAttacks()
         {
             var net = _net;
@@ -1556,6 +3159,16 @@ namespace DeadCellsMultiplayerMod
             var localId = net.id;
             foreach (var attack in attacks)
             {
+                if (TryHandleRemoteDiveAttack(attack, localId))
+                    continue;
+
+                if (attack.Slot < 0 &&
+                    (string.IsNullOrWhiteSpace(attack.Kind) ||
+                     attack.Kind.StartsWith("__", StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
                 ApplyRemoteWeaponUpdate(attack.Id, attack.Kind, attack.Slot, attack.PermanentId, attack.Ammo);
                 if (!TryGetClientIndex(localId, attack.Id, out var index))
                     continue;
@@ -1583,7 +3196,6 @@ namespace DeadCellsMultiplayerMod
         {
             if (client?.spr?._animManager == null) return;
             if (string.IsNullOrWhiteSpace(anim)) return;
-
             var shieldActive = client.kingWeaponsManager != null && client.kingWeaponsManager.IsShieldActive;
             if (shieldActive && ShouldLoopRemoteAnim(anim))
             {
@@ -1615,12 +3227,10 @@ namespace DeadCellsMultiplayerMod
                     try { client.removeAllAffects(98); } catch { }
                     try { client.removeAllAffects(99); } catch { }
                 }
-
-                animManager.play(anim.AsHaxeString(), queueAnim, g).loop(null);
+                animManager.play(anim.AsHaxeString(), null, null).loop(null);
                 return;
             }
-
-            animManager.play(anim.AsHaxeString(), queueAnim, g);
+            animManager.play(anim.AsHaxeString(), queueAnim, g).stopOnLastFrame(Ref<bool>.Null);
         }
 
         private static bool ShouldLoopRemoteAnim(string anim)
@@ -1633,7 +3243,6 @@ namespace DeadCellsMultiplayerMod
             if(a.IndexOf("guard", StringComparison.OrdinalIgnoreCase) >= 0) return false;
             if(a.IndexOf("defend", StringComparison.OrdinalIgnoreCase) >= 0) return false;
 
-            // Loop only locomotion/idles to avoid getting stuck in "hold/parry" forever.
             if (a.StartsWith("idle", StringComparison.OrdinalIgnoreCase)) return true;
             if (a.StartsWith("run", StringComparison.OrdinalIgnoreCase)) return true;
             if (a.StartsWith("walk", StringComparison.OrdinalIgnoreCase)) return true;
@@ -1644,6 +3253,8 @@ namespace DeadCellsMultiplayerMod
             if (a.IndexOf("climb", StringComparison.OrdinalIgnoreCase) >= 0) return true;
             if (a.IndexOf("ladder", StringComparison.OrdinalIgnoreCase) >= 0) return true;
             if (a.IndexOf("crouch", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("volte", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("remain", StringComparison.OrdinalIgnoreCase) >= 0) return true;
 
             return false;
         }
@@ -1672,8 +3283,6 @@ namespace DeadCellsMultiplayerMod
             _lastAnimSent = anim;
             _lastAnimQueueSent = queueAnim;
             _lastAnimGSent = g;
-            _animResendElapsed = 0;
-            _lastAnimPlayRatio = null;
         }
 
 
@@ -1884,6 +3493,17 @@ namespace DeadCellsMultiplayerMod
             _pendingClientDisposeTicks.Clear();
         }
 
+        private void ResetNetworkState()
+        {
+            ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+            ResetLocalSkinSendCache();
+            ResetDoorMarkerState();
+            _lastSentDiveInfoPayload = string.Empty;
+            _remoteDiveInfoPayloadById.Clear();
+            _lastLocalDiveStartSendTicks = 0;
+            _lastLocalDiveLandSendTicks = 0;
+            _lastDiveInfoScanTicks = 0;
+        }
 
         private IPEndPoint BuildEndpoint(string ipText, int port)
         {
@@ -1907,63 +3527,118 @@ namespace DeadCellsMultiplayerMod
             StartClientWithEndpoint(ep);
         }
 
+        public void StartSteamHostFromMenu(int hostPort)
+        {
+            StartHostWithSteamTransport(hostPort);
+        }
+
+        public void StartSteamClientFromMenu(ulong hostSteamId)
+        {
+            StartClientWithSteamTransport(hostSteamId);
+        }
+
+        private void StartHostCore(Action createHost)
+        {
+            _net?.Dispose();
+            ResetNetworkState();
+            createHost();
+            _netRole = NetRole.Host;
+            GameMenu.SetRole(_netRole);
+            GameMenu.NetRef = _net;
+            ConnectionUI.NotifyConnectionsChanged();
+        }
+
         private void StartHostWithEndpoint(IPEndPoint ep)
         {
             try
             {
-                _net?.Dispose();
-                ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
-                ResetLocalSkinSendCache();
-                ResetDoorMarkerState();
-
-                _net = NetNode.CreateHost(Logger, ep);
-                _netRole = NetRole.Host;
-                GameMenu.SetRole(_netRole);
-                GameMenu.NetRef = _net;
-                ConnectionUI.NotifyConnectionsChanged();
-
-                var lep = _net.ListenerEndpoint;
+                StartHostCore(() => _net = NetNode.CreateHost(Logger, ep));
+                var lep = _net?.ListenerEndpoint;
                 if (lep != null)
                     Logger.Information($"[NetMod] Host listening at {lep.Address}:{lep.Port}");
-                }
-                catch (Exception ex)
-                {
-                    Logger.Error($"[NetMod] Host start failed: {ex.Message}");
-                    _netRole = NetRole.None;
-                    _net = null;
-                    GameMenu.SetRole(_netRole);
             }
+            catch (Exception ex)
+            {
+                Logger.Error($"[NetMod] Host start failed: {ex.Message}");
+                _netRole = NetRole.None;
+                _net = null;
+                GameMenu.SetRole(_netRole);
+            }
+        }
+
+        private void StartClientCore(Action createClient)
+        {
+            _net?.Dispose();
+            try
+            {
+                var main = dc.Main.Class.ME;
+                if (main?.user != null)
+                    GameDataSync.RestoreOriginalUserState(main.user, true);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning(ex, "[NetMod] RestoreOriginalUserState failed before client start");
+            }
+            ResetNetworkState();
+            createClient();
+            _netRole = NetRole.Client;
+            GameMenu.SetRole(_netRole);
+            GameMenu.NetRef = _net;
+            ConnectionUI.NotifyConnectionsChanged();
         }
 
         private void StartClientWithEndpoint(IPEndPoint ep)
         {
             try
             {
-                _net?.Dispose();
-                try
-                {
-                    var main = dc.Main.Class.ME;
-                    if (main?.user != null)
-                        GameDataSync.RestoreOriginalUserState(main.user, true);
-                }
-                catch
-                {
-                }
-                ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
-                ResetLocalSkinSendCache();
-                ResetDoorMarkerState();
-
-                _net = NetNode.CreateClient(Logger, ep);
-                _netRole = NetRole.Client;
-                GameMenu.SetRole(_netRole);
-                GameMenu.NetRef = _net;
-                ConnectionUI.NotifyConnectionsChanged();
-
+                StartClientCore(() => _net = NetNode.CreateClient(Logger, ep));
                 Logger.Information($"[NetMod] Client connecting to {ep.Address}:{ep.Port}");
             }
             catch (Exception ex)
             {
                 Logger.Error($"[NetMod] Client start failed: {ex.Message}");
+                _netRole = NetRole.None;
+                _net = null;
+                GameMenu.SetRole(_netRole);
+            }
+        }
+
+        private void StartHostWithSteamTransport(int hostPort)
+        {
+            if (!_ready)
+            {
+                Logger.Warning("[NetMod] Steam host start rejected: OnGameEndInit not yet run");
+                return;
+            }
+            try
+            {
+                StartHostCore(() => _net = NetNode.CreateSteamHost(Logger, hostPort));
+                Logger.Information("[NetMod] Host started with Steam P2P transport");
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"[NetMod] Steam host start failed: {ex.Message}");
+                _netRole = NetRole.None;
+                _net = null;
+                GameMenu.SetRole(_netRole);
+            }
+        }
+
+        private void StartClientWithSteamTransport(ulong hostSteamId)
+        {
+            if (!_ready)
+            {
+                Logger.Warning("[NetMod] Steam client start rejected: OnGameEndInit not yet run");
+                return;
+            }
+            try
+            {
+                StartClientCore(() => _net = NetNode.CreateSteamClient(Logger, hostSteamId));
+                Logger.Information("[NetMod] Client connecting via Steam P2P to hostSteamId={HostSteamId}", hostSteamId);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"[NetMod] Steam client start failed: {ex.Message}");
                 _netRole = NetRole.None;
                 _net = null;
                 GameMenu.SetRole(_netRole);
@@ -1976,16 +3651,23 @@ namespace DeadCellsMultiplayerMod
             try
             {
                 if (roleBeforeStop == NetRole.Client)
+                {
                     Logger.Information("[NetMod] Disconnecting client from host...");
+                    _net?.SendControlAndFlush("BYE", 500);
+                }
                 else if (roleBeforeStop == NetRole.Host)
+                {
                     Logger.Information("[NetMod] Disposing host server...");
+                    _net?.SendControlAndFlush("KICK", 500);
+                }
 
                 _net?.Dispose();
             }
-            catch { }
-            ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
-            ResetLocalSkinSendCache();
-            ResetDoorMarkerState();
+            catch (Exception ex)
+            {
+                Logger.Warning(ex, "[NetMod] Error during network stop/dispose");
+            }
+            ResetNetworkState();
             _net = null;
             _netRole = NetRole.None;
             GameMenu.NetRef = null;

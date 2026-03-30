@@ -1,4 +1,5 @@
-
+using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
+using ModCore.Events;
 using dc;
 using dc.haxe.ds;
 using dc.level;
@@ -10,17 +11,19 @@ using ModCore.Utilities;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using dc.haxe;
+using dc.haxe.io;
 using dc.hl.types;
 using Rand = dc.libs.Rand;
 
 namespace DeadCellsMultiplayerMod
 {
-    internal partial class GameDataSync
+    internal partial class GameDataSync : IEventReceiver, IOnAdvancedModuleInitializing
     {
         static Serilog.ILogger _log;
         static public int Seed;
@@ -34,6 +37,21 @@ namespace DeadCellsMultiplayerMod
         private static readonly object _bossRuneLock = new();
         private static int? _remoteBossRune;
         private static int? _hostBossRune;
+        private static string? _remoteProgressPayload;
+        public static string? HostProgressPayload;
+        private static bool _origProgressCaptured;
+        private static string? _origProgressPayload;
+        private static bool _origHeroCosmeticsCaptured;
+        private static string? _origHeroSkin;
+        private static string? _origHeroHeadSkin;
+        private static User? _cachedBuiltProgressPayloadUser;
+        private static string? _cachedBuiltProgressPayload;
+        private static NetNode? _lastProgressSyncNet;
+        private static string? _lastProgressSyncPayload;
+        private static NetNode? _lastHeroSkinSyncNet;
+        private static string? _lastHeroSkinSyncPayload;
+        private static NetNode? _lastHeroHeadSkinSyncNet;
+        private static string? _lastHeroHeadSkinSyncPayload;
 
         private static string? _remoteCountersPayload;
         public static string? HostCountersPayload;
@@ -90,6 +108,12 @@ namespace DeadCellsMultiplayerMod
         public GameDataSync(Serilog.ILogger log)
         {
             _log = log;
+            EventSystem.AddReceiver(this);
+        }
+
+        void IOnAdvancedModuleInitializing.OnAdvancedModuleInitializing(ModEntry entry)
+        {
+            entry.Logger.Information("\x1b[32m[[ModEntry.GameDataSync] Initializing GameDataSync...]\x1b[0m ");
         }
 
 
@@ -111,24 +135,35 @@ namespace DeadCellsMultiplayerMod
             ModEntry.kingInitialized = false;
             ModEntry._ghost = null;
             var net = GameMenu.NetRef;
+            var shouldSynchronizeSeed = ShouldSynchronizeRunSeed(gdata);
+            var appliedRemoteProgressBeforeNewGame = false;
+            var appliedRemoteFallbackBeforeNewGame = false;
 
             if (net == null || !net.IsAlive)
                 RestoreOriginalUserState(self, true);
 
             if (net != null && net.IsHost)
             {
-                Seed = GameMenu.ForceGenerateServerSeed("NewGame_hook");
+                MarkProgressPayloadDirty();
+                if (shouldSynchronizeSeed)
+                    Seed = GameMenu.ForceGenerateServerSeed("NewGame_hook");
+                else
+                    Seed = lvl;
                 SendBossRune(self, net);
                 SendSerializerSync(net);
-                net.SendSeed(Seed);
+                if (shouldSynchronizeSeed)
+                    net.SendSeed(Seed);
+                SendProgressSync(self, net);
             }
             else if (net != null)
             {
-                if (!string.IsNullOrEmpty(_remoteBlueprintsPayload))
-                    ReceiveBlueprints(_remoteBlueprintsPayload, self);
-                if (GameMenu.TryGetRemoteSeed(out var remoteSeed))
+                if (shouldSynchronizeSeed && GameMenu.TryGetRemoteSeed(out var remoteSeed))
                 {
                     Seed = remoteSeed;
+                }
+                else
+                {
+                    Seed = lvl;
                 }
                 if (TryGetRemoteBossRune(out var bossRune))
                 {
@@ -137,6 +172,27 @@ namespace DeadCellsMultiplayerMod
                 else
                 {
                     _log?.Warning("[NetMod] Remote boss rune not received yet");
+                }
+
+                CaptureOriginalUserData(self, allowReplaceWhenBetter: true);
+                if (!string.IsNullOrEmpty(_remoteProgressPayload))
+                {
+                    ReceiveProgressSync(_remoteProgressPayload, self);
+                    appliedRemoteProgressBeforeNewGame = true;
+                }
+                else
+                {
+                    if (!string.IsNullOrEmpty(_remoteBlueprintsPayload))
+                    {
+                        ReceiveBlueprints(_remoteBlueprintsPayload, self);
+                        appliedRemoteFallbackBeforeNewGame = true;
+                    }
+
+                    if (!string.IsNullOrEmpty(_remoteCountersPayload))
+                    {
+                        ReceiveCounters(_remoteCountersPayload, self);
+                        appliedRemoteFallbackBeforeNewGame = true;
+                    }
                 }
             }
             lvl = Seed;
@@ -147,17 +203,53 @@ namespace DeadCellsMultiplayerMod
             self.pickDeathItem();
             SendHeroSkin(self, net);
             SendHeroHeadSkin(self, net);
-            if (net != null && net.IsHost)
-            {
-                SendCounters(self, net);
-                SendBlueprints(self, net);
-            }
             orig(self, lvl, isTwitch, isCustom, mode, gdata);
 
             if (net != null && net.IsHost)
-                SendHostStorySync(self, net);
-            else if (net != null && !string.IsNullOrEmpty(_remoteCountersPayload))
-                ReceiveCounters(_remoteCountersPayload, self);
+            {
+                MarkProgressPayloadDirty();
+                SendProgressSync(self, net);
+            }
+            else if (net != null)
+            {
+                if (!appliedRemoteProgressBeforeNewGame && !string.IsNullOrEmpty(_remoteProgressPayload))
+                    ReceiveProgressSync(_remoteProgressPayload, self);
+                else if (!appliedRemoteFallbackBeforeNewGame && !string.IsNullOrEmpty(_remoteBlueprintsPayload))
+                    ReceiveBlueprints(_remoteBlueprintsPayload, self);
+                if (!appliedRemoteProgressBeforeNewGame && !appliedRemoteFallbackBeforeNewGame && string.IsNullOrEmpty(_remoteProgressPayload) && !string.IsNullOrEmpty(_remoteCountersPayload))
+                    ReceiveCounters(_remoteCountersPayload, self);
+            }
+        }
+
+        private static bool ShouldSynchronizeRunSeed(LaunchMode? launch)
+        {
+            return launch is LaunchMode.NewGame;
+        }
+
+        public static void MarkProgressPayloadDirty()
+        {
+            _cachedBuiltProgressPayloadUser = null;
+            _cachedBuiltProgressPayload = null;
+        }
+
+        private static string? GetCurrentProgressPayload(User user)
+        {
+            if (user == null)
+                return null;
+
+            if (!string.IsNullOrWhiteSpace(_cachedBuiltProgressPayload) &&
+                ReferenceEquals(_cachedBuiltProgressPayloadUser, user))
+            {
+                return _cachedBuiltProgressPayload;
+            }
+
+            var payload = BuildProgressPayload(user);
+            if (string.IsNullOrWhiteSpace(payload))
+                return null;
+
+            _cachedBuiltProgressPayloadUser = user;
+            _cachedBuiltProgressPayload = payload;
+            return payload;
         }
 
         public static void ReceiveBlueprints(string payload, User? target = null)
@@ -252,21 +344,9 @@ namespace DeadCellsMultiplayerMod
             if (target != null)
             {
                 apply(target);
-                return;
             }
-
-            GameMenu.EnqueueMainThread(() =>
-            {
-                try
-                {
-                    var main = dc.Main.Class.ME;
-                    if (main?.user != null)
-                        apply(main.user);
-                }
-                catch
-                {
-                }
-            });
+            // When target is null (e.g. from network), only store payload.
+            // Apply happens when user_hook_new_game or RestoreRemoteUserData runs with target.
         }
 
         public static void SendBlueprints(User user, NetNode? net)
@@ -324,6 +404,9 @@ namespace DeadCellsMultiplayerMod
 
         public static bool SwapToOriginalUserData(User user)
         {
+            if (TryApplyProgressPayload(user, _origProgressPayload))
+                return true;
+
             var swapped = false;
             if (_hasRemoteCounters && _origStoryCaptured)
             {
@@ -340,8 +423,8 @@ namespace DeadCellsMultiplayerMod
                 else
                 {
                     var meta = EnsureItemMeta(user, _origItemMeta ?? user.itemMeta);
-                    meta.itemProgress = EnsureArray(_origItemProgress);
-                    meta.permanentItems = EnsureArray(_origPermanentItems);
+                    meta.itemProgress = MergeItemProgressWithLocalProgress(meta.itemProgress);
+                    meta.permanentItems = MergePermanentItemsWithLocalProgress(meta.permanentItems);
                     user.itemMeta = meta;
                 }
                 swapped = true;
@@ -359,13 +442,16 @@ namespace DeadCellsMultiplayerMod
         public static bool RestoreOriginalUserState(User user, bool clearRemote)
         {
             var restored = false;
-            if (_origStoryCaptured)
+            if (TryApplyProgressPayload(user, _origProgressPayload))
+                restored = true;
+
+            if (!restored && _origStoryCaptured)
             {
                 RestoreOriginalStory(user, preserveLocalProgress: false);
                 restored = true;
             }
 
-            if (_origItemMetaCaptured)
+            if (!restored && _origItemMetaCaptured)
             {
                 if (_origItemMetaWasNull)
                 {
@@ -374,21 +460,25 @@ namespace DeadCellsMultiplayerMod
                 else
                 {
                     var meta = EnsureItemMeta(user, _origItemMeta ?? user.itemMeta);
-                    meta.itemProgress = EnsureArray(_origItemProgress);
-                    meta.permanentItems = EnsureArray(_origPermanentItems);
+                    meta.itemProgress = MergeItemProgressWithLocalProgress(meta.itemProgress);
+                    meta.permanentItems = MergePermanentItemsWithLocalProgress(meta.permanentItems);
                     user.itemMeta = meta;
                 }
                 restored = true;
             }
 
-            if (_origBossRuneCaptured)
+            if (!restored && _origBossRuneCaptured)
             {
                 user.bossRuneActivated = _origBossRune;
                 restored = true;
             }
 
+            ApplyHeroCosmetics(user, _origHeroSkin, _origHeroHeadSkin);
+
             if (clearRemote)
             {
+                _remoteProgressPayload = null;
+                HostProgressPayload = null;
                 _remoteCountersPayload = null;
                 _remoteBlueprintsPayload = null;
                 _hasRemoteCounters = false;
@@ -410,6 +500,11 @@ namespace DeadCellsMultiplayerMod
                     _remoteBossRune = null;
                 }
                 RestoreLocalSerializerSyncIfCaptured();
+                _origProgressCaptured = false;
+                _origProgressPayload = null;
+                _origHeroCosmeticsCaptured = false;
+                _origHeroSkin = null;
+                _origHeroHeadSkin = null;
                 _origStoryCaptured = false;
                 _origStoryWasNull = false;
                 _origStory = null;
@@ -428,6 +523,13 @@ namespace DeadCellsMultiplayerMod
                 _origItemMetaWasNull = false;
                 _origBossRuneCaptured = false;
                 _origBossRune = 0;
+                MarkProgressPayloadDirty();
+                _lastProgressSyncNet = null;
+                _lastProgressSyncPayload = null;
+                _lastHeroSkinSyncNet = null;
+                _lastHeroSkinSyncPayload = null;
+                _lastHeroHeadSkinSyncNet = null;
+                _lastHeroHeadSkinSyncPayload = null;
             }
 
             return restored;
@@ -435,6 +537,26 @@ namespace DeadCellsMultiplayerMod
 
         public static void CaptureOriginalUserData(User user, bool allowReplaceWhenBetter = false)
         {
+            if (user != null && (!_origProgressCaptured || (allowReplaceWhenBetter && string.IsNullOrWhiteSpace(_origProgressPayload))))
+            {
+                var payload = BuildProgressPayload(user);
+                if (!string.IsNullOrWhiteSpace(payload))
+                {
+                    _origProgressCaptured = true;
+                    _origProgressPayload = payload;
+                }
+            }
+
+            if (user != null &&
+                (!_origHeroCosmeticsCaptured ||
+                 (allowReplaceWhenBetter &&
+                  (string.IsNullOrWhiteSpace(_origHeroSkin) || string.IsNullOrWhiteSpace(_origHeroHeadSkin)))))
+            {
+                _origHeroCosmeticsCaptured = true;
+                _origHeroSkin = CleanSkin(user.heroSkin?.ToString());
+                _origHeroHeadSkin = CleanSkin(user.heroHeadSkin?.ToString());
+            }
+
             if (EnableStoryManagerSync)
             {
                 var shouldCaptureOriginalStory = !_origStoryCaptured;
@@ -530,6 +652,9 @@ namespace DeadCellsMultiplayerMod
 
         public static void RestoreRemoteUserData(User user)
         {
+            if (TryApplyProgressPayload(user, _remoteProgressPayload))
+                return;
+
             if (EnableStoryManagerSync && !string.IsNullOrEmpty(_remoteCountersPayload))
                 ReceiveCounters(_remoteCountersPayload, user);
             if (!string.IsNullOrEmpty(_remoteBlueprintsPayload))
@@ -984,21 +1109,83 @@ namespace DeadCellsMultiplayerMod
 
         public static void SendHostStorySync(User user, NetNode? net)
         {
-            if (user == null || net == null || !net.IsHost)
+            SendProgressSync(user, net);
+        }
+
+        public static void SendProgressSync(User user, NetNode? net)
+        {
+            if (user == null || net == null || !net.IsHost || !net.IsAlive)
                 return;
 
-            SendCounters(user, net);
+            var payload = GetCurrentProgressPayload(user);
+            if (string.IsNullOrWhiteSpace(payload))
+                return;
+
+            HostProgressPayload = payload;
+            if (ReferenceEquals(_lastProgressSyncNet, net) &&
+                string.Equals(_lastProgressSyncPayload, payload, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            net.SendProgress(payload);
+            _lastProgressSyncNet = net;
+            _lastProgressSyncPayload = payload;
+        }
+
+        public static void ReceiveProgressSync(string payload, User? target = null)
+        {
+            _remoteProgressPayload = payload;
+            if (string.IsNullOrWhiteSpace(payload))
+                return;
+
+            void apply(User user)
+            {
+                CaptureOriginalUserData(user);
+                if (TryApplyProgressPayload(user, payload))
+                {
+                    lock (_bossRuneLock)
+                    {
+                        _remoteBossRune = GetEffectiveBossRune(user);
+                    }
+                    _hasRemoteBossRune = true;
+                }
+            }
+
+            if (target != null)
+            {
+                apply(target);
+                return;
+            }
+
+            GameMenu.EnqueueMainThread(() =>
+            {
+                try
+                {
+                    var user = dc.Main.Class.ME?.user;
+                    if (user != null)
+                        apply(user);
+                }
+                catch
+                {
+                }
+            });
         }
 
 
 
+
+        internal static int GetBossRuneInt(User? user)
+        {
+            return user == null ? 0 : GetEffectiveBossRune(user);
+        }
 
         public static void SendBossRune(User self, NetNode? net)
         {
             if (self == null)
                 return;
 
-            var bossRune = ToInt(self.bossRuneActivated);
+            var bossRune = GetEffectiveBossRune(self);
             lock (_bossRuneLock)
             {
                 _hostBossRune = bossRune;
@@ -1029,6 +1216,9 @@ namespace DeadCellsMultiplayerMod
             var net = GameMenu.NetRef;
             if (net != null && net.IsHost)
                 return;
+
+            MarkPendingBossRuneReload(bossRune);
+            // _log?.Information("[NetMod] Received remote boss rune {BossRune}", bossRune);
 
             GameMenu.EnqueueMainThread(() =>
             {
@@ -1107,7 +1297,15 @@ namespace DeadCellsMultiplayerMod
                 if (string.IsNullOrWhiteSpace(skin))
                     skin = "PrisonerDefault";
 
+                if (ReferenceEquals(_lastHeroSkinSyncNet, net) &&
+                    string.Equals(_lastHeroSkinSyncPayload, skin, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
                 net.SendHeroSkin(skin);
+                _lastHeroSkinSyncNet = net;
+                _lastHeroSkinSyncPayload = skin;
             }
             catch (Exception ex)
             {
@@ -1127,7 +1325,15 @@ namespace DeadCellsMultiplayerMod
                 if (string.IsNullOrWhiteSpace(skin))
                     skin = "BaseFlame";
 
+                if (ReferenceEquals(_lastHeroHeadSkinSyncNet, net) &&
+                    string.Equals(_lastHeroHeadSkinSyncPayload, skin, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
                 net.SendHeroHeadSkin(skin);
+                _lastHeroHeadSkinSyncNet = net;
+                _lastHeroHeadSkinSyncPayload = skin;
             }
             catch (Exception ex)
             {
@@ -1146,8 +1352,64 @@ namespace DeadCellsMultiplayerMod
         private static void ApplyRemoteBossRune(User user, int bossRune)
         {
             CaptureOriginalUserData(user);
-            user.bossRuneActivated = bossRune;
+
+            try
+            {
+                user.br_setActivated(bossRune);
+            }
+            catch
+            {
+                user.bossRuneActivated = bossRune;
+            }
+
+            try
+            {
+                dynamic? gameData = user.game?.data;
+                if (gameData?.cgData != null)
+                    gameData.cgData.numBossCells = bossRune;
+            }
+            catch
+            {
+            }
+
             _hasRemoteBossRune = true;
+        }
+
+        private static int GetEffectiveBossRune(User user)
+        {
+            if (user == null)
+                return 0;
+
+            var fallback = ToInt(user.bossRuneActivated);
+
+            // During active runs the currently selected BC is mirrored in cgData.numBossCells (>=0).
+            // Prefer that when available so decreases are propagated too.
+            try
+            {
+                dynamic? gameData = user.game?.data;
+                if (gameData?.cgData != null)
+                {
+                    var cgBossRune = ToInt(gameData.cgData.numBossCells);
+                    if (cgBossRune >= 0)
+                        return cgBossRune;
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var activated = user.br_numActivated();
+                // br_numActivated() can return 0 in scoring contexts when cgData is unavailable.
+                if (activated == 0 && fallback > 0)
+                    return fallback;
+                return activated;
+            }
+            catch
+            {
+                return fallback;
+            }
         }
 
         private static void ForEachEscapedToken(string payload, Action<string> onToken)
@@ -1190,7 +1452,7 @@ namespace DeadCellsMultiplayerMod
 
         private static string EncodeToken(string value)
         {
-            return Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+            return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value));
         }
 
         private static string? DecodeToken(string value)
@@ -1200,7 +1462,7 @@ namespace DeadCellsMultiplayerMod
 
             try
             {
-                return Encoding.UTF8.GetString(Convert.FromBase64String(value));
+                return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(value));
             }
             catch
             {
@@ -1387,6 +1649,82 @@ namespace DeadCellsMultiplayerMod
             var merged = new List<int>(mergedSet);
             merged.Sort();
             return merged;
+        }
+
+        private static ArrayObj MergeItemProgressWithLocalProgress(ArrayObj? currentItemProgress)
+        {
+            var merged = new Dictionary<string, ItemProgress>(StringComparer.Ordinal);
+            var orig = _origItemProgress;
+            if (orig != null)
+            {
+                for (int i = 0; i < orig.length; i++)
+                {
+                    var p = orig.getDyn(i) as ItemProgress;
+                    if (p != null)
+                    {
+                        var id = p.itemId?.ToString();
+                        if (!string.IsNullOrWhiteSpace(id))
+                            merged[id] = p;
+                    }
+                }
+            }
+            if (currentItemProgress != null)
+            {
+                for (int i = 0; i < currentItemProgress.length; i++)
+                {
+                    var curr = currentItemProgress.getDyn(i) as ItemProgress;
+                    if (curr == null)
+                        continue;
+                    var id = curr.itemId?.ToString();
+                    if (string.IsNullOrWhiteSpace(id))
+                        continue;
+                    if (!merged.TryGetValue(id, out var origP) || origP == null)
+                    {
+                        merged[id] = curr;
+                        continue;
+                    }
+                    var currUnlocked = curr.unlocked;
+                    var currInvested = ToInt(curr.investedCells);
+                    var currIsNew = curr.isNew;
+                    var origUnlocked = origP.unlocked;
+                    var origInvested = ToInt(origP.investedCells);
+                    var origIsNew = origP.isNew;
+                    if (currUnlocked && !origUnlocked || currInvested > origInvested || currIsNew && !origIsNew)
+                        merged[id] = curr;
+                }
+            }
+            var arr = ArrayUtils.CreateDyn();
+            foreach (var p in merged.Values)
+                arr.array.pushDyn(p);
+            return (ArrayObj)arr.array;
+        }
+
+        private static ArrayObj MergePermanentItemsWithLocalProgress(ArrayObj? currentPermanentItems)
+        {
+            var merged = new HashSet<string>(StringComparer.Ordinal);
+            var orig = _origPermanentItems;
+            if (orig != null)
+            {
+                for (int i = 0; i < orig.length; i++)
+                {
+                    var id = orig.getDyn(i)?.ToString();
+                    if (!string.IsNullOrWhiteSpace(id))
+                        merged.Add(id);
+                }
+            }
+            if (currentPermanentItems != null)
+            {
+                for (int i = 0; i < currentPermanentItems.length; i++)
+                {
+                    var id = currentPermanentItems.getDyn(i)?.ToString();
+                    if (!string.IsNullOrWhiteSpace(id))
+                        merged.Add(id);
+                }
+            }
+            var arr = ArrayUtils.CreateDyn();
+            foreach (var id in merged)
+                arr.array.pushDyn(id.AsHaxeString());
+            return (ArrayObj)arr.array;
         }
 
         private static bool TryParseCountersPayloadV4(
@@ -2051,6 +2389,32 @@ namespace DeadCellsMultiplayerMod
             return (ArrayObj)arr.array;
         }
 
+        private static ArrayObj? CloneMetaProgress(ArrayObj? source)
+        {
+            if (source == null)
+                return null;
+
+            var arr = ArrayUtils.CreateDyn();
+            for (int i = 0; i < source.length; i++)
+            {
+                var item = source.getDyn(i) as MetaProgress;
+                if (item == null)
+                    continue;
+
+                var copy = new MetaProgress(item.itemId);
+                copy.investedCells = item.investedCells;
+                copy.isNew = item.isNew;
+                copy.unlocked = item.unlocked;
+                copy.upgradeLevel = item.upgradeLevel;
+                copy.n = item.n;
+                copy.done = item.done;
+                copy.metaLevel = item.metaLevel;
+                arr.array.pushDyn(copy);
+            }
+
+            return (ArrayObj)arr.array;
+        }
+
         private static ArrayObj? CloneItemList(ArrayObj? source)
         {
             if (source == null)
@@ -2059,12 +2423,375 @@ namespace DeadCellsMultiplayerMod
             var arr = ArrayUtils.CreateDyn();
             for (int i = 0; i < source.length; i++)
             {
-                var item = source.getDyn(i);
-                if (item == null)
-                    continue;
+                object? item = source.getDyn(i);
                 arr.array.pushDyn(item);
             }
             return (ArrayObj)arr.array;
+        }
+
+        private static IntMap? CloneIntMap(IntMap? source)
+        {
+            if (source == null)
+                return null;
+
+            var map = new IntMap();
+            try
+            {
+                var keys = source.keys();
+                while (keys.hasNext.Invoke())
+                {
+                    var key = keys.next.Invoke();
+                    map.set(key, ToInt(source.get(key)));
+                }
+            }
+            catch
+            {
+            }
+
+            return map;
+        }
+
+        internal static bool TryBuildSafeSaveUser(User currentUser, bool onlyGameData, out User? saveUser)
+        {
+            saveUser = null;
+            if (currentUser == null || string.IsNullOrWhiteSpace(_origProgressPayload))
+                return false;
+
+            try
+            {
+                var cloneBytes = Save.Class.genSave.Invoke(currentUser, onlyGameData);
+                if (cloneBytes == null)
+                    return false;
+
+                var clone = Save.Class.readSave.Invoke(cloneBytes);
+                if (clone == null)
+                    return false;
+
+                if (!TryApplyProgressPayload(clone, _origProgressPayload))
+                    return false;
+
+                saveUser = clone;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryApplyProgressPayload(User target, string? payload)
+        {
+            if (target == null || string.IsNullOrWhiteSpace(payload))
+                return false;
+
+            if (!TryDeserializeProgressUser(payload, out var source) || source == null)
+                return false;
+
+            ApplyProgressSnapshot(target, source);
+            return true;
+        }
+
+        private static void ApplyProgressSnapshot(User target, User source)
+        {
+            if (target == null || source == null)
+                return;
+
+            var preservedHeroSkin = !string.IsNullOrWhiteSpace(_origHeroSkin)
+                ? _origHeroSkin
+                : CleanSkin(target.heroSkin?.ToString());
+            var preservedHeroHeadSkin = !string.IsNullOrWhiteSpace(_origHeroHeadSkin)
+                ? _origHeroHeadSkin
+                : CleanSkin(target.heroHeadSkin?.ToString());
+
+            var legacyCounters = new Dictionary<string, int>(StringComparer.Ordinal);
+            CopyCountersToDictionary(source.counters, legacyCounters);
+            var legacyNpcProgress = new Dictionary<int, int>();
+            CopyNpcProgressToDictionary(source.npcs, legacyNpcProgress);
+            var sourceStory = source.story;
+            if (sourceStory != null)
+            {
+                if (sourceStory.counters == null)
+                    sourceStory.counters = BuildCountersMap(legacyCounters);
+                if (sourceStory.npcProgresses == null)
+                    sourceStory.npcProgresses = BuildNpcProgressMap(legacyNpcProgress);
+            }
+
+            target.flags = source.flags;
+            target.userId = source.userId;
+            target.deathMoney = source.deathMoney;
+            target.deathCells = source.deathCells;
+            target.bossRuneActivated = GetEffectiveBossRune(source);
+            target.tutorial = source.tutorial;
+            target.counters = sourceStory?.counters ?? BuildCountersMap(legacyCounters);
+            target.npcs = sourceStory?.npcProgresses ?? BuildNpcProgressMap(legacyNpcProgress);
+            target.story = sourceStory;
+            target.itemMeta = null;
+            target.userStats = source.userStats;
+            target.activeMods = CloneItemList(source.activeMods);
+            target.meta = CloneMetaProgress(source.meta);
+            target.metaItems = CloneItemList(source.metaItems);
+            target.achievements = CloneItemList(source.achievements);
+            target.localAchievements = CloneItemList(source.localAchievements);
+            target.deathItem = source.deathItem;
+            target.consecutiveCompletedRuns = source.consecutiveCompletedRuns;
+            ApplyHeroCosmetics(target, preservedHeroSkin, preservedHeroHeadSkin);
+            MirrorStoryStateToSaveUser(target);
+
+            try
+            {
+                target.userStats?.init();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                target.onReload();
+            }
+            catch
+            {
+            }
+
+            ApplyHeroCosmetics(target, preservedHeroSkin, preservedHeroHeadSkin);
+            MirrorStoryStateToSaveUser(target);
+
+            try
+            {
+                target.story?.onReload();
+            }
+            catch
+            {
+            }
+
+            var targetMeta = EnsureItemMeta(target, target.itemMeta);
+            targetMeta._user = target;
+            if (source.itemMeta != null)
+            {
+                targetMeta.itemProgress = CloneItemProgress(source.itemMeta.itemProgress) ?? EnsureArray(targetMeta.itemProgress);
+                targetMeta.permanentItems = CloneItemList(source.itemMeta.permanentItems) ?? EnsureArray(targetMeta.permanentItems);
+                targetMeta.forgeInvestedCells = CloneIntMap(source.itemMeta.forgeInvestedCells) ?? new IntMap();
+            }
+
+            try
+            {
+                targetMeta.onReload();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                targetMeta.revealAllBaseItems();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                targetMeta.cleanDuplicatedItemProgress();
+            }
+            catch
+            {
+            }
+
+            target.itemMeta = targetMeta;
+
+            try
+            {
+                target.br_setActivated(GetEffectiveBossRune(source));
+            }
+            catch
+            {
+                target.bossRuneActivated = GetEffectiveBossRune(source);
+            }
+        }
+
+        private static void MirrorStoryStateToSaveUser(User user)
+        {
+            if (user == null)
+                return;
+
+            try
+            {
+                var saveUser = user.mainGameData?.sUser;
+                if (saveUser == null || ReferenceEquals(saveUser, user))
+                    return;
+
+                saveUser.story = user.story;
+                saveUser.counters = user.counters;
+                saveUser.npcs = user.npcs;
+            }
+            catch
+            {
+            }
+        }
+
+        private static void ApplyHeroCosmetics(User? user, string? heroSkin, string? heroHeadSkin)
+        {
+            if (user == null)
+                return;
+
+            if (!string.IsNullOrWhiteSpace(heroSkin))
+                user.heroSkin = heroSkin.AsHaxeString();
+
+            if (!string.IsNullOrWhiteSpace(heroHeadSkin))
+                user.heroHeadSkin = heroHeadSkin.AsHaxeString();
+        }
+
+        private static string? BuildProgressPayload(User user)
+        {
+            if (user == null)
+                return null;
+
+            try
+            {
+                var prepared = false;
+                try
+                {
+                    prepared = user.prepareSave();
+                }
+                catch (Exception ex)
+                {
+                    _log?.Debug(ex, "[NetMod] user.prepareSave() threw while building progress payload");
+                }
+
+                if (!prepared)
+                    _log?.Debug("[NetMod] user.prepareSave() returned false; trying packed progress payload anyway");
+
+                var saveBytes = Save.Class.genSave.Invoke(user, true);
+                if (saveBytes != null)
+                {
+                    var saveRaw = CopyBytesToManaged(saveBytes);
+                    return saveRaw.Length == 0 ? "P2|" : "P2|" + Convert.ToBase64String(saveRaw);
+                }
+
+                _log?.Warning("[NetMod] Failed to build packed progress payload: save bytes were null");
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning(ex, "[NetMod] Failed to build packed progress payload");
+            }
+
+            if (TrySerializeUserBytes(user, out var userBytes) && userBytes != null)
+            {
+                var userRaw = CopyBytesToManaged(userBytes);
+                return userRaw.Length == 0 ? "P1|" : "P1|" + Convert.ToBase64String(userRaw);
+            }
+
+            _log?.Warning("[NetMod] Failed to build progress payload from both packed-save and raw-user paths");
+            return null;
+        }
+
+        private static bool TryDeserializeProgressUser(string payload, out User? user)
+        {
+            user = null;
+            if (string.IsNullOrWhiteSpace(payload))
+                return false;
+
+            var isPackedSavePayload = payload.StartsWith("P2|", StringComparison.Ordinal);
+            var encoded =
+                payload.StartsWith("P2|", StringComparison.Ordinal) ? payload[3..] :
+                payload.StartsWith("P1|", StringComparison.Ordinal) ? payload[3..] :
+                payload;
+            byte[] raw;
+            try
+            {
+                raw = string.IsNullOrEmpty(encoded) ? Array.Empty<byte>() : Convert.FromBase64String(encoded);
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (!TryCreateHaxeBytes(raw, out var bytes) || bytes == null)
+                return false;
+
+            try
+            {
+                if (isPackedSavePayload)
+                {
+                    user = Save.Class.readSave.Invoke(bytes);
+                    return user != null;
+                }
+
+                var serializer = new dc.hxbit.Serializer
+                {
+                    refs = new IntMap()
+                };
+                var position = 0;
+                serializer.beginLoad(bytes, Ref<int>.From(ref position));
+                user = (User)(object)serializer.getRef(User.Class, User.Class.__clid);
+                serializer.endLoad();
+                user?.onReload();
+                return user != null;
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning(ex, "[NetMod] Failed to deserialize progress payload");
+                user = null;
+                return false;
+            }
+        }
+
+        private static bool TrySerializeUserBytes(User user, out Bytes? bytes)
+        {
+            bytes = null;
+            if (user == null)
+                return false;
+
+            try
+            {
+                var serializer = new dc.hxbit.Serializer();
+                serializer.beginSave();
+                var userRef = user.unnamedField0;
+                if (userRef == null)
+                    userRef = user.unnamedField0 = (virtual___uid_getCLID_getSerializeSchema_serialize_unserialize_unserializeInit_)(object)user;
+                serializer.addKnownRef(userRef);
+                var position = 0;
+                bytes = serializer.endSave(Ref<int>.From(ref position));
+                return bytes != null;
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning(ex, "[NetMod] Failed to serialize raw user progress payload");
+                bytes = null;
+                return false;
+            }
+        }
+
+        private static byte[] CopyBytesToManaged(Bytes bytes)
+        {
+            if (bytes == null || bytes.length <= 0 || bytes.b == IntPtr.Zero)
+                return Array.Empty<byte>();
+
+            var raw = new byte[bytes.length];
+            Marshal.Copy(bytes.b, raw, 0, raw.Length);
+            return raw;
+        }
+
+        private static bool TryCreateHaxeBytes(byte[] raw, out Bytes? bytes)
+        {
+            bytes = null;
+
+            try
+            {
+                bytes = Bytes.Class.alloc.Invoke(raw.Length);
+                if (bytes == null)
+                    return false;
+
+                if (raw.Length > 0 && bytes.b != IntPtr.Zero)
+                    Marshal.Copy(raw, 0, bytes.b, raw.Length);
+
+                return true;
+            }
+            catch
+            {
+                bytes = null;
+                return false;
+            }
         }
 
         private static int ToInt(object? value)

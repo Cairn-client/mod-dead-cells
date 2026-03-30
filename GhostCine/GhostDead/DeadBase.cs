@@ -1,6 +1,8 @@
 using System;
 using dc.en;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
+using HaxeProxy.Runtime;
+using System.Diagnostics;
 
 namespace DeadCellsMultiplayerMod
 {
@@ -15,6 +17,13 @@ namespace DeadCellsMultiplayerMod
         private bool _heroWasVisible;
         private bool _hadHeroHeadBlackState;
         private int _heroHeadBlackValue;
+        private bool _hasBossArenaCorpseAnchor;
+        private double _bossArenaCorpseAnchorX;
+        private double _bossArenaCorpseAnchorY;
+        private bool _bossArenaCorpsePushApplied;
+        private long _bossArenaCorpsePushStartedTicks;
+        private const double BossArenaCorpsePushSettleSeconds = 0.35;
+        private const double BossArenaCorpsePushVelocityThreshold = 0.08;
 
         public DeadBase(Hero hero, GhostKing? king)
         {
@@ -91,6 +100,13 @@ namespace DeadCellsMultiplayerMod
                 corpse.init();
                 _corpse = corpse;
                 _lethalFallStarted = false;
+                _hasBossArenaCorpseAnchor = false;
+                _bossArenaCorpseAnchorX = 0;
+                _bossArenaCorpseAnchorY = 0;
+                _bossArenaCorpsePushApplied = false;
+                _bossArenaCorpsePushStartedTicks = 0;
+                TrySnapCorpseToHeroAnchor(corpse);
+                TryApplyBossArenaCorpsePush(corpse);
                 EnsureLethalFallStarted();
             }
             catch
@@ -106,6 +122,7 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             KeepCorpseActive(corpse);
+            KeepBossArenaCorpseAnchored(corpse);
             EnsureLethalFallStarted();
         }
 
@@ -115,8 +132,202 @@ namespace DeadCellsMultiplayerMod
             if (corpse == null || corpse.destroyed || _lethalFallStarted)
                 return;
 
+            var levelId = _hero?._level?.map?.id?.ToString();
+            if (ModEntry.IsBossLevel(levelId))
+            {
+                TryClampCorpseToGround(corpse);
+                return;
+            }
+
             _lethalFallStarted = true;
             try { corpse.startLethalFall(); } catch { }
+        }
+
+        private void TrySnapCorpseToHeroAnchor(HeroDeadCorpse corpse)
+        {
+            if (corpse == null || corpse.destroyed || _hero == null)
+                return;
+
+            try
+            {
+                var x = _hero.get_targetSprPosX();
+                var y = _hero.get_targetSprPosY();
+                corpse.setPosPixel(x, y);
+            }
+            catch
+            {
+                try
+                {
+                    if (_hero.spr != null)
+                        corpse.setPosPixel(_hero.spr.x, _hero.spr.y);
+                }
+                catch
+                {
+                }
+            }
+
+            TryClampCorpseToGround(corpse);
+        }
+
+        private static void TryClampCorpseToGround(HeroDeadCorpse corpse)
+        {
+            if (corpse == null || corpse.destroyed)
+                return;
+
+            try
+            {
+                var map = corpse._level?.map;
+                if (map == null)
+                    return;
+
+                var cx = corpse.cx;
+                var cy = corpse.cy;
+                var xr = corpse.xr;
+                var yr = corpse.yr;
+                var groundYr = map.getGroundYr(cx, cy, Ref<double>.From(ref xr), Ref<double>.From(ref yr));
+                if (double.IsFinite(groundYr) && corpse.yr > groundYr)
+                    corpse.setPosCase(cx, cy, xr, groundYr);
+            }
+            catch
+            {
+            }
+        }
+
+        private void CaptureBossArenaCorpseAnchor(HeroDeadCorpse corpse)
+        {
+            if (corpse == null || corpse.destroyed || !ModEntry.IsBossLevel(_hero?._level?.map?.id?.ToString()))
+                return;
+
+            try
+            {
+                _bossArenaCorpseAnchorX = corpse.get_targetSprPosX();
+                _bossArenaCorpseAnchorY = corpse.get_targetSprPosY();
+                _hasBossArenaCorpseAnchor = true;
+                return;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (corpse.spr != null)
+                {
+                    _bossArenaCorpseAnchorX = corpse.spr.x;
+                    _bossArenaCorpseAnchorY = corpse.spr.y;
+                    _hasBossArenaCorpseAnchor = true;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private void KeepBossArenaCorpseAnchored(HeroDeadCorpse corpse)
+        {
+            if (corpse == null || corpse.destroyed || !ModEntry.IsBossLevel(_hero?._level?.map?.id?.ToString()))
+                return;
+
+            if (!_bossArenaCorpsePushApplied)
+                TryApplyBossArenaCorpsePush(corpse);
+
+            TryClampCorpseToGround(corpse);
+
+            if (!_hasBossArenaCorpseAnchor)
+            {
+                if (!IsBossArenaCorpsePushSettled(corpse))
+                    return;
+
+                CaptureBossArenaCorpseAnchor(corpse);
+            }
+
+            if (!_hasBossArenaCorpseAnchor)
+                return;
+
+            try { corpse.setPosPixel(_bossArenaCorpseAnchorX, _bossArenaCorpseAnchorY); } catch { }
+            TryClampCorpseToGround(corpse);
+            CaptureBossArenaCorpseAnchor(corpse);
+        }
+
+        private void TryApplyBossArenaCorpsePush(HeroDeadCorpse corpse)
+        {
+            if (corpse == null || corpse.destroyed || _hero == null)
+                return;
+            if (_bossArenaCorpsePushApplied)
+                return;
+            if (!ModEntry.IsBossLevel(_hero._level?.map?.id?.ToString()))
+                return;
+
+            var dir = 1;
+            try { dir = _hero.dir < 0 ? -1 : 1; } catch { }
+
+            double pushX = dir * 0.18;
+            double pushY = -0.12;
+            var hasMomentum = false;
+            try
+            {
+                var momentumX = _hero.dx + _hero.bdx;
+                var momentumY = _hero.dy + _hero.bdy;
+                if (double.IsFinite(momentumX) && double.IsFinite(momentumY))
+                {
+                    pushX = momentumX;
+                    pushY = momentumY;
+                    hasMomentum = true;
+                }
+            }
+            catch
+            {
+            }
+
+            if (!hasMomentum ||
+                (System.Math.Abs(pushX) < 0.01 && System.Math.Abs(pushY) < 0.01))
+            {
+                pushX = dir * 0.18;
+                pushY = -0.12;
+            }
+            else
+            {
+                if (System.Math.Abs(pushX) < 0.08)
+                    pushX = dir * 0.12;
+                if (pushY > -0.08)
+                    pushY = -0.12;
+            }
+
+            try { corpse.hasGravity = true; } catch { }
+            try { corpse.bump(pushX, pushY, null); } catch { }
+            _bossArenaCorpsePushApplied = true;
+            _bossArenaCorpsePushStartedTicks = Stopwatch.GetTimestamp();
+            _hasBossArenaCorpseAnchor = false;
+        }
+
+        private bool IsBossArenaCorpsePushSettled(HeroDeadCorpse corpse)
+        {
+            if (corpse == null || corpse.destroyed)
+                return false;
+            if (!_bossArenaCorpsePushApplied)
+                return true;
+
+            if (_bossArenaCorpsePushStartedTicks != 0 &&
+                Stopwatch.GetElapsedTime(_bossArenaCorpsePushStartedTicks).TotalSeconds >= BossArenaCorpsePushSettleSeconds)
+            {
+                return true;
+            }
+
+            try
+            {
+                var totalVelocity =
+                    System.Math.Abs(corpse.dx) +
+                    System.Math.Abs(corpse.dy) +
+                    System.Math.Abs(corpse.bdx) +
+                    System.Math.Abs(corpse.bdy);
+                if (totalVelocity <= BossArenaCorpsePushVelocityThreshold)
+                    return true;
+            }
+            catch
+            {
+            }
+
+            return false;
         }
 
         private void CreateHomunculus(HeroDeadCorpse corpse)

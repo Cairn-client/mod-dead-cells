@@ -4,24 +4,40 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.1.4</Version>
-
+    <Version>0.2.0</Version>
     <ModType>mod</ModType>
     <ModMain>DeadCellsMultiplayerMod.ModEntry</ModMain>
-        <AutoInstallMod Condition="'$(Configuration)' == 'Debug'">true</AutoInstallMod>
+    <AutoInstallMod Condition="'$(Configuration)' == 'Debug'">true</AutoInstallMod>
+
+    <SteamworksNetHintPath Condition="'$(SteamworksNetHintPath)' == '' and '$(DCCM_MDK_ROOT)' != ''">$(DCCM_MDK_ROOT)\tools\Steamworks.NET.dll</SteamworksNetHintPath>
+
+    <SteamApi64HintPath Condition="'$(SteamApi64HintPath)' == '' and '$(DCCM_MDK_ROOT)' != ''">$(DCCM_MDK_ROOT)\..\native\win-x64\steam_api64.dll</SteamApi64HintPath>
   </PropertyGroup>
 
-  <!-- MDK reference -->
   <ItemGroup>
     <PackageReference Include="DeadCellsCoreModding.MDK" Version="1.0.1" />
     <PackageReference Include="MonoMod.RuntimeDetour" Version="25.3.3" />
+    <Reference Include="Steamworks.NET" Condition="Exists('$(SteamworksNetHintPath)')">
+      <HintPath>$(SteamworksNetHintPath)</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <None Include="$(SteamApi64HintPath)" Condition="Exists('$(SteamApi64HintPath)')" Link="steam_api64.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+      <TargetPath>steam_api64.dll</TargetPath>
+    </None>
   </ItemGroup>
-
-   <PropertyGroup>
+  <Target Name="CopySteamApi64" AfterTargets="CopyOutputFiles" Condition="Exists('$(SteamApi64HintPath)')">
+    <PropertyGroup>
+      <_ModOutputDir>$(OutputPath)output\$(AssemblyName)\</_ModOutputDir>
+    </PropertyGroup>
+    <Copy SourceFiles="$(SteamApi64HintPath)" DestinationFolder="$(_ModOutputDir)" SkipUnchangedFiles="true" />
+  </Target>
+  <PropertyGroup>
     <GenerateSinglePakFile>true</GenerateSinglePakFile>
   </PropertyGroup>
 
- <ItemGroup>
+  <ItemGroup>
     <PackAssets Include="Resourcefile\**\*" RootInPak="DeadCellsMultiplayerModLang" />
   </ItemGroup>
 

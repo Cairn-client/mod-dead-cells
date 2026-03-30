@@ -17,6 +17,7 @@ using dc.haxe.ds;
 using dc.achievements;
 using ModCore.Modules;
 using DeadCellsMultiplayerMod.Tools;
+using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 
 namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 {
@@ -32,6 +33,10 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         private readonly List<HSprite> sprites = new();
         private readonly List<dc.ui.Text> connectionLabels = new();
         private readonly List<string> lastConnections = new();
+        private Flow? lobbyCodeFlow;
+        private dc.ui.Text? lobbyCodeTitleLabel;
+        private dc.ui.Text? lobbyIdLabel;
+        private string lastLobbyIdLabelText = string.Empty;
 
         private static ConnectionUI? Instance;
         private HSprite? spriteui;
@@ -49,8 +54,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         public static bool set_visible
         {
-            get => Instance!.root.visible;
-            set => Instance!.root.visible = value;
+            get => Instance?.root.visible ?? false;
+            set { if (Instance != null) Instance.root.visible = value; }
         }
 
 
@@ -193,6 +198,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         private void clean()
         {
+            ClearLobbyCodeUi();
             this.bg?.remove();
             this.rootFlow?.remove();
             this.inter?.remove();
@@ -220,7 +226,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             double flowW = this.rootFlow.get_innerWidth();
             double flowH = this.rootFlow.get_innerHeight();
 
-
+            ClearLobbyCodeUi();
             this.bg?.remove();
             this.bg = UIBox.Class.drawBoxValidation(
                 (int)flowW,
@@ -249,9 +255,10 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
 
             this.inter?.remove();
-            this.inter = new dc.h2d.Interactive(screenWidth, screenHeight, this.bg, null);
+            this.inter = new dc.h2d.Interactive(this.bg.wid, this.bg.hei, this.bg, null);
             this.inter.onClick = new HlAction<Event>(this.OnClick);
             BGtext();
+            UpdateLobbyIdLabel(forceRefreshText: true);
         }
 
 
@@ -366,6 +373,105 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
             this.lastConnections.Clear();
             this.lastConnections.AddRange(allname);
+            UpdateLobbyIdLabel(forceRefreshText: false);
+        }
+
+        private void ClearLobbyCodeUi()
+        {
+            this.lobbyCodeFlow?.remove();
+            this.lobbyCodeFlow = null;
+
+            this.lobbyCodeTitleLabel?.remove();
+            this.lobbyCodeTitleLabel = null;
+            this.lobbyIdLabel?.remove();
+            this.lobbyIdLabel = null;
+            this.lastLobbyIdLabelText = string.Empty;
+        }
+
+        private void EnsureLobbyCodeFlow(double uiScale)
+        {
+            if (this.bg == null || base.root == null)
+                return;
+
+            if (this.lobbyCodeFlow == null)
+            {
+                this.lobbyCodeFlow = new Flow(null);
+                this.lobbyCodeFlow.isVertical = true;
+                this.lobbyCodeFlow.set_horizontalAlign(new FlowAlign.Left());
+                this.lobbyCodeFlow.set_verticalAlign(new FlowAlign.Bottom());
+                this.lobbyCodeFlow.set_verticalSpacing((int)(2 * uiScale));
+                this.lobbyCodeFlow.x += 10;
+                this.lobbyCodeFlow.y += 80;
+                this.bg.addChild(this.lobbyCodeFlow);
+            }
+
+            if (this.lobbyCodeTitleLabel == null)
+            {
+                this.lobbyCodeTitleLabel = Assets.Class.makeText(
+                    "lobby code".AsHaxeString(),
+                    Tools.MultiColor.ColorFromHex("#9ea8b3"),
+                    false,
+                    null);
+                this.lobbyCodeFlow.addChild(this.lobbyCodeTitleLabel);
+            }
+
+            if (this.lobbyIdLabel == null)
+            {
+                this.lobbyIdLabel = Assets.Class.makeText(
+                    string.Empty.AsHaxeString(),
+                    Tools.MultiColor.ColorFromHex("#7fd4ff"),
+                    true,
+                    null);
+                this.lobbyCodeFlow.addChild(this.lobbyIdLabel);
+            }
+
+            var lobbyCodeScale = 0.55 * uiScale;
+            this.lobbyCodeTitleLabel.scaleX = lobbyCodeScale;
+            this.lobbyCodeTitleLabel.scaleY = lobbyCodeScale;
+            this.lobbyIdLabel.scaleX = lobbyCodeScale;
+            this.lobbyIdLabel.scaleY = lobbyCodeScale;
+
+            try
+            {
+                this.lobbyCodeTitleLabel.font.size = 14;
+                this.lobbyIdLabel.font.size = 16;
+            }
+            catch { /* font may not be available on dc.ui.Text */ }
+        }
+
+        private void UpdateLobbyIdLabel(bool forceRefreshText)
+        {
+            if (this.bg == null)
+                return;
+
+            var lobbyCode = GameMenu.GetSteamLobbyCodeForUi();
+            if (string.IsNullOrWhiteSpace(lobbyCode))
+            {
+                if (this.lobbyCodeFlow != null)
+                    this.lobbyCodeFlow.set_visible(false);
+                this.lastLobbyIdLabelText = string.Empty;
+                return;
+            }
+
+            var uiScale = UiScale.GetResolutionScale();
+            var labelText = lobbyCode.Trim().ToLowerInvariant();
+            EnsureLobbyCodeFlow(uiScale);
+            if (this.lobbyCodeFlow == null || this.lobbyIdLabel == null || this.lobbyCodeTitleLabel == null)
+                return;
+
+            if (forceRefreshText || !string.Equals(this.lastLobbyIdLabelText, labelText, StringComparison.Ordinal))
+            {
+                this.lobbyIdLabel.set_text(labelText.AsHaxeString());
+                this.lastLobbyIdLabelText = labelText;
+            }
+
+            var leftPadding = 10.0 * uiScale;
+            var bottomPadding = 8.0 * uiScale;
+            this.lobbyCodeFlow.reflow();
+            var flowHeight = this.lobbyCodeFlow.get_innerHeight();
+            this.lobbyCodeFlow.x = this.bg.x + leftPadding;
+            this.lobbyCodeFlow.y = this.bg.y + this.bg.hei - flowHeight - bottomPadding;
+            this.lobbyCodeFlow.set_visible(true);
         }
 
         private bool NeedsConnectionsRefresh(List<string> names)
@@ -389,6 +495,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             var names = _ConnectionUI.GetAllPlayerNames();
             if (NeedsConnectionsRefresh(names))
                 RefreshConnections(names);
+            else
+                UpdateLobbyIdLabel(forceRefreshText: false);
 
             if (dc.hxd.Key.Class.isPressed(80))
             {
@@ -407,13 +515,44 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         private void OnClick(Event e)
         {
+            if (this.lobbyCodeFlow == null || !this.lobbyCodeFlow.visible || this.bg == null)
+                return;
+
+            var x = e.relX;
+            var y = e.relY;
+            var width = this.lobbyCodeFlow.get_innerWidth();
+            var height = this.lobbyCodeFlow.get_innerHeight();
+            var minX = this.lobbyCodeFlow.x - this.bg.x;
+            var minY = this.lobbyCodeFlow.y - this.bg.y;
+            var maxX = minX + width;
+            var maxY = minY + height;
+
+            if (x < minX || x > maxX || y < minY || y > maxY)
+                return;
+
+            if (GameMenu.TryCopySteamLobbyCodeFromUi())
+                MultiplayerUI.PushSystemMessage("Lobby id copied to clipboard");
 
         }
 
 
         public static void Initialize(ModEntry entry)
         {
-            entry.Logger.Information("\x1b[36m[[ConnectionUI] Initializing...]\x1b[0m");
+            entry.Logger.Information("\x1b[32m[[ModEntry.ConnectionUI] Initializing ConnectionUI...]\x1b[0m ");
+        }
+
+        /// <summary>
+        /// Ensures ConnectionUI exists on the given TitleScreen. Called from mainMenu hook
+        /// to avoid Hashlink marshaling crash in TitleScreen constructor (bool? titleLib).
+        /// </summary>
+        public static void EnsureCreated(TitleScreen screen)
+        {
+            if (Instance != null && ReferenceEquals(Instance.parent, screen))
+                return;
+            Instance = null;
+            var connectionUI = new ConnectionUI(screen);
+            screen.addChild(connectionUI);
+            connectionUI.root.set_visible(false);
         }
 
 

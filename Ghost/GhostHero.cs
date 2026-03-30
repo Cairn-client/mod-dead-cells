@@ -93,6 +93,7 @@ namespace DeadCellsMultiplayerMod
             // dynamic key = Data.Class.item.all.getDyn(278);
             // dynamic props = key.props;
             // props.prct = 0;
+            king.spr._animManager.play("idle".AsHaxeString(), null, null).loop(null);
             return king;
         }
 
@@ -159,12 +160,6 @@ namespace DeadCellsMultiplayerMod
             k.dispose();
 
         }
-
-        public void TeleportByPixels(double x, double y)
-        {
-            king?.setPosPixel(x, y - 0.2d);
-        }
-
 
         public void SetLabel(Entity entity, string? text)
         {
