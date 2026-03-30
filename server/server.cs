@@ -566,7 +566,10 @@ public sealed partial class NetNode : IDisposable
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private bool _disposed;
     private long _lastSteamPacketReceivedTicks;
+    private long _lastSteamKeepAliveSentTicks;
     private const double SteamReceiveTimeoutSeconds = 18.0;
+    private const double SteamKeepAliveSeconds = 6.0;
+    private static readonly byte[] SteamKeepAliveBytes = Encoding.UTF8.GetBytes("PING\n");
 
     private readonly object _sync = new();
     private bool _hasRemote;
@@ -886,6 +889,9 @@ public sealed partial class NetNode : IDisposable
                 }
             }
 
+            if (!hasPacket)
+                TrySendSteamKeepAlive();
+
             if (_role == NetRole.Client && !hasPacket && _hasRemote)
             {
                 var now = Stopwatch.GetTimestamp();
@@ -903,6 +909,57 @@ public sealed partial class NetNode : IDisposable
 
             if (!hasPacket)
                 await Task.Delay(8, ct).ConfigureAwait(false);
+        }
+    }
+
+    private void TrySendSteamKeepAlive()
+    {
+        var bridge = _steamBridge;
+        if (bridge == null)
+            return;
+
+        var now = Stopwatch.GetTimestamp();
+        var minTicks = (long)(Stopwatch.Frequency * SteamKeepAliveSeconds);
+        if (_lastSteamKeepAliveSentTicks != 0 && now - _lastSteamKeepAliveSentTicks < minTicks)
+            return;
+
+        if (_role == NetRole.Client)
+        {
+            bool connected;
+            lock (_sync)
+                connected = _hasRemote && ID > 0;
+
+            if (!connected || _steamHostId.m_SteamID == 0UL)
+                return;
+
+            _lastSteamKeepAliveSentTicks = now;
+            bridge.TrySend(
+                _steamHostId.m_SteamID,
+                EP2PSend.k_EP2PSendReliable,
+                SteamP2PChannelClientToHost,
+                SteamKeepAliveBytes,
+                out _);
+            return;
+        }
+
+        List<SteamClientConnection> clients;
+        lock (_clientsLock)
+        {
+            if (_steamClients.Count == 0)
+                return;
+
+            clients = new List<SteamClientConnection>(_steamClients.Values);
+        }
+
+        _lastSteamKeepAliveSentTicks = now;
+        foreach (var client in clients)
+        {
+            bridge.TrySend(
+                client.SteamId.m_SteamID,
+                EP2PSend.k_EP2PSendReliable,
+                SteamP2PChannelHostToClient,
+                SteamKeepAliveBytes,
+                out _);
         }
     }
 
@@ -1165,6 +1222,12 @@ public sealed partial class NetNode : IDisposable
                 if (steamConnection != null)
                     _ = Task.Run(() => SendInitialStateToSteamClient(steamConnection, forceSend: true));
             }
+            return true;
+        }
+
+        if (line.StartsWith("PING", StringComparison.OrdinalIgnoreCase))
+        {
+            lock (_sync) _hasRemote = true;
             return true;
         }
 

@@ -1219,7 +1219,6 @@ namespace DeadCellsMultiplayerMod
 
             MarkPendingBossRuneReload(bossRune);
             // _log?.Information("[NetMod] Received remote boss rune {BossRune}", bossRune);
-            TryScheduleBossRuneReloadForCurrentLevel();
 
             GameMenu.EnqueueMainThread(() =>
             {
