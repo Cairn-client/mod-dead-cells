@@ -728,17 +728,6 @@ namespace DeadCellsMultiplayerMod
             Hook_User.unserialize += Hook_User_unserialize;
             Hook_Game.onDispose += Hook_Game_onDispose;
             Hook__Save.save += Hook__Save_save;
-            Hook_ItemMetaManager.revealItem += Hook_ItemMetaManager_revealItem;
-            Hook_ItemMetaManager.unlockItem += Hook_ItemMetaManager_unlockItem;
-            Hook_ItemMetaManager.addPermanentItem += Hook_ItemMetaManager_addPermanentItem;
-            Hook_ItemMetaManager.investOnItemProgress += Hook_ItemMetaManager_investOnItemProgress;
-            Hook_ItemMetaManager.f_investOn += Hook_ItemMetaManager_f_investOn;
-            Hook_StoryManager.incNpcProgress += Hook_StoryManager_incNpcProgress;
-            Hook_StoryManager.setNpcProgress += Hook_StoryManager_setNpcProgress;
-            Hook_StoryManager.setBitFlag += Hook_StoryManager_setBitFlag;
-            Hook_StoryManager.markLoreRoomAsVisited += Hook_StoryManager_markLoreRoomAsVisited;
-            Hook_StoryManager.markLoreRoomAsGenerated += Hook_StoryManager_markLoreRoomAsGenerated;
-            Hook_StoryManager.cleanStoryData += Hook_StoryManager_cleanStoryData;
             Hook_AnimManager.play += Hook_AnimManager_play;
             Hook_MiniMap.track += Hook_MiniMap_track;
             Hook__LevelStruct.get += Hook__LevelStruct_get;
@@ -841,114 +830,6 @@ namespace DeadCellsMultiplayerMod
             {
                 Logger.Warning("[NetMod] Failed to send head skin from initCustomHead hook: {msg}", ex.Message);
             }
-        }
-
-        private void TrySendLiveProgressSync(User? user)
-        {
-            if (_netRole != NetRole.Host)
-                return;
-
-            var net = _net;
-            if (net == null || !net.IsAlive || user == null)
-                return;
-
-            var activeUser = dc.Main.Class.ME?.user;
-            if (activeUser == null || !ReferenceEquals(activeUser, user))
-                return;
-
-            GameDataSync.MarkProgressPayloadDirty();
-            GameDataSync.SendProgressSync(user, net);
-        }
-
-        private void TrySendLiveProgressSync(ItemMetaManager? itemMeta)
-        {
-            var user = itemMeta?._user ?? dc.Main.Class.ME?.user;
-            TrySendLiveProgressSync(user);
-        }
-
-        private void TrySendLiveProgressSync(StoryManager? story)
-        {
-            var user = dc.Main.Class.ME?.user;
-            if (user == null || story == null || !ReferenceEquals(user.story, story))
-                return;
-
-            TrySendLiveProgressSync(user);
-        }
-
-        private bool Hook_ItemMetaManager_revealItem(Hook_ItemMetaManager.orig_revealItem orig, ItemMetaManager self, dc.String showAsNew, bool e)
-        {
-            var changed = orig(self, showAsNew, e);
-            if (changed)
-                TrySendLiveProgressSync(self);
-            return changed;
-        }
-
-        private bool Hook_ItemMetaManager_unlockItem(Hook_ItemMetaManager.orig_unlockItem orig, ItemMetaManager self, dc.String e)
-        {
-            var changed = orig(self, e);
-            if (changed)
-                TrySendLiveProgressSync(self);
-            return changed;
-        }
-
-        private bool Hook_ItemMetaManager_addPermanentItem(Hook_ItemMetaManager.orig_addPermanentItem orig, ItemMetaManager self, dc.String k)
-        {
-            var changed = orig(self, k);
-            if (changed)
-                TrySendLiveProgressSync(self);
-            return changed;
-        }
-
-        private bool Hook_ItemMetaManager_investOnItemProgress(Hook_ItemMetaManager.orig_investOnItemProgress orig, ItemMetaManager self, dc.String e)
-        {
-            var changed = orig(self, e);
-            if (changed)
-                TrySendLiveProgressSync(self);
-            return changed;
-        }
-
-        private bool Hook_ItemMetaManager_f_investOn(Hook_ItemMetaManager.orig_f_investOn orig, ItemMetaManager self, int upLevel)
-        {
-            var changed = orig(self, upLevel);
-            if (changed)
-                TrySendLiveProgressSync(self);
-            return changed;
-        }
-
-        private void Hook_StoryManager_incNpcProgress(Hook_StoryManager.orig_incNpcProgress orig, StoryManager self, NpcId id)
-        {
-            orig(self, id);
-            TrySendLiveProgressSync(self);
-        }
-
-        private void Hook_StoryManager_setNpcProgress(Hook_StoryManager.orig_setNpcProgress orig, StoryManager self, NpcId id, int v)
-        {
-            orig(self, id, v);
-            TrySendLiveProgressSync(self);
-        }
-
-        private void Hook_StoryManager_setBitFlag(Hook_StoryManager.orig_setBitFlag orig, StoryManager self, dc.String slot, int value, bool curValue)
-        {
-            orig(self, slot, value, curValue);
-            TrySendLiveProgressSync(self);
-        }
-
-        private void Hook_StoryManager_markLoreRoomAsVisited(Hook_StoryManager.orig_markLoreRoomAsVisited orig, StoryManager self, dc.String k)
-        {
-            orig(self, k);
-            TrySendLiveProgressSync(self);
-        }
-
-        private void Hook_StoryManager_markLoreRoomAsGenerated(Hook_StoryManager.orig_markLoreRoomAsGenerated orig, StoryManager self, virtual_baseLootLevel_biome_bonusTripleScrollAfterBC_cellBonus_dlc_doubleUps_eliteRoomChance_eliteWanderChance_flagsProps_group_icon_id_index_loreDescriptions_mapDepth_minGold_mobDensity_mobs_name_nextLevels_parallax_props_quarterUpsBC3_quarterUpsBC4_specificLoots_specificSubBiome_transitionTo_tripleUps_worldDepth_ l, dc.String k)
-        {
-            orig(self, l, k);
-            TrySendLiveProgressSync(self);
-        }
-
-        private void Hook_StoryManager_cleanStoryData(Hook_StoryManager.orig_cleanStoryData orig, StoryManager self)
-        {
-            orig(self);
-            TrySendLiveProgressSync(self);
         }
 
         private void Hook_ZDoor_onActivate(Hook_ZDoor.orig_onActivate orig, ZDoor self, Hero lp, bool mob)
@@ -1102,32 +983,15 @@ namespace DeadCellsMultiplayerMod
             if (_netRole == NetRole.Host)
             {
                 orig(u, onlyGameData);
-                if (u != null)
-                {
-                    GameDataSync.MarkProgressPayloadDirty();
-                    GameDataSync.SendProgressSync(u, _net);
-                }
                 return;
             }
 
             if (_netRole == NetRole.Client)
             {
                 var serializerSwapped = GameDataSync.SwapToLocalSerializerSync();
-                User? saveUser = u;
-                if (u != null)
-                    GameDataSync.CaptureOriginalUserData(u, allowReplaceWhenBetter: true);
-
-                if (u != null && !GameDataSync.TryBuildSafeSaveUser(u, onlyGameData, out saveUser))
-                {
-                    Logger.Warning("[NetMod] Skipping client save: local progress snapshot clone is unavailable, preventing host progress overwrite");
-                    if (serializerSwapped)
-                        GameDataSync.RestoreRemoteSerializerSync();
-                    return;
-                }
-
                 try
                 {
-                    orig(saveUser, onlyGameData);
+                    orig(u, onlyGameData);
                 }
                 finally
                 {

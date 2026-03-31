@@ -584,9 +584,6 @@ public sealed partial class NetNode : IDisposable
     private int? _cachedHostBossRune;
     private int? _cachedHostSerializerSeq;
     private int? _cachedHostSerializerUid;
-    private string? _cachedHostProgressPayload;
-    private string? _cachedHostCountersPayload;
-    private string? _cachedHostBlueprintsPayload;
     private string? _cachedHostLevelDescPayload;
     private string? _cachedHostLevelSeedPayload;
     private string? _cachedHostHeroSkin;
@@ -1030,9 +1027,6 @@ public sealed partial class NetNode : IDisposable
         int? cachedSeed;
         int? cachedSerializerSeq;
         int? cachedSerializerUid;
-        string? cachedProgressPayload;
-        string? cachedCountersPayload;
-        string? cachedBlueprintsPayload;
         string? cachedLevelDescPayload;
         string? cachedLevelSeedPayload;
         string? cachedLevelGraphPayload;
@@ -1044,9 +1038,6 @@ public sealed partial class NetNode : IDisposable
             cachedSeed = _cachedHostSeed;
             cachedSerializerSeq = _cachedHostSerializerSeq;
             cachedSerializerUid = _cachedHostSerializerUid;
-            cachedProgressPayload = _cachedHostProgressPayload;
-            cachedCountersPayload = _cachedHostCountersPayload;
-            cachedBlueprintsPayload = _cachedHostBlueprintsPayload;
             cachedLevelDescPayload = _cachedHostLevelDescPayload;
             cachedLevelSeedPayload = _cachedHostLevelSeedPayload;
             cachedLevelGraphPayload = _cachedHostLevelGraphPayload;
@@ -1060,12 +1051,6 @@ public sealed partial class NetNode : IDisposable
             await SendLineToSteamClientSafe(connection, $"BOSSRUNE|{cachedBossRune.Value}\n").ConfigureAwait(false);
         if (cachedSeed.HasValue)
             await SendLineToSteamClientSafe(connection, $"SEED|{cachedSeed.Value}\n").ConfigureAwait(false);
-        if (cachedProgressPayload != null)
-            await SendLineToSteamClientSafe(connection, $"PROGRESS|{cachedProgressPayload}\n").ConfigureAwait(false);
-        if (cachedCountersPayload != null)
-            await SendLineToSteamClientSafe(connection, $"COUNTERS|{cachedCountersPayload}\n").ConfigureAwait(false);
-        if (cachedBlueprintsPayload != null)
-            await SendLineToSteamClientSafe(connection, $"BLUEPRINTS|{cachedBlueprintsPayload}\n").ConfigureAwait(false);
         if (cachedLevelDescPayload != null)
             await SendLineToSteamClientSafe(connection, $"LDESC|{cachedLevelDescPayload}\n").ConfigureAwait(false);
         if (cachedLevelSeedPayload != null)
@@ -1252,30 +1237,6 @@ public sealed partial class NetNode : IDisposable
             var payload = line["HXSYNC|".Length..];
             lock (_sync) _hasRemote = true;
             GameDataSync.ReceiveSerializerSync(payload);
-            return true;
-        }
-
-        if (line.StartsWith("PROGRESS|", StringComparison.Ordinal))
-        {
-            var payload = line["PROGRESS|".Length..];
-            lock (_sync) _hasRemote = true;
-            GameDataSync.ReceiveProgressSync(payload);
-            return true;
-        }
-
-        if (line.StartsWith("COUNTERS|"))
-        {
-            var payload = line["COUNTERS|".Length..];
-            lock (_sync) _hasRemote = true;
-            GameDataSync.ReceiveCounters(payload);
-            return true;
-        }
-
-        if (line.StartsWith("BLUEPRINTS|"))
-        {
-            var payload = line["BLUEPRINTS|".Length..];
-            lock (_sync) _hasRemote = true;
-            GameDataSync.ReceiveBlueprints(payload);
             return true;
         }
 
@@ -3784,65 +3745,17 @@ public sealed partial class NetNode : IDisposable
 
     public void SendCounters(string countersPayload)
     {
-        var safeCounters = (countersPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
-        if (_role == NetRole.Host)
-        {
-            lock (_hostCacheSync)
-            {
-                _cachedHostCountersPayload = safeCounters;
-            }
-        }
-
-        if (!HasAnyConnection())
-        {
-            _log.Information("[NetNode] Skip sending counters sync: no connected client");
-            return;
-        }
-
-        SendRaw($"COUNTERS|{safeCounters}");
-        _log.Information("[NetNode] Sent counters sync");
+        return;
     }
 
     public void SendProgress(string progressPayload)
     {
-        var safeProgress = (progressPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
-        if (_role == NetRole.Host)
-        {
-            lock (_hostCacheSync)
-            {
-                _cachedHostProgressPayload = safeProgress;
-            }
-        }
-
-        if (!HasAnyConnection())
-        {
-            _log.Information("[NetNode] Skip sending progress sync: no connected client");
-            return;
-        }
-
-        SendRaw($"PROGRESS|{safeProgress}");
-        _log.Information("[NetNode] Sent progress sync");
+        return;
     }
 
     public void SendBlueprints(string blueprintsPayload)
     {
-        var safeBlueprints = (blueprintsPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
-        if (_role == NetRole.Host)
-        {
-            lock (_hostCacheSync)
-            {
-                _cachedHostBlueprintsPayload = safeBlueprints;
-            }
-        }
-
-        if (!HasAnyConnection())
-        {
-            _log.Information("[NetNode] Skip sending blueprints sync: no connected client");
-            return;
-        }
-
-        SendRaw($"BLUEPRINTS|{safeBlueprints}");
-        _log.Information("[NetNode] Sent blueprints sync");
+        return;
     }
 
     public void SendUsername(string username)
@@ -5096,9 +5009,6 @@ public sealed partial class NetNode : IDisposable
             _cachedHostBossRune = null;
             _cachedHostSerializerSeq = null;
             _cachedHostSerializerUid = null;
-            _cachedHostProgressPayload = null;
-            _cachedHostCountersPayload = null;
-            _cachedHostBlueprintsPayload = null;
             _cachedHostLevelDescPayload = null;
             _cachedHostLevelSeedPayload = null;
             _cachedHostHeroSkin = null;
