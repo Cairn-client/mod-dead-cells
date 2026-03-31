@@ -22,6 +22,7 @@ namespace DeadCellsMultiplayerMod
             try
             {
                 LoadConfig();
+                InitializeMultiplayerSaveHooks();
                 Hook_TitleScreen.mainMenu += MainMenuHook;
                 _menuHooksAttached = true;
             }
