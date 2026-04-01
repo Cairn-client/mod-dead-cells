@@ -44,6 +44,8 @@ namespace DeadCellsMultiplayerMod
         private static ControlLabel? _multiplayerSaveImportControlLabel;
         private static string _multiplayerSaveDefaultTitle = FallbackSavedGamesTitle;
         private static bool _hasCapturedMultiplayerSaveDefaultTitle;
+        private static bool _pendingSaveChoiceReflow;
+        private static MultiplayerSaveMenuKind _pendingSaveChoiceReflowKind = MultiplayerSaveMenuKind.None;
 
         private static void InitializeMultiplayerSaveHooks()
         {
@@ -114,6 +116,8 @@ namespace DeadCellsMultiplayerMod
             _multiplayerSaveMenuOpening = false;
             _multiplayerSaveImportTargetSlot = null;
             _multiplayerSaveImportControlLabel = null;
+            _pendingSaveChoiceReflow = false;
+            _pendingSaveChoiceReflowKind = MultiplayerSaveMenuKind.None;
 
             orig(self);
 
@@ -228,11 +232,14 @@ namespace DeadCellsMultiplayerMod
             {
                 _multiplayerSaveMenuOpening = false;
                 _multiplayerSaveImportControlLabel = null;
+                _pendingSaveChoiceReflow = false;
+                _pendingSaveChoiceReflowKind = MultiplayerSaveMenuKind.None;
             }
         }
 
         private static void Hook_SaveChoice_update(Hook_SaveChoice.orig_update orig, SaveChoice self)
         {
+            TryFlushPendingSaveChoiceReflow(self);
             EnsureCurrentSaveChoiceTitle(self);
 
             if (_multiplayerSaveMenuKind == MultiplayerSaveMenuKind.MultiplayerSlots)
@@ -367,17 +374,9 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             _multiplayerSaveMenuKind = kind;
-
-            try
-            {
-                if (self.fSave != null && self.cd != null)
-                    self.fSave.reflow();
-            }
-            catch (Exception ex)
-            {
-                if (!IsBenignSaveRebuildException(ex))
-                    _log?.Warning("[NetMod] Failed to rebuild save choice for {Kind}: {Message}", kind, ex.Message);
-            }
+            _pendingSaveChoiceReflow = true;
+            _pendingSaveChoiceReflowKind = kind;
+            TryRebuildSaveChoice(self, kind);
 
             try
             {
@@ -396,6 +395,36 @@ namespace DeadCellsMultiplayerMod
             catch (Exception ex)
             {
                 _log?.Warning("[NetMod] Failed to switch save choice store to {Kind}: {Message}", kind, ex.Message);
+            }
+        }
+
+        private static void TryFlushPendingSaveChoiceReflow(SaveChoice self)
+        {
+            if (!_pendingSaveChoiceReflow || self == null)
+                return;
+            if (_pendingSaveChoiceReflowKind != MultiplayerSaveMenuKind.None &&
+                _pendingSaveChoiceReflowKind != _multiplayerSaveMenuKind)
+            {
+                _pendingSaveChoiceReflow = false;
+                _pendingSaveChoiceReflowKind = MultiplayerSaveMenuKind.None;
+                return;
+            }
+
+            TryRebuildSaveChoice(self, _multiplayerSaveMenuKind);
+        }
+
+        private static void TryRebuildSaveChoice(SaveChoice self, MultiplayerSaveMenuKind kind)
+        {
+            try
+            {
+                self.fSave?.reflow();
+                _pendingSaveChoiceReflow = false;
+                _pendingSaveChoiceReflowKind = MultiplayerSaveMenuKind.None;
+            }
+            catch (Exception ex)
+            {
+                if (!IsBenignSaveRebuildException(ex))
+                    _log?.Warning("[NetMod] Failed to rebuild save choice for {Kind}: {Message}", kind, ex.Message);
             }
         }
 
@@ -434,13 +463,44 @@ namespace DeadCellsMultiplayerMod
         {
             if (_multiplayerSaveMenuKind != MultiplayerSaveMenuKind.MultiplayerSlots)
                 return false;
-            if (!TryGetSelectedSaveSlot(self, out var targetSlot))
-                return false;
+            if (!TryResolveImportTargetSlot(self, out var targetSlot))
+                targetSlot = ResolveSaveSlotNumber(null);
+            if (targetSlot < 0)
+                targetSlot = 0;
 
             _multiplayerSaveImportTargetSlot = targetSlot;
             _preferredMultiplayerSaveSlot = targetSlot;
             SwitchSaveChoiceStore(self, MultiplayerSaveMenuKind.OriginalSourceSelection);
             return true;
+        }
+
+        private static bool TryResolveImportTargetSlot(SaveChoice self, out int slot)
+        {
+            slot = 0;
+            if (TryGetSelectedSaveSlot(self, out slot))
+                return true;
+
+            var curSaveId = self?.curSaveId;
+            if (curSaveId.HasValue && curSaveId.Value >= 0)
+            {
+                slot = curSaveId.Value;
+                return true;
+            }
+
+            try
+            {
+                var current = Main.Class.ME?.options?.curSlot;
+                if (current.HasValue && current.Value >= 0)
+                {
+                    slot = current.Value;
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
         }
 
         private static void TryCaptureDefaultSaveTitle(SaveChoice self)
