@@ -7,11 +7,12 @@ using dc.pr;
 using dc.tool;
 using dc.ui;
 using HaxeProxy.Runtime;
+using HaxeProxy.Runtime.Internals;
 using ModCore.Utilities;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
-using IOFile = System.IO.File;
 using IODirectory = System.IO.Directory;
 using IOPath = System.IO.Path;
+using Marshal = System.Runtime.InteropServices.Marshal;
 
 namespace DeadCellsMultiplayerMod
 {
@@ -22,6 +23,7 @@ namespace DeadCellsMultiplayerMod
         private const string MultiplayerSaveImportLabel = "Copy your save in that slot";
         private const string OriginalSaveImportTitle = "Choose original save to copy";
         private const int CopyActionCode = 20;
+        private const int LiteralKeyboardXKeyCode = 88;
 
         private enum MultiplayerSaveMenuKind
         {
@@ -34,9 +36,9 @@ namespace DeadCellsMultiplayerMod
         private static bool _multiplayerSaveMenuOpening;
         private static MultiplayerSaveMenuKind _multiplayerSaveMenuKind = MultiplayerSaveMenuKind.None;
         private static NetRole _multiplayerSaveMenuReturnRole = NetRole.None;
-        private static bool _pendingOpenOriginalImportChooser;
         private static int? _multiplayerSaveImportTargetSlot;
         private static int? _preferredMultiplayerSaveSlot;
+        private static bool _multiplayerSaveInputDebugLogged;
 
         private static void InitializeMultiplayerSaveHooks()
         {
@@ -48,8 +50,10 @@ namespace DeadCellsMultiplayerMod
             Hook__SaveChoice.__constructor__ += Hook__SaveChoice___constructor__;
             Hook_SaveChoice.onCopy += Hook_SaveChoice_onCopy;
             Hook_SaveChoice.onValidate += Hook_SaveChoice_onValidate;
+            Hook_SaveChoice.onCancel += Hook_SaveChoice_onCancel;
             Hook_SaveChoice.onDelete += Hook_SaveChoice_onDelete;
             Hook_SaveChoice.onDispose += Hook_SaveChoice_onDispose;
+            Hook_SaveChoice.update += Hook_SaveChoice_update;
 
             _multiplayerSaveHooksAttached = true;
         }
@@ -79,6 +83,7 @@ namespace DeadCellsMultiplayerMod
         {
             _multiplayerSaveMenuKind = kind;
             _multiplayerSaveMenuOpening = true;
+            _multiplayerSaveInputDebugLogged = false;
 
             try
             {
@@ -98,27 +103,14 @@ namespace DeadCellsMultiplayerMod
 
         private static void Hook_TitleScreen_onLeavingSaveMenu(Hook_TitleScreen.orig_onLeavingSaveMenu orig, TitleScreen self)
         {
-            var previousKind = _multiplayerSaveMenuKind;
             var returnRole = _multiplayerSaveMenuReturnRole;
-            var openOriginalImportChooser = _pendingOpenOriginalImportChooser;
 
             _multiplayerSaveMenuKind = MultiplayerSaveMenuKind.None;
             _multiplayerSaveMenuOpening = false;
-            _pendingOpenOriginalImportChooser = false;
+            _multiplayerSaveImportTargetSlot = null;
+            _multiplayerSaveInputDebugLogged = false;
 
             orig(self);
-
-            if (openOriginalImportChooser)
-            {
-                OpenOriginalSaveImportMenu(self);
-                return;
-            }
-
-            if (previousKind == MultiplayerSaveMenuKind.OriginalSourceSelection)
-            {
-                OpenMultiplayerSlotMenu(self);
-                return;
-            }
 
             _multiplayerSaveMenuReturnRole = NetRole.None;
 
@@ -140,6 +132,8 @@ namespace DeadCellsMultiplayerMod
 
             try
             {
+                AttachSaveChoiceActionBridge(self);
+
                 switch (_multiplayerSaveMenuKind)
                 {
                     case MultiplayerSaveMenuKind.MultiplayerSlots:
@@ -167,13 +161,8 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
-            if (!TryGetSelectedSaveSlot(self, out var targetSlot))
+            if (!TryBeginMultiplayerSaveImportSelection(self))
                 return;
-
-            _multiplayerSaveImportTargetSlot = targetSlot;
-            _preferredMultiplayerSaveSlot = targetSlot;
-            _pendingOpenOriginalImportChooser = true;
-            self.onCancel();
         }
 
         private static void Hook_SaveChoice_onValidate(Hook_SaveChoice.orig_onValidate orig, SaveChoice self)
@@ -199,7 +188,20 @@ namespace DeadCellsMultiplayerMod
 
             _preferredMultiplayerSaveSlot = _multiplayerSaveImportTargetSlot.Value;
             SetCurrentSaveSlot(_multiplayerSaveImportTargetSlot.Value);
-            self.onCancel();
+            _multiplayerSaveImportTargetSlot = null;
+            SwitchSaveChoiceStore(self, MultiplayerSaveMenuKind.MultiplayerSlots);
+        }
+
+        private static void Hook_SaveChoice_onCancel(Hook_SaveChoice.orig_onCancel orig, SaveChoice self)
+        {
+            if (_multiplayerSaveMenuKind != MultiplayerSaveMenuKind.OriginalSourceSelection)
+            {
+                orig(self);
+                return;
+            }
+
+            _multiplayerSaveImportTargetSlot = null;
+            SwitchSaveChoiceStore(self, MultiplayerSaveMenuKind.MultiplayerSlots);
         }
 
         private static void Hook_SaveChoice_onDelete(Hook_SaveChoice.orig_onDelete orig, SaveChoice self)
@@ -219,7 +221,33 @@ namespace DeadCellsMultiplayerMod
             finally
             {
                 _multiplayerSaveMenuOpening = false;
+                _multiplayerSaveInputDebugLogged = false;
             }
+        }
+
+        private static void Hook_SaveChoice_update(Hook_SaveChoice.orig_update orig, SaveChoice self)
+        {
+            if (_multiplayerSaveMenuKind == MultiplayerSaveMenuKind.MultiplayerSlots)
+            {
+                LogMultiplayerSaveInputBindingsOnce(self);
+
+                var copyActionPressed = IsActionPressed(self?.controller, CopyActionCode);
+                var literalXPressed = IsLiteralXPressed();
+
+                if (copyActionPressed)
+                    _log?.Warning("[NetMod] Multiplayer save copy action detected.");
+
+                if (literalXPressed)
+                    _log?.Warning("[NetMod] Multiplayer save literal X key detected.");
+
+                if ((copyActionPressed || literalXPressed) &&
+                    TryBeginMultiplayerSaveImportSelection(self))
+                {
+                    return;
+                }
+            }
+
+            orig(self);
         }
 
         private static dc.String Hook__Save_fileName(Hook__Save.orig_fileName orig, int? slot)
@@ -269,6 +297,16 @@ namespace DeadCellsMultiplayerMod
         {
             try
             {
+                var saveRoot = dc.tool.File.Class.PATH?.ToString();
+                if (!string.IsNullOrWhiteSpace(saveRoot))
+                    return IOPath.GetFullPath(saveRoot);
+            }
+            catch
+            {
+            }
+
+            try
+            {
                 return IOPath.GetFullPath("save");
             }
             catch
@@ -296,17 +334,6 @@ namespace DeadCellsMultiplayerMod
             return IOPath.GetFullPath(IOPath.Combine(GetSaveRootPath(), normalized));
         }
 
-        private static string GetOriginalSaveFilePath(int? slot)
-        {
-            return GetAbsoluteSavePath(GetOriginalSaveRelativeFilePath(slot));
-        }
-
-        private static string GetMultiplayerSaveFilePath(int? slot)
-        {
-            EnsureMultiplayerSaveFolderExists();
-            return GetAbsoluteSavePath(GetMultiplayerSaveRelativeFilePath(slot));
-        }
-
         private static void EnsureMultiplayerSaveFolderExists()
         {
             IODirectory.CreateDirectory(GetAbsoluteSavePath(MultiplayerSaveFolderName));
@@ -328,6 +355,203 @@ namespace DeadCellsMultiplayerMod
             SetControlLabelVisible(self, 0, false);
             SetControlLabelVisible(self, 1, false);
             self.fControlLabel?.reflow();
+        }
+
+        private static void SwitchSaveChoiceStore(SaveChoice self, MultiplayerSaveMenuKind kind)
+        {
+            if (self == null)
+                return;
+
+            _multiplayerSaveMenuKind = kind;
+
+            try
+            {
+                self.fSave?.reflow();
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod] Failed to rebuild save choice for {Kind}: {Message}", kind, ex.Message);
+            }
+
+            try
+            {
+                switch (kind)
+                {
+                    case MultiplayerSaveMenuKind.MultiplayerSlots:
+                        ConfigureMultiplayerSaveChoice(self);
+                        break;
+                    case MultiplayerSaveMenuKind.OriginalSourceSelection:
+                        ConfigureOriginalSourceSaveChoice(self);
+                        break;
+                }
+
+                EnsureValidSaveChoiceSelection(self);
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod] Failed to switch save choice store to {Kind}: {Message}", kind, ex.Message);
+            }
+        }
+
+        private static void AttachSaveChoiceActionBridge(SaveChoice self)
+        {
+            var controller = self?.controller;
+            if (controller == null)
+                return;
+
+            var previousOnActPressed = controller.onActPressed;
+            controller.onActPressed = new HlAction<int, bool>((act, isKey) =>
+            {
+                previousOnActPressed?.Invoke(act, isKey);
+                HandleSaveChoiceActionPressed(self, act);
+            });
+        }
+
+        private static void HandleSaveChoiceActionPressed(SaveChoice self, int act)
+        {
+            if (act != CopyActionCode)
+                return;
+            if (_multiplayerSaveMenuKind != MultiplayerSaveMenuKind.MultiplayerSlots)
+                return;
+
+            try
+            {
+                TryBeginMultiplayerSaveImportSelection(self);
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod] Failed to handle multiplayer save import action: {Message}", ex.Message);
+            }
+        }
+
+        private static bool TryBeginMultiplayerSaveImportSelection(SaveChoice self)
+        {
+            if (_multiplayerSaveMenuKind != MultiplayerSaveMenuKind.MultiplayerSlots)
+                return false;
+            if (!TryGetSelectedSaveSlot(self, out var targetSlot))
+            {
+                _log?.Warning("[NetMod] Copy input detected but selected multiplayer slot could not be resolved.");
+                return false;
+            }
+
+            _multiplayerSaveImportTargetSlot = targetSlot;
+            _preferredMultiplayerSaveSlot = targetSlot;
+            _log?.Warning("[NetMod] Switching multiplayer save UI to original saves for target slot {Slot}.", targetSlot + 1);
+            SwitchSaveChoiceStore(self, MultiplayerSaveMenuKind.OriginalSourceSelection);
+            return true;
+        }
+
+        private static bool IsActionPressed(ControllerAccess? controllerAccess, int actionCode)
+        {
+            if (controllerAccess == null)
+                return false;
+            if (controllerAccess.manualLock)
+                return false;
+
+            var controller = controllerAccess.parent;
+            if (controller == null)
+                return false;
+            if (controller.isLocked)
+                return false;
+            if (controller.exclusiveId != null && controller.exclusiveId != controllerAccess.id)
+                return false;
+            if (!(GetCurrentUnixTimeSeconds() >= controller.suspendTimer))
+                return false;
+
+            return IsPressed(controller, controller.get_bindings().padA, actionCode, isGamepad: true) ||
+                   IsPressed(controller, controller.get_bindings().padB, actionCode, isGamepad: true) ||
+                   IsPressed(controller, controller.get_bindings().padC, actionCode, isGamepad: true) ||
+                   IsPressed(controller, controller.get_bindings().primary, actionCode, isGamepad: false) ||
+                   IsPressed(controller, controller.get_bindings().secondary, actionCode, isGamepad: false) ||
+                   IsPressed(controller, controller.get_bindings().third, actionCode, isGamepad: false);
+        }
+
+        private static bool IsLiteralXPressed()
+        {
+            return Key.Class.isPressed.Invoke(LiteralKeyboardXKeyCode);
+        }
+
+        private static bool IsPressed(Controller controller, ArrayBytes_Int? bindings, int actionCode, bool isGamepad)
+        {
+            var keyCode = GetBinding(bindings, actionCode);
+            if (keyCode < 0)
+                return false;
+
+            if (isGamepad)
+                return controller.padIsPressed(keyCode);
+
+            return (controller.mode & Controller.Class.ENABLE_KEY) != 0 && Key.Class.isPressed.Invoke(keyCode);
+        }
+
+        private static int GetBinding(ArrayBytes_Int? bindings, int actionCode)
+        {
+            if (bindings == null)
+                return -1;
+            if ((uint)actionCode >= (uint)bindings.length)
+                return 0;
+
+            return Marshal.ReadInt32(bindings.bytes, actionCode << 2);
+        }
+
+        private static double GetCurrentUnixTimeSeconds()
+        {
+            return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
+        }
+
+        private static void LogMultiplayerSaveInputBindingsOnce(SaveChoice self)
+        {
+            if (_multiplayerSaveInputDebugLogged)
+                return;
+
+            _multiplayerSaveInputDebugLogged = true;
+
+            var controller = self?.controller?.parent;
+            if (controller == null)
+            {
+                _log?.Warning("[NetMod] Multiplayer save menu input debug: controller is null.");
+                return;
+            }
+
+            _log?.Warning(
+                "[NetMod] Multiplayer save input active. Copy action bindings: padA={PadA}, padB={PadB}, padC={PadC}, primary={Primary}, secondary={Secondary}, third={Third}. Literal X key code={LiteralX}.",
+                GetBinding(controller.get_bindings().padA, CopyActionCode),
+                GetBinding(controller.get_bindings().padB, CopyActionCode),
+                GetBinding(controller.get_bindings().padC, CopyActionCode),
+                GetBinding(controller.get_bindings().primary, CopyActionCode),
+                GetBinding(controller.get_bindings().secondary, CopyActionCode),
+                GetBinding(controller.get_bindings().third, CopyActionCode),
+                LiteralKeyboardXKeyCode);
+        }
+
+        private static void EnsureValidSaveChoiceSelection(SaveChoice self)
+        {
+            var saves = self?.saves;
+            if (saves == null || saves.length <= 0)
+                return;
+
+            if (_multiplayerSaveMenuKind == MultiplayerSaveMenuKind.MultiplayerSlots)
+            {
+                TrySelectPreferredMultiplayerSlot(self);
+                return;
+            }
+
+            var targetIndex = self.curSaveId;
+            if (targetIndex < 0)
+                targetIndex = 0;
+            if (targetIndex >= saves.length)
+                targetIndex = saves.length - 1;
+
+            try
+            {
+                var instant = true;
+                self.select(targetIndex, Ref<bool>.From(ref instant));
+            }
+            catch
+            {
+                self.curSaveId = targetIndex;
+                self.moveSelection();
+                self.fControlLabel?.reflow();
+            }
         }
 
         private static void EnsureImportControlLabel(SaveChoice self)
@@ -414,6 +638,23 @@ namespace DeadCellsMultiplayerMod
             if (saves == null)
                 return;
 
+            if (targetSlot >= 0 && targetSlot < saves.length)
+            {
+                try
+                {
+                    var instant = true;
+                    self.select(targetSlot, Ref<bool>.From(ref instant));
+                }
+                catch
+                {
+                    self.curSaveId = targetSlot;
+                    self.moveSelection();
+                    self.fControlLabel?.reflow();
+                }
+
+                return;
+            }
+
             for (var i = 0; i < saves.length; i++)
             {
                 if (saves.array[i] is not SaveWindow window || window.si == null || window.si.index != targetSlot)
@@ -451,42 +692,69 @@ namespace DeadCellsMultiplayerMod
         private static bool TryGetSelectedSaveSlot(SaveChoice self, out int slot)
         {
             slot = 0;
-            if (!TryGetSelectedSaveWindow(self, out var window) || window?.si == null)
-                return false;
+            if (TryGetSelectedSaveWindow(self, out var window) && window?.si != null)
+            {
+                slot = window.si.index;
+                return slot >= 0;
+            }
 
-            slot = window.si.index;
-            return slot >= 0;
+            return TryGetSelectedSaveIndex(self, out slot);
         }
 
         private static bool TryGetSelectedSourceSaveSlot(SaveChoice self, out int slot)
         {
             slot = 0;
-            if (!TryGetSelectedSaveWindow(self, out var window) || window?.si == null)
-                return false;
-            if (!window.si.exists || !window.si.usable)
+            if (TryGetSelectedSaveWindow(self, out var window) && window?.si != null)
+            {
+                if (!window.si.exists || !window.si.usable)
+                    return false;
+
+                slot = window.si.index;
+                return slot >= 0;
+            }
+
+            if (!TryGetSelectedSaveIndex(self, out slot))
                 return false;
 
-            slot = window.si.index;
-            return slot >= 0;
+            return dc.tool.File.Class.exists.Invoke(MakeHLString(GetOriginalSaveRelativeFilePath(slot)));
+        }
+
+        private static bool TryGetSelectedSaveIndex(SaveChoice self, out int slot)
+        {
+            slot = 0;
+            var saves = self?.saves;
+            if (saves == null)
+                return false;
+
+            var selectedIndex = self.curSaveId;
+            if (selectedIndex < 0 || selectedIndex >= saves.length)
+                return false;
+
+            slot = selectedIndex;
+            return true;
         }
 
         private static bool CopyOriginalSaveIntoMultiplayerSlot(int sourceSlot, int targetSlot)
         {
-            var sourcePath = GetOriginalSaveFilePath(sourceSlot);
-            if (!IOFile.Exists(sourcePath))
-            {
-                _log?.Warning("[NetMod] No original save found for multiplayer import: {Path}", sourcePath);
-                return false;
-            }
-
-            var targetPath = GetMultiplayerSaveFilePath(targetSlot);
             try
             {
-                var targetDirectory = IOPath.GetDirectoryName(targetPath);
-                if (!string.IsNullOrWhiteSpace(targetDirectory))
-                    IODirectory.CreateDirectory(targetDirectory);
+                var sourceRelativePath = GetOriginalSaveRelativeFilePath(sourceSlot);
+                if (!dc.tool.File.Class.exists.Invoke(MakeHLString(sourceRelativePath)))
+                {
+                    _log?.Warning("[NetMod] No original save found for multiplayer import: {Path}", GetAbsoluteSavePath(sourceRelativePath));
+                    return false;
+                }
 
-                IOFile.Copy(sourcePath, targetPath, overwrite: true);
+                var sourceBytes = dc.tool.File.Class.getBytes.Invoke(MakeHLString(sourceRelativePath));
+                if (sourceBytes == null)
+                {
+                    _log?.Warning("[NetMod] Failed to read original save for multiplayer import: {Path}", GetAbsoluteSavePath(sourceRelativePath));
+                    return false;
+                }
+
+                EnsureMultiplayerSaveFolderExists();
+                var targetRelativePath = GetMultiplayerSaveRelativeFilePath(targetSlot);
+                dc.tool.File.Class.saveBytes.Invoke(MakeHLString(targetRelativePath), sourceBytes);
                 _log?.Information(
                     "[NetMod] Copied original save slot {SourceSlot} into multiplayer slot {TargetSlot}",
                     sourceSlot + 1,
