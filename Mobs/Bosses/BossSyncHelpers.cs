@@ -1,5 +1,6 @@
 using dc.en;
 using dc.en.mob;
+using DeadCellsMultiplayerMod;
 
 namespace DeadCellsMultiplayerMod.Mobs.Bosses;
 
@@ -32,8 +33,17 @@ public static class BossSyncHelpers
         if (mob == null || playerCount <= 1)
             return 1;
 
-        return IsBossMob(mob)
+        var baseMultiplier = IsBossMob(mob)
             ? 1 + (playerCount - 1) * BossSyncConstants.BossHpMultiplierPerPlayer
             : 1 + (playerCount - 1) * BossSyncConstants.RegularMobHpMultiplierPerPlayer;
+
+        var userMultiplier = IsBossMob(mob)
+            ? MultiplayerSettingsStorage.BossesHpMultiplier
+            : MultiplayerSettingsStorage.MobsHpMultiplier;
+
+        if (double.IsNaN(userMultiplier) || double.IsInfinity(userMultiplier) || userMultiplier <= 0)
+            userMultiplier = 1;
+
+        return baseMultiplier * userMultiplier;
     }
 }

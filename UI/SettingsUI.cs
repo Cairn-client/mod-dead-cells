@@ -1,5 +1,6 @@
 using System;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
+using DeadCellsMultiplayerMod.Mobs.MobsSynchronization;
 using dc.hl.types;
 using dc.ui;
 using HaxeProxy.Runtime;
@@ -15,14 +16,16 @@ public class SettingsUI :
     private const string MultiplayerSettingsButtonLabel = "Multiplayer settings";
     private const string MultiplayerSettingsMenuTitle = "Multiplayer settings";
     private const string MultiplayerSettingsBackLabel = "Back";
-    private const int ControlActionConfirm = 14;
-    private const int ControlActionQuit = 16;
+    private const string MobsSettingsHeaderLabel = "Mobs settings";
+    private const string MobsSyncToggleLabel = "Enable mobs sync";
+    private const string MobsInterpolationSliderLabel = "Mobs interpolation quality";
+    private const string MobsHpSliderLabel = "Mobs HP multiplier";
+    private const string BossesHpSliderLabel = "Bosses HP multiplier";
+    private const string VerticalSyncToggleLabel = "Sync vertical position";
+
     private static bool _hooksAttached;
-    private static bool _pendingMultiplayerMenuCreation;
-    private static int _multiplayerMenuOptionsId = -1;
-    private static int _sourceOptionsId = -1;
-    private static Options? _sourceOptions;
-    private static Options? _multiplayerOptions;
+    private static bool _isMultiplayerSettingsOpen;
+    private static int _multiplayerSettingsOptionsId = -1;
 
     private ModEntry mod { get; set; }
 
@@ -40,10 +43,8 @@ public class SettingsUI :
             return;
 
         Hook_Options.showMain += Hook_Options_showMain;
+        Hook_Options.showCredits += Hook_Options_showCredits;
         Hook_Options.onDispose += Hook_Options_onDispose;
-        Hook_OptionsBase.addSimpleWidget += Hook_OptionsBase_addSimpleWidget;
-        Hook_OptionsBase.onValidate += Hook_OptionsBase_onValidate;
-        Hook_OptionsBase.update += Hook_OptionsBase_update;
         Hook_OptionsBase.onQuit += Hook_OptionsBase_onQuit;
         _hooksAttached = true;
     }
@@ -56,12 +57,8 @@ public class SettingsUI :
             return;
         }
 
-        if (IsMultiplayerMenuInstance(self) || _pendingMultiplayerMenuCreation)
-        {
-            BindMultiplayerMenuInstance(self);
-            ShowMultiplayerSettingsMenu(self);
-            return;
-        }
+        if (IsMultiplayerSettingsContext(self))
+            ResetMenuState();
 
         try
         {
@@ -87,29 +84,35 @@ public class SettingsUI :
         orig(self);
     }
 
-    private void Hook_Options_onDispose(Hook_Options.orig_onDispose orig, Options self)
+    private void Hook_Options_showCredits(Hook_Options.orig_showCredits orig, Options self)
     {
-        bool wasSource = IsSourceOptionsInstance(self);
-        bool wasMultiplayerMenu = IsMultiplayerMenuInstance(self);
-
-        orig(self);
-
-        if (wasMultiplayerMenu)
+        if (!IsMultiplayerSettingsContext(self))
         {
-            ClearMultiplayerMenuState();
-            RestoreSourceOptionsUi();
+            orig(self);
+            return;
         }
 
-        if (!wasSource)
+        BuildMultiplayerSettingsSection(self);
+    }
+
+    private void Hook_Options_onDispose(Hook_Options.orig_onDispose orig, Options self)
+    {
+        bool wasMultiplayerSettings = IsMultiplayerSettingsContext(self);
+        orig(self);
+
+        if (wasMultiplayerSettings)
+            ResetMenuState();
+    }
+
+    private void Hook_OptionsBase_onQuit(Hook_OptionsBase.orig_onQuit orig, OptionsBase self)
+    {
+        if (self is Options options && IsMultiplayerSettingsContext(options))
+        {
+            CloseMultiplayerSettingsMenu(options);
             return;
+        }
 
-        _sourceOptionsId = -1;
-        _sourceOptions = null;
-
-        if (_multiplayerOptions != null && !_multiplayerOptions.destroyed)
-            _multiplayerOptions.destroy();
-
-        ClearMultiplayerMenuState();
+        orig(self);
     }
 
     private void OpenMultiplayerSettingsMenu(Options self)
@@ -119,39 +122,61 @@ public class SettingsUI :
             if (self == null || self.destroyed)
                 return;
 
-            if (_multiplayerOptions != null && !_multiplayerOptions.destroyed)
-                return;
-
-            _sourceOptions = self;
-            _sourceOptionsId = self.uniqId;
-
-            self.pause();
-            self.root?.set_visible(b: false);
-
-            _pendingMultiplayerMenuCreation = true;
-            _multiplayerOptions = new Options(null, new OptionsSection.S_Main(), false);
-            _multiplayerMenuOptionsId = _multiplayerOptions.uniqId;
-            _pendingMultiplayerMenuCreation = false;
+            _isMultiplayerSettingsOpen = true;
+            _multiplayerSettingsOptionsId = self.uniqId;
+            self.setSection(new OptionsSection.S_Credits());
         }
         catch (Exception ex)
         {
-            _pendingMultiplayerMenuCreation = false;
-            RestoreSourceOptionsUi();
+            ResetMenuState();
             mod.Logger.Warning(ex, "[NetMod] Failed to open multiplayer settings menu");
         }
     }
 
-    private void ShowMultiplayerSettingsMenu(Options self)
+    private void CloseMultiplayerSettingsMenu(Options self)
     {
         try
         {
-            ClearMultiplayerMenuWidgets(self);
+            MultiplayerSettingsStorage.Save();
+            ResetMenuState();
+
+            if (self != null && !self.destroyed)
+                self.setSection(new OptionsSection.S_Main());
+        }
+        catch (Exception ex)
+        {
+            mod.Logger.Warning(ex, "[NetMod] Failed to return to vanilla settings menu");
+        }
+    }
+
+    private static bool IsMultiplayerSettingsContext(Options self)
+    {
+        return _isMultiplayerSettingsOpen
+            && self != null
+            && !self.destroyed
+            && self.uniqId == _multiplayerSettingsOptionsId;
+    }
+
+    private static void ResetMenuState()
+    {
+        _isMultiplayerSettingsOpen = false;
+        _multiplayerSettingsOptionsId = -1;
+    }
+
+    private void BuildMultiplayerSettingsSection(Options self)
+    {
+        try
+        {
+            if (!IsMultiplayerSettingsContext(self))
+                return;
+
             self.title?.set_text(MultiplayerSettingsMenuTitle.AsHaxeString());
+            AddMobsSettingsWidgets(self);
 
             int leftPadding = 5;
             HlAction onBack = new HlAction(() =>
             {
-                CloseMultiplayerSettingsMenu();
+                CloseMultiplayerSettingsMenu(self);
             });
 
             self.addSimpleWidget(
@@ -160,8 +185,6 @@ public class SettingsUI :
                 onBack,
                 Ref<int>.From(ref leftPadding),
                 null);
-
-            FilterMultiplayerMenuControlHints(self);
         }
         catch (Exception ex)
         {
@@ -169,216 +192,130 @@ public class SettingsUI :
         }
     }
 
-    private void Hook_OptionsBase_onValidate(Hook_OptionsBase.orig_onValidate orig, OptionsBase self)
-    {
-        orig(self);
-        FilterMultiplayerMenuControlHints(self);
-    }
-
-    private void Hook_OptionsBase_update(Hook_OptionsBase.orig_update orig, OptionsBase self)
-    {
-        orig(self);
-        FilterMultiplayerMenuControlHints(self);
-    }
-
-    private void Hook_OptionsBase_onQuit(Hook_OptionsBase.orig_onQuit orig, OptionsBase self)
-    {
-        if (self is Options options && IsMultiplayerMenuInstance(options))
-        {
-            CloseMultiplayerSettingsMenu();
-            return;
-        }
-
-        orig(self);
-    }
-
-    private OptionWidget Hook_OptionsBase_addSimpleWidget(
-        Hook_OptionsBase.orig_addSimpleWidget orig,
-        OptionsBase self,
-        dc.String subStr,
-        dc.String onVal,
-        HlAction offsetX,
-        Ref<int> parentFlow,
-        dc.h2d.Flow offsetX2)
-    {
-        OptionWidget widget = orig(self, subStr, onVal, offsetX, parentFlow, offsetX2);
-
-        if (!ShouldSuppressForeignWidgetInMultiplayerMenu(self, subStr))
-            return widget;
-
-        try
-        {
-            if (widget?.parent != null)
-                widget.parent.removeChild(widget);
-
-            self.widgets?.remove(widget);
-        }
-        catch (Exception ex)
-        {
-            mod.Logger.Warning(ex, "[NetMod] Failed to filter modding button from multiplayer settings menu");
-        }
-
-        return widget!;
-    }
-
-    private void CloseMultiplayerSettingsMenu()
-    {
-        try
-        {
-            Options? menu = _multiplayerOptions;
-            if (menu != null && !menu.destroyed)
-                menu.destroy();
-
-            ClearMultiplayerMenuState();
-            RestoreSourceOptionsUi();
-        }
-        catch (Exception ex)
-        {
-            mod.Logger.Warning(ex, "[NetMod] Failed to return to vanilla settings menu");
-        }
-    }
-
-    private static bool IsMultiplayerMenuInstance(Options self)
-    {
-        return self != null && _multiplayerMenuOptionsId >= 0 && self.uniqId == _multiplayerMenuOptionsId;
-    }
-
-    private static bool IsSourceOptionsInstance(Options self)
-    {
-        return self != null && _sourceOptionsId >= 0 && self.uniqId == _sourceOptionsId;
-    }
-
-    private static void BindMultiplayerMenuInstance(Options self)
+    private void AddMobsSettingsWidgets(Options self)
     {
         if (self == null)
             return;
 
-        _multiplayerOptions = self;
-        _multiplayerMenuOptionsId = self.uniqId;
-        _pendingMultiplayerMenuCreation = false;
-    }
-
-    private static void ClearMultiplayerMenuState()
-    {
-        _pendingMultiplayerMenuCreation = false;
-        _multiplayerMenuOptionsId = -1;
-        _multiplayerOptions = null;
-    }
-
-    private static bool ShouldSuppressForeignWidgetInMultiplayerMenu(OptionsBase self, dc.String subStr)
-    {
-        if (self is not Options options || !IsMultiplayerMenuInstance(options))
-            return false;
-
-        string label = subStr?.ToString() ?? string.Empty;
-        return !IsAllowedMultiplayerMenuLabel(label);
-    }
-
-    private static bool IsAllowedMultiplayerMenuLabel(string label)
-    {
-        return string.Equals(label, MultiplayerSettingsBackLabel, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static void ClearMultiplayerMenuWidgets(Options self)
-    {
-        if (self == null)
+        dc.h2d.Flow? headerParent = self.mainFlow ?? self.scrollerFlow;
+        if (headerParent == null)
             return;
 
-        self.mainFlow?.removeChildren();
-        self.scrollerFlow?.removeChildren();
+        // Keep custom page widgets on main flow (non-scroller mode) to avoid null cbmpScroller.height paths.
+        dc.h2d.Flow? widgetParent = null;
 
-        ArrayObj? widgets = self.widgets;
-        if (widgets == null)
-            return;
+        self.addSeparator(MobsSettingsHeaderLabel.AsHaxeString(), headerParent);
 
-        for (int i = widgets.length - 1; i >= 0; i--)
+        bool enabledNow = MultiplayerSettingsStorage.EnableMobsSync;
+        self.addToggleWidget(
+            MobsSyncToggleLabel.AsHaxeString(),
+            null,
+            new HlFunc<bool>(ToggleMobsSyncSetting),
+            Ref<bool>.From(ref enabledNow),
+            widgetParent);
+
+        double interpolationValue = MultiplayerSettingsStorage.MobsInterpolationQuality;
+        double interpolationStep = 0.02;
+        bool interpolationPercentDisplay = true;
+        bool interpolationRawDisplay = false;
+        double interpolationMin = 0.20;
+        double interpolationMax = 1.00;
+
+        self.addSliderWidget(
+            MobsInterpolationSliderLabel.AsHaxeString(),
+            new HlAction<double>(OnMobsInterpolationSliderChanged),
+            interpolationValue,
+            Ref<double>.From(ref interpolationStep),
+            widgetParent,
+            Ref<bool>.From(ref interpolationPercentDisplay),
+            Ref<bool>.From(ref interpolationRawDisplay),
+            Ref<double>.From(ref interpolationMin),
+            Ref<double>.From(ref interpolationMax),
+            null,
+            Ref<int>.Null);
+
+        double mobsHpValue = MultiplayerSettingsStorage.MobsHpMultiplier;
+        double mobsHpStep = 0.10;
+        bool mobsHpPercentDisplay = false;
+        bool mobsHpRawDisplay = true;
+        double mobsHpMin = 0.25;
+        double mobsHpMax = 8.00;
+
+        self.addSliderWidget(
+            MobsHpSliderLabel.AsHaxeString(),
+            new HlAction<double>(OnMobsHpSliderChanged),
+            mobsHpValue,
+            Ref<double>.From(ref mobsHpStep),
+            widgetParent,
+            Ref<bool>.From(ref mobsHpPercentDisplay),
+            Ref<bool>.From(ref mobsHpRawDisplay),
+            Ref<double>.From(ref mobsHpMin),
+            Ref<double>.From(ref mobsHpMax),
+            null,
+            Ref<int>.Null);
+
+        double bossesHpValue = MultiplayerSettingsStorage.BossesHpMultiplier;
+        double bossesHpStep = 0.10;
+        bool bossesHpPercentDisplay = false;
+        bool bossesHpRawDisplay = true;
+        double bossesHpMin = 0.25;
+        double bossesHpMax = 8.00;
+
+        self.addSliderWidget(
+            BossesHpSliderLabel.AsHaxeString(),
+            new HlAction<double>(OnBossesHpSliderChanged),
+            bossesHpValue,
+            Ref<double>.From(ref bossesHpStep),
+            widgetParent,
+            Ref<bool>.From(ref bossesHpPercentDisplay),
+            Ref<bool>.From(ref bossesHpRawDisplay),
+            Ref<double>.From(ref bossesHpMin),
+            Ref<double>.From(ref bossesHpMax),
+            null,
+            Ref<int>.Null);
+
+        bool verticalSyncNow = MultiplayerSettingsStorage.SyncVerticalPosition;
+        self.addToggleWidget(
+            VerticalSyncToggleLabel.AsHaxeString(),
+            null,
+            new HlFunc<bool>(ToggleVerticalSyncSetting),
+            Ref<bool>.From(ref verticalSyncNow),
+            widgetParent);
+    }
+
+    private bool ToggleMobsSyncSetting()
+    {
+        bool enabled = !MultiplayerSettingsStorage.EnableMobsSync;
+        MultiplayerSettingsStorage.EnableMobsSync = enabled;
+
+        if (!enabled)
         {
-            if (widgets.getDyn(i) is OptionWidget widget && widget.parent != null)
-                widget.parent.removeChild(widget);
+            MobsSynchronization.ClearTrackingForLevelChange();
+            try { GameMenu.NetRef?.ClearMobSyncQueues(); } catch { }
         }
 
-        widgets.resize(0);
+        return enabled;
     }
 
-    private static void FilterMultiplayerMenuControlHints(OptionsBase self)
+    private static bool ToggleVerticalSyncSetting()
     {
-        if (self is not Options options || !IsMultiplayerMenuInstance(options))
-            return;
-
-        if (TitleScreenReflection.GetMemberValue(self, "fControlLabel", true) is not dc.h2d.Flow controlLabel)
-            return;
-
-        var children = controlLabel.children;
-        if (children == null)
-            return;
-
-        var changed = false;
-        for (var i = children.length - 1; i >= 0; i--)
-        {
-            if (children.array[i] is not ControlLabel label)
-                continue;
-
-            if (ShouldKeepMultiplayerControlHint(label))
-                continue;
-
-            controlLabel.removeChild(label);
-            changed = true;
-        }
-
-        if (changed)
-            controlLabel.reflow();
+        bool enabled = !MultiplayerSettingsStorage.SyncVerticalPosition;
+        MultiplayerSettingsStorage.SyncVerticalPosition = enabled;
+        return enabled;
     }
 
-    private static bool ShouldKeepMultiplayerControlHint(ControlLabel label)
+    private static void OnMobsInterpolationSliderChanged(double value)
     {
-        if (label == null)
-            return false;
-
-        return HasControlAction(label, ControlActionConfirm)
-            || HasControlAction(label, ControlActionQuit);
+        MultiplayerSettingsStorage.MobsInterpolationQuality = value;
     }
 
-    private static bool HasControlAction(ControlLabel label, int actionId)
+    private static void OnMobsHpSliderChanged(double value)
     {
-        ArrayObj? icons = label.icons;
-        if (icons == null)
-            return false;
-
-        for (int i = 0; i < icons.length; i++)
-        {
-            if (icons.getDyn(i) is not ControlIcon icon)
-                continue;
-
-            if ((icon.act ?? -1) == actionId)
-                return true;
-        }
-
-        return false;
+        MultiplayerSettingsStorage.MobsHpMultiplier = value;
     }
 
-    private void RestoreSourceOptionsUi()
+    private static void OnBossesHpSliderChanged(double value)
     {
-        Options? source = _sourceOptions;
-        if (source == null || source.destroyed)
-            return;
-
-        source.root?.set_visible(b: true);
-        source.resume();
-        RebuildMainSettingsSection(source);
-    }
-
-    private static void RebuildMainSettingsSection(Options self)
-    {
-        if (self == null)
-            return;
-
-        OptionsSection mainSection = self.mainSection;
-        if (!ReferenceEquals(mainSection, null))
-        {
-            self.setSection(mainSection);
-            return;
-        }
-
-        self.showMain();
+        MultiplayerSettingsStorage.BossesHpMultiplier = value;
     }
 }

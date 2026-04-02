@@ -328,6 +328,16 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         void IOnFrameUpdate.OnFrameUpdate(double dt)
         {
+            if (!MultiplayerSettingsStorage.EnableMobsSync)
+            {
+                lock (Sync)
+                {
+                    if (trackedMobs.Count > 0 || currentLevel != null)
+                        ResetMobTrackingLocked();
+                }
+                return;
+            }
+
             var net = GameMenu.NetRef;
             if (net == null || !net.IsAlive)
                 return;
@@ -2167,6 +2177,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static bool IsSyncMob(Mob? mob)
         {
+            if (!MultiplayerSettingsStorage.EnableMobsSync)
+                return false;
+
             if (mob == null)
                 return false;
 

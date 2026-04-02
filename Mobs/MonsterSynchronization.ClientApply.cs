@@ -30,7 +30,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (!preserveLocalMotion)
             {
-                var syncY = ClientSyncVerticalPosition;
+                var syncY = IsClientVerticalSyncEnabled();
                 try
                 {
                     if (!self.hasGravity)
@@ -42,9 +42,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 var currentX = GetWorldX(self);
                 var currentY = GetWorldY(self);
-                var lerpedX = currentX + (target.X - currentX) * ClientInterpolationAlpha;
+                var interpolationAlpha = GetClientInterpolationAlpha();
+                var lerpedX = currentX + (target.X - currentX) * interpolationAlpha;
                 var lerpedY = syncY
-                    ? currentY + (target.Y - currentY) * ClientInterpolationAlpha
+                    ? currentY + (target.Y - currentY) * interpolationAlpha
                     : currentY;
 
                 try

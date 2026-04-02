@@ -70,5 +70,19 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double AffectFramesPerSecond = 60.0;
         private const int ClientAffectSyncDefaultFrames = 21;
         private const int AffectTimeIncreaseThresholdFrames = 12;
+
+        private static double GetClientInterpolationAlpha()
+        {
+            var configured = MultiplayerSettingsStorage.MobsInterpolationQuality;
+            if (double.IsNaN(configured) || double.IsInfinity(configured))
+                return ClientInterpolationAlpha;
+
+            return System.Math.Clamp(configured, 0.20, 1.00);
+        }
+
+        private static bool IsClientVerticalSyncEnabled()
+        {
+            return ClientSyncVerticalPosition || MultiplayerSettingsStorage.SyncVerticalPosition;
+        }
     }
 }
