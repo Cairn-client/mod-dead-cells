@@ -77,9 +77,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static Level? currentLevel;
         private static Level? lastPlayerInterestLevel;
         private static double lastPlayerInterestFrame = double.NaN;
-        private static long lastClientMobDrawSendTick;
-        private static long lastClientStateSendTick;
-        private static long lastHostStateSendTick;
         private static int forceExactNemesisTargetDepth;
         private static int clientNetworkQueuedAttackDepth;
         private static Mob? clientNetworkQueuedAttackMob;
@@ -902,11 +899,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             var now = Stopwatch.GetTimestamp();
-            var stateRateHz = ComputeAdaptiveRateHz(HostStateSendRateHz, HostStateMinRateHz, trackedMobCount);
-            var minDelta = (long)(Stopwatch.Frequency / stateRateHz);
-            if (lastHostStateSendTick != 0 && now - lastHostStateSendTick < minDelta)
-                return;
-            lastHostStateSendTick = now;
 
             if (!TryCaptureTrackedMobsForBatch(out trackedMobCount))
                 return;
@@ -950,11 +942,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             var now = Stopwatch.GetTimestamp();
-            var stateRateHz = ComputeAdaptiveRateHz(ClientStateSendRateHz, ClientStateMinRateHz, trackedMobCount);
-            var minDelta = (long)(Stopwatch.Frequency / stateRateHz);
-            if (lastClientStateSendTick != 0 && now - lastClientStateSendTick < minDelta)
-                return;
-            lastClientStateSendTick = now;
 
             if (!TryCaptureTrackedMobsForBatch(out trackedMobCount))
                 return;
@@ -1108,24 +1095,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                    string.Equals(a.AnimPayload, b.AnimPayload, StringComparison.Ordinal) &&
                    string.Equals(a.Type, b.Type, StringComparison.Ordinal) &&
                    string.Equals(a.StatePayload, b.StatePayload, StringComparison.Ordinal);
-        }
-
-        private static double ComputeAdaptiveRateHz(double baseRateHz, double minRateHz, int trackedMobCount)
-        {
-            if (trackedMobCount <= AdaptiveRateStartMobCount)
-                return baseRateHz;
-
-            if (trackedMobCount >= AdaptiveRateEndMobCount)
-                return minRateHz;
-
-            var range = AdaptiveRateEndMobCount - AdaptiveRateStartMobCount;
-            if (range <= 0)
-                return minRateHz;
-
-            var clamped = System.Math.Max(0, trackedMobCount - AdaptiveRateStartMobCount);
-            var t = clamped / (double)range;
-            var adaptive = baseRateHz - ((baseRateHz - minRateHz) * t);
-            return System.Math.Max(minRateHz, adaptive);
         }
 
         private static double ComputeAdaptiveHostPayloadRefreshSeconds(int trackedMobCount)
@@ -2009,9 +1978,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             currentLevel = null;
             lastPlayerInterestLevel = null;
             lastPlayerInterestFrame = double.NaN;
-            lastClientMobDrawSendTick = 0;
-            lastClientStateSendTick = 0;
-            lastHostStateSendTick = 0;
         }
 
         private static void RemoveTrackedMobLocked(Mob mob)
@@ -3893,11 +3859,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             var now = Stopwatch.GetTimestamp();
-            var drawRateHz = ComputeAdaptiveRateHz(ClientMobDrawSendRateHz, ClientMobDrawMinRateHz, trackedMobCount);
-            var minDelta = (long)(Stopwatch.Frequency / drawRateHz);
-            if (lastClientMobDrawSendTick != 0 && now - lastClientMobDrawSendTick < minDelta)
-                return;
-            lastClientMobDrawSendTick = now;
             var keepAliveTicks = (long)(Stopwatch.Frequency * ClientDrawKeepAliveSeconds);
             if (!TryCaptureTrackedMobsForBatch(out _))
                 return;
@@ -3930,9 +3891,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     continue;
                 }
 
-                // Only send MOBDRAW when mob is still in-level (!isOutOfGame) or off-screen (!isOnScreen).
-                // Skip culled-but-still-flagged-on-screen (rare); host does not need draw packets in that case.
-                if (isOutOfGame && !isOnScreen)
+                if (isOutOfGame || !isOnScreen)
                     continue;
 
                 var shouldSend = false;

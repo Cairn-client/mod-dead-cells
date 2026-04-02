@@ -2,12 +2,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 {
     public partial class MobsSynchronization
     {
-        private const double ClientMobDrawSendRateHz = 20.0;
-        private const double ClientStateSendRateHz = 18.0;
-        private const double HostStateSendRateHz = 20.0;
-        private const double ClientMobDrawMinRateHz = 6.0;
-        private const double ClientStateMinRateHz = 7.0;
-        private const double HostStateMinRateHz = 8.0;
         private const int AdaptiveRateStartMobCount = 32;
         private const int AdaptiveRateEndMobCount = 160;
         private const double HostPayloadRefreshBaseSeconds = 0.45;
