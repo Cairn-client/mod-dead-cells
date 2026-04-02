@@ -42,6 +42,7 @@ using dc.en.mob.boss;
 using Steamworks;
 using System.Reflection;
 using DeadCellsMultiplayerMod.Interaction;
+using DeadCellsMultiplayerMod.UI;
 
 
 namespace DeadCellsMultiplayerMod
@@ -702,6 +703,7 @@ namespace DeadCellsMultiplayerMod
             MultiplayerModLang modLang = new MultiplayerModLang(this);
             CineHooks CineHooks = new CineHooks();
             MultiplayerUI MultiplayerUI = new MultiplayerUI(this, 0);
+            SettingsUI settingsUI = new SettingsUI(this);
             Levelinit levelinit = new Levelinit(info);
             MobsSynchronization mobs = new MobsSynchronization(this);
             Minimapreveal minimapreveal = new Minimapreveal();
