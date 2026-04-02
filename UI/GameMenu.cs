@@ -1579,7 +1579,7 @@ namespace DeadCellsMultiplayerMod
             ForceExitToMainMenu();
         }
 
-        private static string Localize(string message)
+        internal static string Localize(string message)
         {
             return GetText.Instance.GetString(message);
         }

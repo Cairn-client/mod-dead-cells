@@ -302,3 +302,87 @@ msgstr "Выберите сохранение для копирования"
 
 msgid "Saved games"
 msgstr "Сохранения"
+
+#: SettingsUI.cs
+msgid "Multiplayer settings"
+msgstr "Настройки мультиплеера"
+
+#: SettingsUI.cs
+msgid "Enable mobs sync"
+msgstr "Включить синхронизацию мобов"
+
+#: SettingsUI.cs
+msgid "Mobs interpolation quality"
+msgstr "Качество интерполяции мобов"
+
+#: SettingsUI.cs
+msgid "Mobs HP multiplier"
+msgstr "Множитель HP мобов"
+
+#: SettingsUI.cs
+msgid "Bosses HP multiplier"
+msgstr "Множитель HP боссов"
+
+#: SettingsUI.cs
+msgid "Sync vertical position"
+msgstr "Синхронизировать вертикальную позицию"
+
+#: SettingsUI.cs
+msgid "Module: language"
+msgstr "Модуль: язык"
+
+#: SettingsUI.cs
+msgid "Module: cinematics hooks"
+msgstr "Модуль: кат-сцены"
+
+#: SettingsUI.cs
+msgid "Module: multiplayer UI"
+msgstr "Модуль: UI мультиплеера"
+
+#: SettingsUI.cs
+msgid "Module: level init"
+msgstr "Модуль: инициализация уровня"
+
+#: SettingsUI.cs
+msgid "Module: mobs sync"
+msgstr "Модуль: синхронизация мобов"
+
+#: SettingsUI.cs
+msgid "Module: minimap reveal"
+msgstr "Модуль: раскрытие миникарты"
+
+#: SettingsUI.cs
+msgid "Module: level exit sync"
+msgstr "Модуль: синхронизация выходов"
+
+#: SettingsUI.cs
+msgid "Module: interaction sync"
+msgstr "Модуль: синхронизация взаимодействий"
+
+#: SettingsUI.cs
+msgid "Module: connection UI"
+msgstr "Модуль: UI подключения"
+
+#: SettingsUI.cs
+msgid "Module"
+msgstr "Модуль"
+
+#: SettingsUI.cs
+msgid "Player immortal"
+msgstr "Бессмертие игрока"
+
+#: SettingsUI.cs
+msgid "Use Explorer's Rune"
+msgstr "Руна следопыта"
+
+#: SettingsUI.cs
+msgid "Start perk"
+msgstr "Стартовый перк"
+
+#: SettingsUI.cs
+msgid "Previous perk"
+msgstr "Предыдущий перк"
+
+#: SettingsUI.cs
+msgid "Next perk"
+msgstr "Следующий перк"

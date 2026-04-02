@@ -306,3 +306,87 @@ msgstr "选择要复制的原始存档"
 
 msgid "Saved games"
 msgstr "已保存的游戏"
+
+#: SettingsUI.cs
+msgid "Multiplayer settings"
+msgstr "多人游戏设置"
+
+#: SettingsUI.cs
+msgid "Enable mobs sync"
+msgstr "启用怪物同步"
+
+#: SettingsUI.cs
+msgid "Mobs interpolation quality"
+msgstr "怪物插值质量"
+
+#: SettingsUI.cs
+msgid "Mobs HP multiplier"
+msgstr "小怪生命值倍率"
+
+#: SettingsUI.cs
+msgid "Bosses HP multiplier"
+msgstr "Boss 生命值倍率"
+
+#: SettingsUI.cs
+msgid "Sync vertical position"
+msgstr "同步垂直位置"
+
+#: SettingsUI.cs
+msgid "Module: language"
+msgstr "模块：语言"
+
+#: SettingsUI.cs
+msgid "Module: cinematics hooks"
+msgstr "模块：剧情动画钩子"
+
+#: SettingsUI.cs
+msgid "Module: multiplayer UI"
+msgstr "模块：多人 UI"
+
+#: SettingsUI.cs
+msgid "Module: level init"
+msgstr "模块：关卡初始化"
+
+#: SettingsUI.cs
+msgid "Module: mobs sync"
+msgstr "模块：怪物同步"
+
+#: SettingsUI.cs
+msgid "Module: minimap reveal"
+msgstr "模块：地图全开"
+
+#: SettingsUI.cs
+msgid "Module: level exit sync"
+msgstr "模块：出口同步"
+
+#: SettingsUI.cs
+msgid "Module: interaction sync"
+msgstr "模块：交互同步"
+
+#: SettingsUI.cs
+msgid "Module: connection UI"
+msgstr "模块：连接 UI"
+
+#: SettingsUI.cs
+msgid "Module"
+msgstr "模块"
+
+#: SettingsUI.cs
+msgid "Player immortal"
+msgstr "玩家无敌"
+
+#: SettingsUI.cs
+msgid "Use Explorer's Rune"
+msgstr "使用探险家符文"
+
+#: SettingsUI.cs
+msgid "Start perk"
+msgstr "起始变异"
+
+#: SettingsUI.cs
+msgid "Previous perk"
+msgstr "上一个变异"
+
+#: SettingsUI.cs
+msgid "Next perk"
+msgstr "下一个变异"

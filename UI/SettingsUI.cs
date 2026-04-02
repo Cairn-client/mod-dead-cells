@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using DeadCellsMultiplayerMod;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using DeadCellsMultiplayerMod.Mobs.MobsSynchronization;
 using dc.hl.types;
@@ -14,22 +15,6 @@ public class SettingsUI :
     IEventReceiver,
     IOnAdvancedModuleInitializing
 {
-    private const string MultiplayerSettingsButtonLabel = "Multiplayer settings";
-    private const string MultiplayerSettingsMenuTitle = "Multiplayer settings";
-    private const string MultiplayerSettingsBackLabel = "Back";
-    private const string MobsSettingsHeaderLabel = "Mobs settings";
-    private const string MobsSyncToggleLabel = "Enable mobs sync";
-    private const string MobsInterpolationSliderLabel = "Mobs interpolation quality";
-    private const string MobsHpSliderLabel = "Mobs HP multiplier";
-    private const string BossesHpSliderLabel = "Bosses HP multiplier";
-    private const string VerticalSyncToggleLabel = "Sync vertical position";
-    private const string DebugSettingsHeaderLabel = "Debug";
-    private const string DebugImmortalToggleLabel = "Player immortal";
-    private const string DebugUseExplorersRuneToggleLabel = "Use Explorer's Rune";
-    private const string DebugPerkCurrentLabel = "Start perk";
-    private const string DebugPerkPreviousLabel = "Previous perk";
-    private const string DebugPerkNextLabel = "Next perk";
-
     private static bool _hooksAttached;
     private static bool _isMultiplayerSettingsOpen;
     private static int _multiplayerSettingsOptionsId = -1;
@@ -42,29 +27,17 @@ public class SettingsUI :
         "P_Vengeance"
     };
 
-    private readonly struct DebugModuleEntry
+    private static readonly DebugModuleId[] DebugModuleOrder =
     {
-        public readonly DebugModuleId Id;
-        public readonly string Label;
-
-        public DebugModuleEntry(DebugModuleId id, string label)
-        {
-            Id = id;
-            Label = label;
-        }
-    }
-
-    private static readonly DebugModuleEntry[] DebugModuleEntries =
-    {
-        new(DebugModuleId.MultiplayerModLang, "Module: language"),
-        new(DebugModuleId.CineHooks, "Module: cinematics hooks"),
-        new(DebugModuleId.MultiplayerUI, "Module: multiplayer UI"),
-        new(DebugModuleId.LevelInit, "Module: level init"),
-        new(DebugModuleId.MobsSynchronization, "Module: mobs sync"),
-        new(DebugModuleId.MinimapReveal, "Module: minimap reveal"),
-        new(DebugModuleId.LevelExitSync, "Module: level exit sync"),
-        new(DebugModuleId.InteractionSync, "Module: interaction sync"),
-        new(DebugModuleId.ConnectionUI, "Module: connection UI")
+        DebugModuleId.MultiplayerModLang,
+        DebugModuleId.CineHooks,
+        DebugModuleId.MultiplayerUI,
+        DebugModuleId.LevelInit,
+        DebugModuleId.MobsSynchronization,
+        DebugModuleId.MinimapReveal,
+        DebugModuleId.LevelExitSync,
+        DebugModuleId.InteractionSync,
+        DebugModuleId.ConnectionUI
     };
 
     private ModEntry mod { get; set; }
@@ -112,7 +85,7 @@ public class SettingsUI :
 
             // Insert before vanilla entries so it appears at the top.
             self.addSimpleWidget(
-                MultiplayerSettingsButtonLabel.AsHaxeString(),
+                GameMenu.Localize("Multiplayer settings").AsHaxeString(),
                 null,
                 onSelect,
                 Ref<int>.From(ref leftPadding),
@@ -188,7 +161,7 @@ public class SettingsUI :
             if (!IsMultiplayerSettingsContext(self))
                 return;
 
-            self.title?.set_text(MultiplayerSettingsMenuTitle.AsHaxeString());
+            self.title?.set_text(GameMenu.Localize("Multiplayer settings").AsHaxeString());
             self.createScroller(0.0);
 
             var widgetParent = self.scrollerFlow;
@@ -206,7 +179,7 @@ public class SettingsUI :
             });
 
             self.addSimpleWidget(
-                MultiplayerSettingsBackLabel.AsHaxeString(),
+                GameMenu.Localize("Back").AsHaxeString(),
                 null,
                 onBack,
                 Ref<int>.From(ref leftPadding),
@@ -227,7 +200,7 @@ public class SettingsUI :
 
         bool enabledNow = MultiplayerSettingsStorage.EnableMobsSync;
         self.addToggleWidget(
-            MobsSyncToggleLabel.AsHaxeString(),
+            GameMenu.Localize("Enable mobs sync").AsHaxeString(),
             null,
             new HlFunc<bool>(ToggleMobsSyncSetting),
             Ref<bool>.From(ref enabledNow),
@@ -241,7 +214,7 @@ public class SettingsUI :
         double interpolationMax = 1.00;
 
         self.addSliderWidget(
-            MobsInterpolationSliderLabel.AsHaxeString(),
+            GameMenu.Localize("Mobs interpolation quality").AsHaxeString(),
             new HlAction<double>(OnMobsInterpolationSliderChanged),
             interpolationValue,
             Ref<double>.From(ref interpolationStep),
@@ -261,7 +234,7 @@ public class SettingsUI :
         double mobsHpMax = 8.00;
 
         self.addSliderWidget(
-            MobsHpSliderLabel.AsHaxeString(),
+            GameMenu.Localize("Mobs HP multiplier").AsHaxeString(),
             new HlAction<double>(OnMobsHpSliderChanged),
             mobsHpValue,
             Ref<double>.From(ref mobsHpStep),
@@ -281,7 +254,7 @@ public class SettingsUI :
         double bossesHpMax = 8.00;
 
         self.addSliderWidget(
-            BossesHpSliderLabel.AsHaxeString(),
+            GameMenu.Localize("Bosses HP multiplier").AsHaxeString(),
             new HlAction<double>(OnBossesHpSliderChanged),
             bossesHpValue,
             Ref<double>.From(ref bossesHpStep),
@@ -295,11 +268,28 @@ public class SettingsUI :
 
         bool verticalSyncNow = MultiplayerSettingsStorage.SyncVerticalPosition;
         self.addToggleWidget(
-            VerticalSyncToggleLabel.AsHaxeString(),
+            GameMenu.Localize("Sync vertical position").AsHaxeString(),
             null,
             new HlFunc<bool>(ToggleVerticalSyncSetting),
             Ref<bool>.From(ref verticalSyncNow),
             widgetParent);
+    }
+
+    private static string GetDebugModuleToggleLabel(DebugModuleId id)
+    {
+        return id switch
+        {
+            DebugModuleId.MultiplayerModLang => GameMenu.Localize("Module: language"),
+            DebugModuleId.CineHooks => GameMenu.Localize("Module: cinematics hooks"),
+            DebugModuleId.MultiplayerUI => GameMenu.Localize("Module: multiplayer UI"),
+            DebugModuleId.LevelInit => GameMenu.Localize("Module: level init"),
+            DebugModuleId.MobsSynchronization => GameMenu.Localize("Module: mobs sync"),
+            DebugModuleId.MinimapReveal => GameMenu.Localize("Module: minimap reveal"),
+            DebugModuleId.LevelExitSync => GameMenu.Localize("Module: level exit sync"),
+            DebugModuleId.InteractionSync => GameMenu.Localize("Module: interaction sync"),
+            DebugModuleId.ConnectionUI => GameMenu.Localize("Module: connection UI"),
+            _ => GameMenu.Localize("Module")
+        };
     }
 
     private void AddDebugSettingsWidgets(Options self, dc.h2d.Flow widgetParent)
@@ -307,13 +297,11 @@ public class SettingsUI :
         if (!MultiplayerSettingsStorage.IsDebugSectionEnabled || self == null || widgetParent == null)
             return;
 
-        for (int i = 0; i < DebugModuleEntries.Length; i++)
+        foreach (var moduleId in DebugModuleOrder)
         {
-            var moduleEntry = DebugModuleEntries[i];
-            var moduleId = moduleEntry.Id;
             bool enabledNow = MultiplayerSettingsStorage.IsModuleEnabled(moduleId);
             self.addToggleWidget(
-                moduleEntry.Label.AsHaxeString(),
+                GetDebugModuleToggleLabel(moduleId).AsHaxeString(),
                 null,
                 new HlFunc<bool>(() => ToggleModuleSetting(moduleId)),
                 Ref<bool>.From(ref enabledNow),
@@ -322,7 +310,7 @@ public class SettingsUI :
 
         bool immortalNow = MultiplayerSettingsStorage.DebugPlayerImmortal;
         self.addToggleWidget(
-            DebugImmortalToggleLabel.AsHaxeString(),
+            GameMenu.Localize("Player immortal").AsHaxeString(),
             null,
             new HlFunc<bool>(ToggleDebugImmortalSetting),
             Ref<bool>.From(ref immortalNow),
@@ -330,7 +318,7 @@ public class SettingsUI :
 
         bool explorersRuneNow = MultiplayerSettingsStorage.DebugUseExplorersRune;
         self.addToggleWidget(
-            DebugUseExplorersRuneToggleLabel.AsHaxeString(),
+            GameMenu.Localize("Use Explorer's Rune").AsHaxeString(),
             null,
             new HlFunc<bool>(ToggleDebugUseExplorersRuneSetting),
             Ref<bool>.From(ref explorersRuneNow),
@@ -342,21 +330,21 @@ public class SettingsUI :
 
         int leftPadding = 5;
         self.addSimpleWidget(
-            DebugPerkCurrentLabel.AsHaxeString(),
+            GameMenu.Localize("Start perk").AsHaxeString(),
             selectedPerk.AsHaxeString(),
             new HlAction(() => { }),
             Ref<int>.From(ref leftPadding),
             widgetParent);
 
         self.addSimpleWidget(
-            DebugPerkPreviousLabel.AsHaxeString(),
+            GameMenu.Localize("Previous perk").AsHaxeString(),
             null,
             new HlAction(() => CycleDebugStartPerk(self, -1)),
             Ref<int>.From(ref leftPadding),
             widgetParent);
 
         self.addSimpleWidget(
-            DebugPerkNextLabel.AsHaxeString(),
+            GameMenu.Localize("Next perk").AsHaxeString(),
             null,
             new HlAction(() => CycleDebugStartPerk(self, +1)),
             Ref<int>.From(ref leftPadding),
