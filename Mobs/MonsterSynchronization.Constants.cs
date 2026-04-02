@@ -2,10 +2,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 {
     public partial class MobsSynchronization
     {
-        private const double HostPayloadRefreshSeconds = 0.85;
+        private const double HostPayloadRefreshSeconds = 0.72;
         private const double ClientAffectSampleSeconds = 0.40;
         private const double ClientAffectResendSeconds = 0.675;
-        private const double ClientAnimPayloadRefreshSeconds = 0.55;
+        private const double ClientAnimPayloadRefreshSeconds = 0.38;
         private const int ParsedAnimPayloadCacheLimit = 1024;
         private const double ClientDrawKeepAliveSeconds = 0.9;
         private const double ClientInterpolationAlpha = 0.62;
