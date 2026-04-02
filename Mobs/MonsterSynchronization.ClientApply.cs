@@ -245,12 +245,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             var safePayload = payload ?? string.Empty;
             var nowTick = Stopwatch.GetTimestamp();
-            var refreshTicks = (long)(Stopwatch.Frequency * ClientAnimPayloadRefreshSeconds);
             lock (Sync)
             {
                 if (clientLastAppliedAnimPayloadByLocalIndex.TryGetValue(localIndex, out var lastApplied) &&
                     string.Equals(lastApplied.Payload, safePayload, StringComparison.Ordinal) &&
-                    nowTick - lastApplied.Tick < refreshTicks)
+                    ElapsedSeconds(lastApplied.Tick, nowTick) < ClientAnimPayloadRefreshSeconds)
                 {
                     return;
                 }
