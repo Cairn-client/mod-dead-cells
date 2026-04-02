@@ -95,10 +95,11 @@ namespace DeadCellsMultiplayerMod
         private ItemMetaManager? _debugExplorerRuneInjectedMeta;
         private bool _debugExplorerRuneInjectedByDebug;
         private const string ExplorerRunePermanentItemId = "ExploKey";
-        /// <summary>Last successful minimap reveal signature (level + branch); cleared on level/wakeup and periodically.</summary>
+        /// <summary>Last successful minimap reveal signature (level + branch); cleared on level/wakeup.</summary>
         private string _debugExplorerRevealAppliedSignature = string.Empty;
         private long _nextDebugExplorerRevealRetryTick;
-        private long _lastDebugExplorerRevealSuccessTicks;
+        private int _debugExplorerRevealAllCount;
+        private const int MaxDebugExplorerRevealAllCalls = 3;
 
         private string? _lastAnimSent;
         private int? _lastAnimQueueSent;
@@ -395,7 +396,7 @@ namespace DeadCellsMultiplayerMod
             _debugExplorerRuneInjectedByDebug = false;
             _debugExplorerRevealAppliedSignature = string.Empty;
             _nextDebugExplorerRevealRetryTick = 0;
-            _lastDebugExplorerRevealSuccessTicks = 0;
+            _debugExplorerRevealAllCount = 0;
             TryEnsureSteamApiInitialized("OnGameEndInit", logFailure: true);
             TryParseConnectLobbyFromCommandLine();
         }
@@ -1308,7 +1309,6 @@ namespace DeadCellsMultiplayerMod
 
             _debugExplorerRevealAppliedSignature = string.Empty;
             _nextDebugExplorerRevealRetryTick = 0;
-            _lastDebugExplorerRevealSuccessTicks = 0;
         }
 
 
@@ -1317,7 +1317,6 @@ namespace DeadCellsMultiplayerMod
             me = self;
             try { me._targetable = true; } catch { }
             _debugExplorerRevealAppliedSignature = string.Empty;
-            _lastDebugExplorerRevealSuccessTicks = 0;
             orig(self, lvl, cx, cy);
             EnsureHeroVisibilityAfterRoomChange(me);
             SendCurrentRoomTarget(force: true);
@@ -2616,21 +2615,15 @@ namespace DeadCellsMultiplayerMod
                 _debugExplorerRuneInjectedMeta = null;
                 _debugExplorerRevealAppliedSignature = string.Empty;
                 _nextDebugExplorerRevealRetryTick = 0;
-                _lastDebugExplorerRevealSuccessTicks = 0;
             }
         }
 
         private void TryRevealAllMinimapForDebugExplorerRune(Hero hero)
         {
-            var now = Stopwatch.GetTimestamp();
+            if (_debugExplorerRevealAllCount >= MaxDebugExplorerRevealAllCalls)
+                return;
 
-            // Fog / minimap state can reset without changing level id (rooms, transitions, HUD).
-            const double refreshIntervalSec = 2.5;
-            if (_lastDebugExplorerRevealSuccessTicks != 0 &&
-                now - _lastDebugExplorerRevealSuccessTicks > (long)(Stopwatch.Frequency * refreshIntervalSec))
-            {
-                _debugExplorerRevealAppliedSignature = string.Empty;
-            }
+            var now = Stopwatch.GetTimestamp();
 
             var sig = GetDebugExplorerRevealSignature(hero);
             if (!string.IsNullOrWhiteSpace(sig) &&
@@ -2660,6 +2653,7 @@ namespace DeadCellsMultiplayerMod
                 }
 
                 minimap.revealAll();
+                _debugExplorerRevealAllCount++;
                 try { minimap.forceRenderRooms(); } catch { }
                 try { minimap.invalidateMinimap(); } catch { }
 
@@ -2669,7 +2663,6 @@ namespace DeadCellsMultiplayerMod
                 if (!string.IsNullOrWhiteSpace(sig))
                     _debugExplorerRevealAppliedSignature = sig;
 
-                _lastDebugExplorerRevealSuccessTicks = now;
                 _nextDebugExplorerRevealRetryTick = 0;
             }
             catch
