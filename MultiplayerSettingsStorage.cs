@@ -21,7 +21,7 @@ public sealed class MultiplayerSettingsData
 {
     public bool EnableMobsSync { get; set; } = true;
 
-    public double MobsInterpolationQuality { get; set; } = 0.62;
+    public double MobsInterpolationQuality { get; set; } = 0.20;
 
     public double MobsHpMultiplier { get; set; } = 1.0;
 
