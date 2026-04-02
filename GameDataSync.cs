@@ -637,8 +637,10 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
+            int? previousRemote = null;
             lock (_bossRuneLock)
             {
+                previousRemote = _remoteBossRune;
                 _remoteBossRune = bossRune;
             }
             _hasRemoteBossRune = true;
@@ -647,7 +649,8 @@ namespace DeadCellsMultiplayerMod
             if (net != null && net.IsHost)
                 return;
 
-            MarkPendingBossRuneReload(bossRune);
+            if (!previousRemote.HasValue || previousRemote.Value != bossRune)
+                MarkPendingBossRuneReload(bossRune);
             // _log?.Information("[NetMod] Received remote boss rune {BossRune}", bossRune);
 
             GameMenu.EnqueueMainThread(() =>

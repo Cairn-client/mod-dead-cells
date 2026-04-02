@@ -910,7 +910,17 @@ namespace DeadCellsMultiplayerMod
                 ReferenceEquals(lp, me))
             {
                 try { SendCurrentRoomTarget(force: true); } catch { }
-                try { ReceiveGhostCoords(); } catch (Exception ex) { Logger.Warning(ex, "[NetMod] ReceiveGhostCoords failed"); }
+                GameMenu.EnqueueMainThread(() =>
+                {
+                    try
+                    {
+                        ReceiveGhostCoords();
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Warning(ex, "[NetMod] ReceiveGhostCoords failed after door activate");
+                    }
+                });
             }
         }
 
@@ -1186,7 +1196,11 @@ namespace DeadCellsMultiplayerMod
                     GameDataSync.SendLevelGraph(graphLevelId, root, graph, rng, _net);
                     var activeUser = user ?? game?.user ?? dc.Main.Class.ME?.user;
                     if (activeUser != null)
-                        GameDataSync.SendBossRune(activeUser, _net);
+                    {
+                        var currentRune = GameDataSync.GetBossRuneInt(activeUser);
+                        if (!GameDataSync.TryGetHostBossRune(out var lastSent) || lastSent != currentRune)
+                            GameDataSync.SendBossRune(activeUser, _net);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1305,7 +1319,17 @@ namespace DeadCellsMultiplayerMod
             }
 
             DrainRemoteCombatQueuesAfterLevelChange();
-            ReceiveGhostCoords();
+            GameMenu.EnqueueMainThread(() =>
+            {
+                try
+                {
+                    ReceiveGhostCoords();
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warning(ex, "[NetMod] ReceiveGhostCoords failed after level change");
+                }
+            });
 
             _debugExplorerRevealAppliedSignature = string.Empty;
             _nextDebugExplorerRevealRetryTick = 0;
