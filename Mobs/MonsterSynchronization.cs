@@ -54,6 +54,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<string, ParsedAnimPayload> parsedAnimPayloadCache = new(StringComparer.Ordinal);
         private static readonly Dictionary<int, string> hostMobTypeBySyncId = new();
         private static readonly Dictionary<int, long> hostLastStateEvalTickBySyncId = new();
+        private static readonly Dictionary<int, long> hostLastStateSentTickBySyncId = new();
         private static readonly Dictionary<int, HostMobSentState> hostLastSentMobStatesBySyncId = new();
         private static readonly Dictionary<int, CachedHostMobPayload> hostCachedPayloadBySyncId = new();
         private static readonly Dictionary<int, long> hostAttackRetargetLockUntilTick = new();
@@ -74,8 +75,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static int suppressMobHitSendDepth;
 
         private static Level? currentLevel;
-        private static Level? lastHostStateDeltaPumpLevel;
-        private static double lastHostStateDeltaPumpFrame = double.NaN;
         private static Level? lastPlayerInterestLevel;
         private static double lastPlayerInterestFrame = double.NaN;
         private static long lastClientMobDrawSendTick;
@@ -88,6 +87,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<int, long> clientLastNetworkAttackTickByLocalIndex = new();
         private static readonly HashSet<Mob> clientPendingSuppressedBossDies = new(ReferenceEqualityComparer.Instance);
         private static int authoritativeClientBossDieDepth;
+        private const string MobSyncWorkerDisableEnv = "DCCM_MOB_SYNC_WORKER";
+        private const string MobSyncAsyncInProcEnv = "DCCM_MOB_SYNC_ASYNC_INPROC";
 
         private readonly struct QueuedOldSkillMarker
         {
@@ -263,6 +264,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
+        private enum HostMobSyncPriority
+        {
+            Active,
+            MidRange,
+            FarRange,
+            Dormant
+        }
+
         private readonly struct ClientDrawSentState
         {
             public readonly bool IsOutOfGame;
@@ -303,6 +312,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             s_hooksInstalled = true;
             entry.Logger.Information("\x1b[32m[[ModEntry.MobsSynchronization] Initializing MobsSynchronization...]\x1b[0m ");
+            try
+            {
+                // Keep mob encoding in-process by default; worker process can increase overhead under heavy mob counts.
+                Environment.SetEnvironmentVariable(MobSyncWorkerDisableEnv, "0");
+                Environment.SetEnvironmentVariable(MobSyncAsyncInProcEnv, "0");
+            }
+            catch
+            {
+            }
 
             Hook_Level.entitiesPostCreate += Hook_Level_entitiesPostCreate;
             Hook_Level.registerEntity += Hook_Level_registerEntity;
@@ -354,6 +372,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 ConsumeIncomingMobDraws(net);
                 ConsumeIncomingMobDies(net);
                 ConsumeIncomingMobHits(net);
+                if (hasTrackedMobs)
+                    TrySendHostMobStateDeltaBatchPreUpdate(net);
                 return;
             }
 
@@ -468,8 +488,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             orig(self);
 
-            if (isHost && isSyncMob && ShouldRunHostStateDeltaPumpForFrame(self))
-                TrySendHostMobStateDeltaBatchPreUpdate(net!);
         }
 
         private void Hook_Mob_fixedupdate(Hook_Mob.orig_fixedUpdate orig, Mob self)
@@ -912,7 +930,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     s_batchSnapshotsScratch.Add(snapshot);
             }
 
-            // Encoding/sending may offload to MobSyncWorker (see NetNode.SendMobStates); DCCM_MOB_SYNC_WORKER=0 forces in-process.
+            // Mob sync encoding is in-process.
             if (s_batchSnapshotsScratch.Count > 0)
                 net.SendMobStates(s_batchSnapshotsScratch);
         }
@@ -1013,12 +1031,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             HostMobSentState previous;
             var hadPrevious = false;
+            var lastSentTick = 0L;
             CachedHostMobPayload cachedPayload = default;
             var hasCachedPayload = false;
 
             lock (Sync)
             {
                 hadPrevious = hostLastSentMobStatesBySyncId.TryGetValue(mobSyncId, out previous);
+                hostLastStateSentTickBySyncId.TryGetValue(mobSyncId, out lastSentTick);
                 hasCachedPayload = hostCachedPayloadBySyncId.TryGetValue(mobSyncId, out cachedPayload);
             }
 
@@ -1049,12 +1069,26 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             var current = new HostMobSentState(x, y, dir, life, maxLife, animPayload, mobType, statePayload);
-            if (hadPrevious && HostMobSentStateEquals(previous, current))
+            var positionEpsilon = GetHostStatePositionEpsilon(mob);
+            if (hadPrevious && HostMobSentStateEquals(previous, current, positionEpsilon))
+            {
+                if (lastSentTick != 0 && nowTick - lastSentTick < (long)(Stopwatch.Frequency * 3.0))
+                    return false;
+            }
+            else if (GetHostMobSyncPriority(mob) == HostMobSyncPriority.Dormant &&
+                     hadPrevious &&
+                     life == previous.Life &&
+                     maxLife == previous.MaxLife &&
+                     lastSentTick != 0 &&
+                     nowTick - lastSentTick < (long)(Stopwatch.Frequency * 1.1))
+            {
                 return false;
+            }
 
             lock (Sync)
             {
                 hostLastSentMobStatesBySyncId[mobSyncId] = current;
+                hostLastStateSentTickBySyncId[mobSyncId] = nowTick;
                 if (!hasCachedPayload)
                     hostCachedPayloadBySyncId[mobSyncId] = new CachedHostMobPayload(animPayload, mobType, statePayload, nowTick);
             }
@@ -1063,10 +1097,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return true;
         }
 
-        private static bool HostMobSentStateEquals(HostMobSentState a, HostMobSentState b)
+        private static bool HostMobSentStateEquals(HostMobSentState a, HostMobSentState b, double positionEpsilon)
         {
-            return IsApproximatelyEqual(a.X, b.X, MobStatePositionEpsilon) &&
-                   IsApproximatelyEqual(a.Y, b.Y, MobStatePositionEpsilon) &&
+            var posEpsilon = positionEpsilon <= 0.0 ? MobStatePositionEpsilon : positionEpsilon;
+            return IsApproximatelyEqual(a.X, b.X, posEpsilon) &&
+                   IsApproximatelyEqual(a.Y, b.Y, posEpsilon) &&
                    a.Dir == b.Dir &&
                    a.Life == b.Life &&
                    a.MaxLife == b.MaxLife &&
@@ -1317,27 +1352,47 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static double GetHostMobStateEvalSeconds(Mob mob, int trackedMobCount)
+        private static HostMobSyncPriority GetHostMobSyncPriority(Mob? mob)
         {
             if (mob == null)
-                return ComputeAdaptiveHostDormantStateEvalSeconds(trackedMobCount);
+                return HostMobSyncPriority.Dormant;
             if (BossSyncHelpers.IsBossMob(mob) || HasValidLivingPlayerCombatTarget(mob))
-                return 0.0;
+                return HostMobSyncPriority.Active;
 
             var hasDistance = TryGetNearestPlayerDistanceSq(mob, out var distanceSq);
-            if (hasDistance && distanceSq <= MobSyncNearDistanceSq)
-                return 0.0;
+            TryGetMobVisibilityState(mob, out var isOnScreen, out var isOutOfGame, out var onScreenRecent);
 
-            TryGetMobVisibilityState(mob, out _, out var isOutOfGame, out _);
-            TryCanMobUpdate(mob, out var canUpdate);
+            if (isOnScreen || onScreenRecent > 0.0 || !isOutOfGame)
+                return HostMobSyncPriority.Active;
+            if (hasDistance && distanceSq <= MobSyncDistanceSq)
+                return HostMobSyncPriority.Active;
+            if (hasDistance)
+                return HostMobSyncPriority.MidRange;
 
-            if ((hasDistance && distanceSq <= MobSyncMidDistanceSq) || canUpdate || !isOutOfGame)
-                return ComputeAdaptiveHostFarStateEvalSeconds(trackedMobCount);
+            return HostMobSyncPriority.FarRange;
+        }
 
-            if (hasDistance && distanceSq <= MobSyncFarDistanceSq)
-                return ComputeAdaptiveHostDormantStateEvalSeconds(trackedMobCount);
+        private static double GetHostStatePositionEpsilon(Mob mob)
+        {
+            var priority = GetHostMobSyncPriority(mob);
+            return priority switch
+            {
+                HostMobSyncPriority.Active => MobStatePositionEpsilon,
+                HostMobSyncPriority.MidRange => HostMobStateMidPositionEpsilon,
+                HostMobSyncPriority.FarRange => HostMobStateFarPositionEpsilon,
+                _ => HostMobStateDormantPositionEpsilon
+            };
+        }
 
-            return ComputeAdaptiveHostDormantStateEvalSeconds(trackedMobCount) * 1.35;
+        private static double GetHostMobStateEvalSeconds(Mob mob, int trackedMobCount)
+        {
+            return GetHostMobSyncPriority(mob) switch
+            {
+                HostMobSyncPriority.Active => 0.0,
+                HostMobSyncPriority.MidRange => ComputeAdaptiveHostFarStateEvalSeconds(trackedMobCount),
+                HostMobSyncPriority.FarRange => ComputeAdaptiveHostDormantStateEvalSeconds(trackedMobCount),
+                _ => ComputeAdaptiveHostDormantStateEvalSeconds(trackedMobCount) * 1.6
+            };
         }
 
         private static double GetClientMobAffectEvalSeconds(Mob mob, int trackedMobCount)
@@ -1348,19 +1403,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return 0.0;
 
             var hasDistance = TryGetNearestPlayerDistanceSq(mob, out var distanceSq);
-            if (hasDistance && distanceSq <= MobSyncNearDistanceSq)
+            TryGetMobVisibilityState(mob, out var isOnScreen, out var isOutOfGame, out var onScreenRecent);
+
+            if (isOnScreen || onScreenRecent > 0.0 || !isOutOfGame || (hasDistance && distanceSq <= MobSyncDistanceSq))
                 return 0.0;
-
-            TryGetMobVisibilityState(mob, out var isOnScreen, out var isOutOfGame, out _);
-            TryCanMobUpdate(mob, out var canUpdate);
-
-            if (isOnScreen || (hasDistance && distanceSq <= MobSyncMidDistanceSq) || canUpdate || !isOutOfGame)
+            if (hasDistance)
                 return ComputeAdaptiveClientFarAffectEvalSeconds(trackedMobCount);
 
-            if (hasDistance && distanceSq <= MobSyncFarDistanceSq)
-                return ComputeAdaptiveClientDormantAffectEvalSeconds(trackedMobCount);
-
-            return ComputeAdaptiveClientDormantAffectEvalSeconds(trackedMobCount) * 1.4;
+            return ComputeAdaptiveClientDormantAffectEvalSeconds(trackedMobCount) * 1.6;
         }
 
         private static double GetClientMobDrawEvalSeconds(Mob mob, int trackedMobCount)
@@ -1371,14 +1421,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var hasDistance = TryGetNearestPlayerDistanceSq(mob, out var distanceSq);
             TryGetMobVisibilityState(mob, out var isOnScreen, out var isOutOfGame, out _);
 
-            if (isOnScreen || HasValidLivingPlayerCombatTarget(mob) || (hasDistance && distanceSq <= MobSyncNearDistanceSq))
+            if (isOnScreen || HasValidLivingPlayerCombatTarget(mob) || (hasDistance && distanceSq <= MobDrawNearDistanceSq))
                 return 0.0;
 
-            if ((hasDistance && distanceSq <= MobSyncMidDistanceSq) || !isOutOfGame)
+            // MOBDRAW uses only 2 distance bands now: near and far.
+            if ((hasDistance && distanceSq <= MobSyncDistanceSq) || !isOutOfGame)
                 return ComputeAdaptiveClientFarDrawEvalSeconds(trackedMobCount);
-
-            if (hasDistance && distanceSq <= MobSyncFarDistanceSq)
-                return ComputeAdaptiveClientDormantDrawEvalSeconds(trackedMobCount);
 
             return ComputeAdaptiveClientDormantDrawEvalSeconds(trackedMobCount) * 1.35;
         }
@@ -1952,14 +2000,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             parsedAnimPayloadCache.Clear();
             hostMobTypeBySyncId.Clear();
             hostLastStateEvalTickBySyncId.Clear();
+            hostLastStateSentTickBySyncId.Clear();
             hostLastSentMobStatesBySyncId.Clear();
             hostCachedPayloadBySyncId.Clear();
             hostQueuedOldSkillMarkers.Clear();
             hostDetectedTargets.Clear();
             s_playerInterestPointsScratch.Clear();
             currentLevel = null;
-            lastHostStateDeltaPumpLevel = null;
-            lastHostStateDeltaPumpFrame = double.NaN;
             lastPlayerInterestLevel = null;
             lastPlayerInterestFrame = double.NaN;
             lastClientMobDrawSendTick = 0;
@@ -2028,6 +2075,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             clientLastAppliedHostAffectPayloadBySyncId.Remove(syncId);
             hostMobTypeBySyncId.Remove(syncId);
             hostLastStateEvalTickBySyncId.Remove(syncId);
+            hostLastStateSentTickBySyncId.Remove(syncId);
             hostLastSentMobStatesBySyncId.Remove(syncId);
             hostCachedPayloadBySyncId.Remove(syncId);
         }
@@ -2709,26 +2757,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static bool ShouldRunHostStateDeltaPumpForFrame(Mob mob)
-        {
-            var level = mob._level ?? currentLevel;
-            if (level == null)
-                return true;
-
-            var frame = level.ftime;
-            lock (Sync)
-            {
-                if (!ReferenceEquals(lastHostStateDeltaPumpLevel, level) || lastHostStateDeltaPumpFrame != frame)
-                {
-                    lastHostStateDeltaPumpLevel = level;
-                    lastHostStateDeltaPumpFrame = frame;
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
         private static void TryAssignHostAttackTarget(Mob mob)
         {
             if (mob == null)
@@ -2832,7 +2860,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 isOutOfGame &&
                 !canUpdate &&
                 double.IsFinite(distanceSq) &&
-                distanceSq > MobSyncFarDistanceSq)
+                distanceSq > MobSyncDistanceSq)
             {
                 return true;
             }
@@ -3902,17 +3930,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     continue;
                 }
 
-                if (!isOnScreen && isOutOfGame)
-                {
-                    if (hero?.spr == null)
-                        continue;
-
-                    var dx = GetSyncX(mob) - hero.spr.x;
-                    var dy = GetSyncY(mob) - hero.spr.y;
-                    var distSq = dx * dx + dy * dy;
-                    if (distSq > MaxCoordinateMatchDistanceSq * 400.0)
-                        continue;
-                }
+                // Only send MOBDRAW when mob is still in-level (!isOutOfGame) or off-screen (!isOnScreen).
+                // Skip culled-but-still-flagged-on-screen (rare); host does not need draw packets in that case.
+                if (isOutOfGame && !isOnScreen)
+                    continue;
 
                 var shouldSend = false;
                 lock (Sync)

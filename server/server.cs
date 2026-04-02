@@ -3981,9 +3981,6 @@ public sealed partial class NetNode : IDisposable
         if (states == null || states.Count == 0)
             return;
 
-        if (MobSyncWorkerBridge.TryEnqueueMobStates(this, states))
-            return;
-
         var line = MobWireCodec.BuildMobStatesLine(states);
         _ = SendLineSafe(line);
     }
@@ -4036,9 +4033,6 @@ public sealed partial class NetNode : IDisposable
         if (!HasAnyConnection())
             return;
         if (updates == null || updates.Count == 0)
-            return;
-
-        if (MobSyncWorkerBridge.TryEnqueueMobEvents(this, updates))
             return;
 
         var line = MobWireCodec.BuildMobEventsLine(updates);
@@ -4099,9 +4093,6 @@ public sealed partial class NetNode : IDisposable
         if (ID <= 0)
             return;
         if (draws == null || draws.Count == 0)
-            return;
-
-        if (MobSyncWorkerBridge.TryEnqueueMobDrawBatch(this, draws))
             return;
 
         var line = MobWireCodec.BuildMobDrawLine(draws);
@@ -4901,10 +4892,5 @@ public sealed partial class NetNode : IDisposable
         }
         catch { }
 
-        try
-        {
-            MobSyncWorkerBridge.StopSingleton();
-        }
-        catch { }
     }
 }

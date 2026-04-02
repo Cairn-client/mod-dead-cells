@@ -92,6 +92,13 @@ namespace DeadCellsMultiplayerMod
         private string _debugPerkAppliedId = string.Empty;
         private string _lastDebugPerkApplyErrorId = string.Empty;
         private long _nextDebugPerkApplyTick;
+        private ItemMetaManager? _debugExplorerRuneInjectedMeta;
+        private bool _debugExplorerRuneInjectedByDebug;
+        private const string ExplorerRunePermanentItemId = "ExploKey";
+        /// <summary>Last successful minimap reveal signature (level + branch); cleared on level/wakeup and periodically.</summary>
+        private string _debugExplorerRevealAppliedSignature = string.Empty;
+        private long _nextDebugExplorerRevealRetryTick;
+        private long _lastDebugExplorerRevealSuccessTicks;
 
         private string? _lastAnimSent;
         private int? _lastAnimQueueSent;
@@ -384,6 +391,11 @@ namespace DeadCellsMultiplayerMod
             _debugPerkAppliedId = string.Empty;
             _lastDebugPerkApplyErrorId = string.Empty;
             _nextDebugPerkApplyTick = 0;
+            _debugExplorerRuneInjectedMeta = null;
+            _debugExplorerRuneInjectedByDebug = false;
+            _debugExplorerRevealAppliedSignature = string.Empty;
+            _nextDebugExplorerRevealRetryTick = 0;
+            _lastDebugExplorerRevealSuccessTicks = 0;
             TryEnsureSteamApiInitialized("OnGameEndInit", logFailure: true);
             TryParseConnectLobbyFromCommandLine();
         }
@@ -1293,6 +1305,10 @@ namespace DeadCellsMultiplayerMod
 
             DrainRemoteCombatQueuesAfterLevelChange();
             ReceiveGhostCoords();
+
+            _debugExplorerRevealAppliedSignature = string.Empty;
+            _nextDebugExplorerRevealRetryTick = 0;
+            _lastDebugExplorerRevealSuccessTicks = 0;
         }
 
 
@@ -1300,6 +1316,8 @@ namespace DeadCellsMultiplayerMod
         {
             me = self;
             try { me._targetable = true; } catch { }
+            _debugExplorerRevealAppliedSignature = string.Empty;
+            _lastDebugExplorerRevealSuccessTicks = 0;
             orig(self, lvl, cx, cy);
             EnsureHeroVisibilityAfterRoomChange(me);
             SendCurrentRoomTarget(force: true);
@@ -2470,6 +2488,7 @@ namespace DeadCellsMultiplayerMod
             }
 
             TryApplyDebugStartPerk(hero);
+            TryApplyDebugExplorerRune(hero);
         }
 
         private void TryApplyDebugStartPerk(Hero hero)
@@ -2523,6 +2542,173 @@ namespace DeadCellsMultiplayerMod
                 _lastDebugPerkApplyErrorId = perkId;
                 Logger.Warning(ex, "[NetMod] Failed to apply debug start perk {PerkId}", perkId);
             }
+        }
+
+        private void TryApplyDebugExplorerRune(Hero hero)
+        {
+            if (hero == null)
+                return;
+
+            ItemMetaManager? itemMeta = null;
+            try
+            {
+                var user = hero._level?.game?.user ?? game?.user ?? dc.pr.Game.Class.ME?.user;
+                if (user == null)
+                    return;
+
+                itemMeta = user.itemMeta ?? new ItemMetaManager(user);
+                itemMeta.itemProgress ??= (ArrayObj)ArrayUtils.CreateDyn().array;
+                itemMeta.permanentItems ??= (ArrayObj)ArrayUtils.CreateDyn().array;
+                user.itemMeta = itemMeta;
+            }
+            catch
+            {
+                return;
+            }
+
+            if (itemMeta == null)
+                return;
+
+            if (MultiplayerSettingsStorage.DebugUseExplorersRune)
+            {
+                try
+                {
+                    var runeKey = ExplorerRunePermanentItemId.AsHaxeString();
+                    if (!itemMeta.hasPermanentItem(runeKey))
+                    {
+                        if (itemMeta.addPermanentItem(runeKey))
+                        {
+                            _debugExplorerRuneInjectedByDebug = true;
+                            _debugExplorerRuneInjectedMeta = itemMeta;
+                        }
+                    }
+                }
+                catch
+                {
+                }
+
+                TryRevealAllMinimapForDebugExplorerRune(hero);
+
+                return;
+            }
+
+            if (!_debugExplorerRuneInjectedByDebug)
+                return;
+
+            try
+            {
+                var runeKey = ExplorerRunePermanentItemId.AsHaxeString();
+                var targetMeta = _debugExplorerRuneInjectedMeta ?? itemMeta;
+                var permanentItems = targetMeta?.permanentItems;
+                if (permanentItems != null)
+                {
+                    while (permanentItems.remove(runeKey))
+                    {
+                    }
+                }
+            }
+            catch
+            {
+            }
+            finally
+            {
+                _debugExplorerRuneInjectedByDebug = false;
+                _debugExplorerRuneInjectedMeta = null;
+                _debugExplorerRevealAppliedSignature = string.Empty;
+                _nextDebugExplorerRevealRetryTick = 0;
+                _lastDebugExplorerRevealSuccessTicks = 0;
+            }
+        }
+
+        private void TryRevealAllMinimapForDebugExplorerRune(Hero hero)
+        {
+            var now = Stopwatch.GetTimestamp();
+
+            // Fog / minimap state can reset without changing level id (rooms, transitions, HUD).
+            const double refreshIntervalSec = 2.5;
+            if (_lastDebugExplorerRevealSuccessTicks != 0 &&
+                now - _lastDebugExplorerRevealSuccessTicks > (long)(Stopwatch.Frequency * refreshIntervalSec))
+            {
+                _debugExplorerRevealAppliedSignature = string.Empty;
+            }
+
+            var sig = GetDebugExplorerRevealSignature(hero);
+            if (!string.IsNullOrWhiteSpace(sig) &&
+                string.Equals(_debugExplorerRevealAppliedSignature, sig, StringComparison.Ordinal))
+                return;
+
+            if (_nextDebugExplorerRevealRetryTick != 0 && now < _nextDebugExplorerRevealRetryTick)
+                return;
+
+            try
+            {
+                var feedback = false;
+                try
+                {
+                    // Match the native game flow: reveal rooms + refresh minimap trackers.
+                    hero.triggerExplorerInstinct(Ref<bool>.From(ref feedback));
+                }
+                catch
+                {
+                }
+
+                var minimap = hero._level?.game?.hud?.minimap ?? dc.ui.HUD.Class.ME?.minimap;
+                if (minimap == null)
+                {
+                    _nextDebugExplorerRevealRetryTick = now + (long)(Stopwatch.Frequency * 0.05);
+                    return;
+                }
+
+                minimap.revealAll();
+                try { minimap.forceRenderRooms(); } catch { }
+                try { minimap.invalidateMinimap(); } catch { }
+
+                if (string.IsNullOrWhiteSpace(sig))
+                    sig = GetDebugExplorerRevealSignature(hero);
+
+                if (!string.IsNullOrWhiteSpace(sig))
+                    _debugExplorerRevealAppliedSignature = sig;
+
+                _lastDebugExplorerRevealSuccessTicks = now;
+                _nextDebugExplorerRevealRetryTick = 0;
+            }
+            catch
+            {
+                _nextDebugExplorerRevealRetryTick = now + (long)(Stopwatch.Frequency * 0.25);
+            }
+        }
+
+        /// <summary>Level id + branch token so we re-reveal after room/sub-level changes with the same map id.</summary>
+        private string GetDebugExplorerRevealSignature(Hero hero)
+        {
+            if (TryGetCurrentVisibilityContext(out var levelId, out var branch) && branch >= 0 &&
+                !string.IsNullOrWhiteSpace(levelId))
+                return $"{levelId.Trim()}|{branch}";
+
+            var fallback = GetDebugExplorerRevealLevelKey(hero);
+            if (!string.IsNullOrWhiteSpace(fallback))
+                return $"{fallback.Trim()}|0";
+
+            return string.Empty;
+        }
+
+        private string GetDebugExplorerRevealLevelKey(Hero hero)
+        {
+            try
+            {
+                var levelFromHero = hero?._level?.map?.id?.ToString();
+                if (!string.IsNullOrWhiteSpace(levelFromHero))
+                    return levelFromHero.Trim();
+            }
+            catch
+            {
+            }
+
+            var currentLevelId = GetCurrentLevelId();
+            if (!string.IsNullOrWhiteSpace(currentLevelId))
+                return currentLevelId.Trim();
+
+            return string.Empty;
         }
 
         private void UpdateGhostHeads()

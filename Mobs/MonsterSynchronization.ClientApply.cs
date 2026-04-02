@@ -128,7 +128,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return true;
             }
 
-            return TryGetNearestPlayerDistanceSq(mob, out var distanceSq) && distanceSq <= MobSyncMidDistanceSq;
+            return TryGetNearestPlayerDistanceSq(mob, out var distanceSq) && distanceSq <= MobSyncDistanceSq;
         }
 
         private static void ApplyAuthoritativeLifeState(Mob mob, int targetLife, int targetMaxLife)

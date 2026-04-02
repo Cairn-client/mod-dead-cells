@@ -49,6 +49,8 @@ public sealed class MultiplayerSettingsData
 
     public bool DebugPlayerImmortal { get; set; } = false;
 
+    public bool DebugUseExplorersRune { get; set; } = false;
+
     public string DebugStartPerkId { get; set; } = MultiplayerSettingsStorage.NoStartPerkValue;
 }
 
@@ -201,6 +203,27 @@ public static class MultiplayerSettingsStorage
                     return;
 
                 data.DebugPlayerImmortal = value;
+                SaveUnsafe();
+            }
+        }
+    }
+
+    public static bool DebugUseExplorersRune
+    {
+        get
+        {
+            lock (SyncRoot)
+                return EnsureDataNormalizedUnsafe().DebugUseExplorersRune;
+        }
+        set
+        {
+            lock (SyncRoot)
+            {
+                var data = EnsureDataNormalizedUnsafe();
+                if (data.DebugUseExplorersRune == value)
+                    return;
+
+                data.DebugUseExplorersRune = value;
                 SaveUnsafe();
             }
         }

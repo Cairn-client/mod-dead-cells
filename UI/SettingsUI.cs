@@ -25,6 +25,7 @@ public class SettingsUI :
     private const string VerticalSyncToggleLabel = "Sync vertical position";
     private const string DebugSettingsHeaderLabel = "Debug";
     private const string DebugImmortalToggleLabel = "Player immortal";
+    private const string DebugUseExplorersRuneToggleLabel = "Use Explorer's Rune";
     private const string DebugPerkCurrentLabel = "Start perk";
     private const string DebugPerkPreviousLabel = "Previous perk";
     private const string DebugPerkNextLabel = "Next perk";
@@ -224,8 +225,6 @@ public class SettingsUI :
         if (self == null || widgetParent == null)
             return;
 
-        self.addSeparator(MobsSettingsHeaderLabel.AsHaxeString(), widgetParent);
-
         bool enabledNow = MultiplayerSettingsStorage.EnableMobsSync;
         self.addToggleWidget(
             MobsSyncToggleLabel.AsHaxeString(),
@@ -308,8 +307,6 @@ public class SettingsUI :
         if (!MultiplayerSettingsStorage.IsDebugSectionEnabled || self == null || widgetParent == null)
             return;
 
-        self.addSeparator(DebugSettingsHeaderLabel.AsHaxeString(), widgetParent);
-
         for (int i = 0; i < DebugModuleEntries.Length; i++)
         {
             var moduleEntry = DebugModuleEntries[i];
@@ -329,6 +326,14 @@ public class SettingsUI :
             null,
             new HlFunc<bool>(ToggleDebugImmortalSetting),
             Ref<bool>.From(ref immortalNow),
+            widgetParent);
+
+        bool explorersRuneNow = MultiplayerSettingsStorage.DebugUseExplorersRune;
+        self.addToggleWidget(
+            DebugUseExplorersRuneToggleLabel.AsHaxeString(),
+            null,
+            new HlFunc<bool>(ToggleDebugUseExplorersRuneSetting),
+            Ref<bool>.From(ref explorersRuneNow),
             widgetParent);
 
         var perkChoices = BuildDebugPerkChoices();
@@ -486,6 +491,13 @@ public class SettingsUI :
     {
         var enabled = !MultiplayerSettingsStorage.DebugPlayerImmortal;
         MultiplayerSettingsStorage.DebugPlayerImmortal = enabled;
+        return enabled;
+    }
+
+    private static bool ToggleDebugUseExplorersRuneSetting()
+    {
+        var enabled = !MultiplayerSettingsStorage.DebugUseExplorersRune;
+        MultiplayerSettingsStorage.DebugUseExplorersRune = enabled;
         return enabled;
     }
 
