@@ -5181,7 +5181,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (createFromHeroAndHit != null)
                 {
                     _ = createFromHeroAndHit(null, damage, null, mob);
-                    if (mob.destroyed || GetMobLifeOrFallback(mob, 1) <= 0)
+                    if (TryFinalizeHostMobDeath(mob))
                         return;
                 }
 
@@ -5193,23 +5193,58 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     if (attack != null)
                     {
                         hit(attack, mob);
-                        if (mob.destroyed || GetMobLifeOrFallback(mob, 1) <= 0)
+                        if (TryFinalizeHostMobDeath(mob))
                             return;
                     }
                 }
 
-                if (!mob.destroyed)
-                {
-                    mob.life = 0;
-                    mob.onDie();
+                if (TryFinalizeHostMobDeath(mob))
                     return;
-                }
 
+                // Last-resort force; some bosses need explicit life zero before onDie branching.
                 mob.life = 0;
+                TryFinalizeHostMobDeath(mob);
             }
             catch (Exception ex)
             {
                 Log.Warning(ex, "[MobsSync] Host boss finishing hit replay failed");
+            }
+        }
+
+        private static bool TryFinalizeHostMobDeath(Mob mob)
+        {
+            if (mob == null)
+                return true;
+
+            try
+            {
+                if (mob.destroyed)
+                    return true;
+            }
+            catch
+            {
+            }
+
+            var life = GetMobLifeOrFallback(mob, 1);
+            if (life > 0)
+                return false;
+
+            try
+            {
+                mob.life = 0;
+                mob.onDie();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                return mob.destroyed || GetMobLifeOrFallback(mob, 1) <= 0;
+            }
+            catch
+            {
+                return true;
             }
         }
 
