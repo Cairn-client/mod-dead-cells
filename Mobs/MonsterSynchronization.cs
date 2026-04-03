@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -90,6 +91,32 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static double s_distanceSqCacheFrameKey = double.NaN;
         private static readonly Dictionary<int, double> s_localIndexToNearestDistanceSq = new();
+        private static double s_lastPruneFrame = double.NaN;
+
+        /// <summary>Per-type eligibility cache so IsSyncMob never allocates a string on the hot per-frame path.</summary>
+        private static readonly ConcurrentDictionary<System.Type, bool> s_syncMobTypeCache = new();
+
+        /// <summary>Thread-local reuse buffer for single-element string[] event arrays; avoids per-event GC allocation.</summary>
+        [ThreadStatic]
+        private static string[]? s_singleEventBuf;
+
+        /// <summary>Thread-local reuse buffer for single-element MobEventUpdate[] arrays; avoids per-send GC allocation.</summary>
+        [ThreadStatic]
+        private static NetNode.MobEventUpdate[]? s_singleUpdateBuf;
+
+        private static string[] SingleEvent(string ev)
+        {
+            var buf = s_singleEventBuf ??= new string[1];
+            buf[0] = ev;
+            return buf;
+        }
+
+        private static NetNode.MobEventUpdate[] SingleUpdate(NetNode.MobEventUpdate update)
+        {
+            var buf = s_singleUpdateBuf ??= new NetNode.MobEventUpdate[1];
+            buf[0] = update;
+            return buf;
+        }
 
         private static double ElapsedSeconds(long startTimestamp, long endTimestamp) =>
             Stopwatch.GetElapsedTime(startTimestamp, endTimestamp).TotalSeconds;
@@ -613,9 +640,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (shouldSendDie && dieNet != null && dieNet.IsAlive && dieSyncId >= 0)
             {
-                var update = new NetNode.MobEventUpdate(dieSyncId, dieX, dieY, 0, new[] { "die" });
-                MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(dieNet), new[] { update });
-                dieNet.SendMobEvents(new[] { update });
+                var update = new NetNode.MobEventUpdate(dieSyncId, dieX, dieY, 0, SingleEvent("die"));
+                MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(dieNet), SingleUpdate(update));
+                dieNet.SendMobEvents(SingleUpdate(update));
             }
 
             lock (Sync)
@@ -707,9 +734,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     var hx = GetWorldX(self);
                     var hy = GetWorldY(self);
                     var hitEvent = $"hit|{life.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
-                    var update = new NetNode.MobEventUpdate(mobSyncId, hx, hy, NormalizeDir(self.dir), new[] { hitEvent });
-                    MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(net), new[] { update });
-                    net.SendMobEvents(new[] { update });
+                    var update = new NetNode.MobEventUpdate(mobSyncId, hx, hy, NormalizeDir(self.dir), SingleEvent(hitEvent));
+                    MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(net), SingleUpdate(update));
+                    net.SendMobEvents(SingleUpdate(update));
                 }
 
                 if (IsClient(net))
@@ -748,9 +775,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     }
 
                     var clientHitEvent = $"hit|{life.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
-                    var clientUpdate = new NetNode.MobEventUpdate(mobSyncId, x, y, 0, new[] { clientHitEvent });
-                    MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(net), new[] { clientUpdate });
-                    net.SendMobEvents(new[] { clientUpdate });
+                    var clientUpdate = new NetNode.MobEventUpdate(mobSyncId, x, y, 0, SingleEvent(clientHitEvent));
+                    MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(net), SingleUpdate(clientUpdate));
+                    net.SendMobEvents(SingleUpdate(clientUpdate));
                 }
             }
             finally
@@ -987,17 +1014,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     continue;
                 if (!IsMobOnScreenForSync(mob))
                     continue;
-                var forceAnimTransitionSend = ShouldForceHostAnimStateSend(mob, mobSyncId);
+                var priority = GetHostMobSyncPriority(mob);
+                var forceAnimTransitionSend = ShouldForceHostAnimStateSend(mob, mobSyncId, out var prebuiltAnim);
                 if (!ShouldEvaluateMobBySyncId(
                         hostLastStateEvalTickBySyncId,
                         mobSyncId,
                         now,
-                        forceAnimTransitionSend ? 0.0 : GetHostMobStateEvalSeconds(mob)))
+                        forceAnimTransitionSend ? 0.0 : GetHostMobStateEvalSeconds(priority, trackedMobCount)))
                 {
                     continue;
                 }
 
-                if (TryBuildHostMobStateDeltaSnapshot(mob, mobSyncId, now, forceAnimTransitionSend, out var snapshot))
+                if (TryBuildHostMobStateDeltaSnapshot(mob, mobSyncId, now, forceAnimTransitionSend, out var snapshot, priority, prebuiltAnim))
                     s_batchSnapshotsScratch.Add(snapshot);
             }
 
@@ -1211,7 +1239,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             int mobSyncId,
             long nowTick,
             bool forcePayloadRefresh,
-            out NetNode.MobStateSnapshot snapshot)
+            out NetNode.MobStateSnapshot snapshot,
+            HostMobSyncPriority? priorityHint = null,
+            string? prebuiltAnimPayload = null)
         {
             snapshot = default;
             if (mob == null)
@@ -1248,7 +1278,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (shouldRefreshPayload)
             {
-                animPayload = BuildAnimPayload(mob);
+                animPayload = prebuiltAnimPayload ?? BuildAnimPayload(mob);
                 mobType = BuildMobStateTypeSignature(mob);
                 statePayload = BuildHostMobStatePayload(mob);
                 cachedPayload = new CachedHostMobPayload(animPayload, mobType, statePayload, nowTick);
@@ -1266,13 +1296,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             var current = new HostMobSentState(x, y, dir, life, maxLife, animPayload, mobType, statePayload);
-            var positionEpsilon = GetHostStatePositionEpsilon(mob);
+            var resolvedPriority = priorityHint ?? GetHostMobSyncPriority(mob);
+            var positionEpsilon = GetHostStatePositionEpsilon(resolvedPriority);
             if (hadPrevious && HostMobSentStateEquals(previous, current, positionEpsilon))
             {
                 if (lastSentTick != 0 && ElapsedSeconds(lastSentTick, nowTick) < HostUnchangedStateResendGateSeconds)
                     return false;
             }
-            else if (GetHostMobSyncPriority(mob) == HostMobSyncPriority.Dormant &&
+            else if (resolvedPriority == HostMobSyncPriority.Dormant &&
                      hadPrevious &&
                      life == previous.Life &&
                      maxLife == previous.MaxLife &&
@@ -1316,8 +1347,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return true;
         }
 
-        private static bool ShouldForceHostAnimStateSend(Mob mob, int mobSyncId)
+        private static bool ShouldForceHostAnimStateSend(Mob mob, int mobSyncId) =>
+            ShouldForceHostAnimStateSend(mob, mobSyncId, out _);
+
+        private static bool ShouldForceHostAnimStateSend(Mob mob, int mobSyncId, out string? currentAnimPayload)
         {
+            currentAnimPayload = null;
+
             if (mob == null || mobSyncId < 0)
                 return false;
 
@@ -1333,15 +1369,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (string.IsNullOrWhiteSpace(cachedAnimPayload))
                 return false;
 
-            var currentAnimPayload = BuildAnimPayload(mob);
-            if (string.IsNullOrWhiteSpace(currentAnimPayload) ||
-                string.Equals(currentAnimPayload, cachedAnimPayload, StringComparison.Ordinal))
+            var built = BuildAnimPayload(mob);
+            if (string.IsNullOrWhiteSpace(built) ||
+                string.Equals(built, cachedAnimPayload, StringComparison.Ordinal))
             {
                 return false;
             }
 
             // Treat pure speed jitter as non-transitional; force only on group/reverse changes.
-            if (TryParseAnimPayload(currentAnimPayload, out var currentParsed) &&
+            if (TryParseAnimPayload(built, out var currentParsed) &&
                 TryParseAnimPayload(cachedAnimPayload, out var cachedParsed))
             {
                 if (string.Equals(currentParsed.Group, cachedParsed.Group, StringComparison.Ordinal) &&
@@ -1351,6 +1387,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 }
             }
 
+            currentAnimPayload = built;
             return true;
         }
 
@@ -1565,21 +1602,23 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return HostMobSyncPriority.FarRange;
         }
 
-        private static double GetHostStatePositionEpsilon(Mob mob)
-        {
-            var priority = GetHostMobSyncPriority(mob);
-            return priority switch
+        private static double GetHostStatePositionEpsilon(Mob mob) =>
+            GetHostStatePositionEpsilon(GetHostMobSyncPriority(mob));
+
+        private static double GetHostStatePositionEpsilon(HostMobSyncPriority priority) =>
+            priority switch
             {
                 HostMobSyncPriority.Active => MobStatePositionEpsilon,
                 HostMobSyncPriority.MidRange => HostMobStateMidPositionEpsilon,
                 HostMobSyncPriority.FarRange => HostMobStateFarPositionEpsilon,
                 _ => HostMobStateDormantPositionEpsilon
             };
-        }
 
-        private static double GetHostMobStateEvalSeconds(Mob mob)
+        private static double GetHostMobStateEvalSeconds(Mob mob) =>
+            GetHostMobStateEvalSeconds(GetHostMobSyncPriority(mob), trackedMobCount: -1);
+
+        private static double GetHostMobStateEvalSeconds(HostMobSyncPriority priority, int trackedMobCount)
         {
-            var priority = GetHostMobSyncPriority(mob);
             var seconds = priority switch
             {
                 HostMobSyncPriority.Active => HostActiveStateEvalSeconds,
@@ -1591,18 +1630,21 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (seconds <= 0.0)
                 return seconds;
 
-            lock (Sync)
+            var count = trackedMobCount >= 0 ? trackedMobCount : TrackedMobCountLocked();
+            if (count >= HostCrowdMobCountThreshold)
             {
-                if (trackedMobs.Count >= HostCrowdMobCountThreshold)
-                {
-                    if (priority == HostMobSyncPriority.Active)
-                        return seconds * HostCrowdActiveEvalStretchMultiplier;
+                if (priority == HostMobSyncPriority.Active)
+                    return seconds * HostCrowdActiveEvalStretchMultiplier;
 
-                    return seconds * HostCrowdEvalStretchMultiplier;
-                }
+                return seconds * HostCrowdEvalStretchMultiplier;
             }
 
             return seconds;
+        }
+
+        private static int TrackedMobCountLocked()
+        {
+            lock (Sync) { return trackedMobs.Count; }
         }
 
         private static void GetClientMobDrawAndAffectEvalSeconds(Mob? mob, out double drawSeconds, out double affectSeconds)
@@ -2088,9 +2130,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var dataVal = data ?? 0;
             var attackEvent = $"attack|{encodedSkill}|0|0|{reqTarget}|{dataVal}|{targetUserId}|{dir}";
             var mobType = BuildMobStateTypeSignature(mob);
-            var update = new NetNode.MobEventUpdate(mobSyncId, x, y, dir, new[] { attackEvent }, mobType);
-            MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(net), new[] { update });
-            net.SendMobEvents(new[] { update });
+            var update = new NetNode.MobEventUpdate(mobSyncId, x, y, dir, SingleEvent(attackEvent), mobType);
+            MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(net), SingleUpdate(update));
+            net.SendMobEvents(SingleUpdate(update));
         }
 
         private void Hook_Mob_setAttackTarget(Hook_Mob.orig_setAttackTarget orig, Mob self, Entity e)
@@ -2249,6 +2291,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             s_playerInterestPointsScratch.Clear();
             s_localIndexToNearestDistanceSq.Clear();
             s_distanceSqCacheFrameKey = double.NaN;
+            s_lastPruneFrame = double.NaN;
+            s_syncMobTypeCache.Clear();
             currentLevel = null;
             lastPlayerInterestLevel = null;
             lastPlayerInterestFrame = double.NaN;
@@ -2423,6 +2467,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (trackedMobs.Count == 0)
                 return;
 
+            double frame;
+            try { frame = currentLevel?.ftime ?? double.NaN; } catch { frame = double.NaN; }
+            if (!double.IsNaN(frame) && frame == s_lastPruneFrame)
+                return;
+            s_lastPruneFrame = frame;
+
             for (int i = trackedMobs.Count - 1; i >= 0; i--)
             {
                 var mob = trackedMobs[i];
@@ -2484,29 +2534,25 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (IsMobHostileToPlayers(mob))
                     return true;
 
-                var typeName = mob.GetType().ToString();
-
-                if (typeName.Contains("dc.en.boss.", StringComparison.OrdinalIgnoreCase) ||
-                    typeName.Contains(".boss.", StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-                
-                if (typeName.Contains("dc.en.mob.", StringComparison.Ordinal))
-                    return true;
-                
-                if (typeName.Contains(".Mob", StringComparison.Ordinal) || 
-                    typeName.Contains(".mob.", StringComparison.Ordinal))
-                {
-                    return true;
-                }
-                
-                return false;
+                return IsSyncMobByType(mob);
             }
             catch
             {
                 return false;
             }
+        }
+
+        private static bool IsSyncMobByType(Mob mob)
+        {
+            return s_syncMobTypeCache.GetOrAdd(mob.GetType(), static (System.Type t) =>
+            {
+                var typeName = t.FullName ?? t.Name;
+                return typeName.Contains("dc.en.boss.", StringComparison.OrdinalIgnoreCase)
+                    || typeName.Contains(".boss.", StringComparison.OrdinalIgnoreCase)
+                    || typeName.Contains("dc.en.mob.", StringComparison.Ordinal)
+                    || typeName.Contains(".Mob", StringComparison.Ordinal)
+                    || typeName.Contains(".mob.", StringComparison.Ordinal);
+            });
         }
 
         private static void EnsureMobTracked(Mob mob)
@@ -5159,9 +5205,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     var sy = GetWorldY(mob);
                     var dir = NormalizeDir(mob.dir);
                     var hitEv = $"hit|{appliedLife.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
-                    var evUpdate = new NetNode.MobEventUpdate(update.SyncId, sx, sy, dir, new[] { hitEv });
-                    MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(net), new[] { evUpdate });
-                    net.SendMobEvents(new[] { evUpdate });
+                    var evUpdate = new NetNode.MobEventUpdate(update.SyncId, sx, sy, dir, SingleEvent(hitEv));
+                    MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(net), SingleUpdate(evUpdate));
+                    net.SendMobEvents(SingleUpdate(evUpdate));
                 }
             }
 
