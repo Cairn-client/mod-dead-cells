@@ -956,16 +956,17 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     continue;
                 if (!IsMobOnScreenForSync(mob))
                     continue;
+                var forceAnimTransitionSend = ShouldForceHostAnimStateSend(mob, mobSyncId);
                 if (!ShouldEvaluateMobBySyncId(
                         hostLastStateEvalTickBySyncId,
                         mobSyncId,
                         now,
-                        GetHostMobStateEvalSeconds(mob)))
+                        forceAnimTransitionSend ? 0.0 : GetHostMobStateEvalSeconds(mob)))
                 {
                     continue;
                 }
 
-                if (TryBuildHostMobStateDeltaSnapshot(mob, mobSyncId, now, out var snapshot))
+                if (TryBuildHostMobStateDeltaSnapshot(mob, mobSyncId, now, forceAnimTransitionSend, out var snapshot))
                     s_batchSnapshotsScratch.Add(snapshot);
             }
 
@@ -1115,7 +1116,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return false;
         }
 
-        private static bool TryBuildHostMobStateDeltaSnapshot(Mob mob, int mobSyncId, long nowTick, out NetNode.MobStateSnapshot snapshot)
+        private static bool TryBuildHostMobStateDeltaSnapshot(
+            Mob mob,
+            int mobSyncId,
+            long nowTick,
+            bool forcePayloadRefresh,
+            out NetNode.MobStateSnapshot snapshot)
         {
             snapshot = default;
             if (mob == null)
@@ -1143,7 +1149,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 hasCachedPayload = hostCachedPayloadBySyncId.TryGetValue(mobSyncId, out cachedPayload);
             }
 
-            var shouldRefreshPayload = !hasCachedPayload ||
+            var shouldRefreshPayload = forcePayloadRefresh ||
+                                       !hasCachedPayload ||
                                        !hadPrevious ||
                                        ElapsedSeconds(cachedPayload.Tick, nowTick) >= HostPayloadRefreshSeconds;
             if (BossSyncHelpers.IsBossMob(mob))
@@ -1194,6 +1201,44 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             snapshot = new NetNode.MobStateSnapshot(mobSyncId, x, y, dir, life, maxLife, animPayload, mobType, statePayload);
+            return true;
+        }
+
+        private static bool ShouldForceHostAnimStateSend(Mob mob, int mobSyncId)
+        {
+            if (mob == null || mobSyncId < 0)
+                return false;
+
+            string cachedAnimPayload;
+            lock (Sync)
+            {
+                if (!hostCachedPayloadBySyncId.TryGetValue(mobSyncId, out var cachedPayload))
+                    return false;
+
+                cachedAnimPayload = cachedPayload.AnimPayload ?? string.Empty;
+            }
+
+            if (string.IsNullOrWhiteSpace(cachedAnimPayload))
+                return false;
+
+            var currentAnimPayload = BuildAnimPayload(mob);
+            if (string.IsNullOrWhiteSpace(currentAnimPayload) ||
+                string.Equals(currentAnimPayload, cachedAnimPayload, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            // Treat pure speed jitter as non-transitional; force only on group/reverse changes.
+            if (TryParseAnimPayload(currentAnimPayload, out var currentParsed) &&
+                TryParseAnimPayload(cachedAnimPayload, out var cachedParsed))
+            {
+                if (string.Equals(currentParsed.Group, cachedParsed.Group, StringComparison.Ordinal) &&
+                    currentParsed.Reverse == cachedParsed.Reverse)
+                {
+                    return false;
+                }
+            }
+
             return true;
         }
 
