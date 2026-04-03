@@ -55,6 +55,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<int, string> hostMobTypeBySyncId = new();
         private static readonly Dictionary<int, long> hostLastStateEvalTickBySyncId = new();
         private static readonly Dictionary<int, long> hostLastStateSentTickBySyncId = new();
+        private static readonly Dictionary<int, long> hostClientVisibleUntilTickBySyncId = new();
         private static readonly Dictionary<int, HostMobSentState> hostLastSentMobStatesBySyncId = new();
         private static readonly Dictionary<int, CachedHostMobPayload> hostCachedPayloadBySyncId = new();
         private static readonly Dictionary<int, long> hostAttackRetargetLockUntilTick = new();
@@ -953,6 +954,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 var mob = s_batchMobsScratch[i];
                 if (!TryGetMobSyncId(mob, out var mobSyncId) || mobSyncId < 0)
                     continue;
+                if (!IsMobOnScreenForSync(mob))
+                    continue;
                 if (!ShouldEvaluateMobBySyncId(
                         hostLastStateEvalTickBySyncId,
                         mobSyncId,
@@ -980,7 +983,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             var keepAliveSeconds = ClientDrawKeepAliveSeconds;
-            var affectResendSeconds = ClientAffectResendSeconds;
             s_drawsScratch.Clear();
             s_batchSnapshotsScratch.Clear();
 
@@ -1004,29 +1006,33 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     {
                         var isOutOfGame = mob.isOutOfGame;
                         var isOnScreen = mob.isOnScreen;
-                        if (!isOutOfGame && isOnScreen)
+                        var shouldSendDraw = false;
+                        lock (Sync)
                         {
-                            var shouldSendDraw = false;
-                            lock (Sync)
+                            var changed = !clientLastSentDrawStateBySyncId.TryGetValue(mobSyncId, out var lastDraw) ||
+                                          lastDraw.IsOutOfGame != isOutOfGame ||
+                                          lastDraw.IsOnScreen != isOnScreen;
+                            var periodicRefresh = isOnScreen &&
+                                                  !isOutOfGame &&
+                                                  (!clientLastSentDrawStateBySyncId.TryGetValue(mobSyncId, out var lastVisibleDraw) ||
+                                                   ElapsedSeconds(lastVisibleDraw.Tick, now) >= keepAliveSeconds);
+                            if (changed || periodicRefresh)
                             {
-                                if (!clientLastSentDrawStateBySyncId.TryGetValue(mobSyncId, out var lastDraw) ||
-                                    lastDraw.IsOutOfGame != isOutOfGame ||
-                                    lastDraw.IsOnScreen != isOnScreen ||
-                                    ElapsedSeconds(lastDraw.Tick, now) >= keepAliveSeconds)
-                                {
-                                    clientLastSentDrawStateBySyncId[mobSyncId] = new ClientDrawSentState(isOutOfGame, isOnScreen, now);
-                                    shouldSendDraw = true;
-                                }
+                                clientLastSentDrawStateBySyncId[mobSyncId] = new ClientDrawSentState(isOutOfGame, isOnScreen, now);
+                                shouldSendDraw = true;
                             }
-
-                            if (shouldSendDraw)
-                                s_drawsScratch.Add(new NetNode.MobDraw(net.id, mobSyncId, isOutOfGame, isOnScreen));
                         }
+
+                        if (shouldSendDraw)
+                            s_drawsScratch.Add(new NetNode.MobDraw(net.id, mobSyncId, isOutOfGame, isOnScreen));
                     }
                     catch
                     {
                     }
                 }
+
+                if (!IsMobOnScreenForSync(mob))
+                    continue;
 
                 if (!ShouldEvaluateMobBySyncId(
                         clientLastAffectEvalTickBySyncId,
@@ -1039,15 +1045,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 var statePayload = GetClientAffectPayloadForSend(mob, mobSyncId, now);
                 var shouldSendAffect = false;
-                var hasAnyState = !string.IsNullOrWhiteSpace(statePayload);
 
                 lock (Sync)
                 {
                     var changed = !clientLastSentAffectPayloadBySyncId.TryGetValue(mobSyncId, out var lastPayload) ||
                                   !string.Equals(lastPayload, statePayload, StringComparison.Ordinal);
-                    clientLastSentAffectTickBySyncId.TryGetValue(mobSyncId, out var lastSendTick);
-                    var periodicRefresh = hasAnyState && (lastSendTick == 0 || ElapsedSeconds(lastSendTick, now) >= affectResendSeconds);
-                    if (changed || periodicRefresh)
+                    if (changed)
                     {
                         clientLastSentAffectPayloadBySyncId[mobSyncId] = statePayload;
                         clientLastSentAffectTickBySyncId[mobSyncId] = now;
@@ -1083,6 +1086,33 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             s_drawsScratch.Clear();
+        }
+
+        private static bool IsMobOnScreenForSync(Mob mob)
+        {
+            if (mob == null)
+                return false;
+
+            var hasVisibility = TryGetMobVisibilityState(mob, out var isOnScreen, out _, out _);
+            if (hasVisibility && isOnScreen)
+                return true;
+
+            if (IsHost(GameMenu.NetRef) && TryGetMobSyncId(mob, out var mobSyncId) && mobSyncId >= 0)
+            {
+                var now = Stopwatch.GetTimestamp();
+                lock (Sync)
+                {
+                    if (hostClientVisibleUntilTickBySyncId.TryGetValue(mobSyncId, out var visibleUntilTick))
+                    {
+                        if (now <= visibleUntilTick)
+                            return true;
+
+                        hostClientVisibleUntilTickBySyncId.Remove(mobSyncId);
+                    }
+                }
+            }
+
+            return false;
         }
 
         private static bool TryBuildHostMobStateDeltaSnapshot(Mob mob, int mobSyncId, long nowTick, out NetNode.MobStateSnapshot snapshot)
@@ -1510,7 +1540,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 }
             }
 
-            var payload = BuildMobAffectStatePayload(mob, includeBossStateForHost: false);
+            // Client->host affect sync sends presence only; duration ticks are too noisy and create packet spam.
+            var payload = BuildMobAffectPresencePayload(mob);
             lock (Sync)
             {
                 clientAffectSampleBySyncId[mobSyncId] = new TimedStringPayload(payload, nowTick);
@@ -2039,6 +2070,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             hostMobTypeBySyncId.Clear();
             hostLastStateEvalTickBySyncId.Clear();
             hostLastStateSentTickBySyncId.Clear();
+            hostClientVisibleUntilTickBySyncId.Clear();
             hostLastSentMobStatesBySyncId.Clear();
             hostCachedPayloadBySyncId.Clear();
             hostQueuedOldSkillMarkers.Clear();
@@ -2113,6 +2145,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             hostMobTypeBySyncId.Remove(syncId);
             hostLastStateEvalTickBySyncId.Remove(syncId);
             hostLastStateSentTickBySyncId.Remove(syncId);
+            hostClientVisibleUntilTickBySyncId.Remove(syncId);
             hostLastSentMobStatesBySyncId.Remove(syncId);
             hostCachedPayloadBySyncId.Remove(syncId);
         }
@@ -3957,20 +3990,20 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (mob == null)
                 return;
 
-            var refreshFrames = 1200.0;
-            try
+            if (TryGetMobSyncId(mob, out var drawSyncId) && drawSyncId >= 0)
             {
-                mob.isOnScreen = true;
-                if (mob.onScreenRecent < refreshFrames)
-                    mob.onScreenRecent = refreshFrames;
-                
-                mob.lastOutOfGame = false;
-            }
-            catch
-            {
+                if (draw.IsOnScreen && !draw.IsOutOfGame)
+                {
+                    hostClientVisibleUntilTickBySyncId[drawSyncId] =
+                        OffsetTimestampBySeconds(Stopwatch.GetTimestamp(), HostClientDrawVisibilityHoldSeconds);
+                }
+                else
+                {
+                    hostClientVisibleUntilTickBySyncId.Remove(drawSyncId);
+                }
             }
 
-            var wasOutOfGame = false;
+            var wasOutOfGame = true;
             try
             {
                 wasOutOfGame = mob.isOutOfGame;
@@ -3979,24 +4012,42 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
             }
 
-            if (!wasOutOfGame)
+            try
+            {
+                mob.isOnScreen = draw.IsOnScreen;
+                if (draw.IsOnScreen)
+                {
+                    var refreshFrames = 1200.0;
+                    if (mob.onScreenRecent < refreshFrames)
+                        mob.onScreenRecent = refreshFrames;
+                }
+                else
+                {
+                    mob.onScreenRecent = 0.0;
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                mob.isOutOfGame = draw.IsOutOfGame;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                mob.lastOutOfGame = draw.IsOutOfGame;
+            }
+            catch
+            {
+            }
+
+            if (wasOutOfGame == draw.IsOutOfGame)
                 return;
-
-            try
-            {
-                mob.isOutOfGame = false;
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                mob.lastOutOfGame = false;
-            }
-            catch
-            {
-            }
 
             try
             {
