@@ -13,7 +13,7 @@ internal static class MobWireCodec
     private const char EventSep = '\u00A7';
 
     /// <summary>Hard cap on mob state entries per line (see MobsSync optimization plan).</summary>
-    internal const int MaxMobStateSnapshotsPerWireLine = 96;
+    internal const int MaxMobStateSnapshotsPerWireLine = 128;
 
     private static readonly ThreadLocal<StringBuilder> MobLineBuilder = new(() => new StringBuilder(4096));
 

@@ -195,6 +195,10 @@ msgid "Use Explorer's Rune"
 msgstr "Usar la Runa del Explorador"
 
 #: SettingsUI.cs
+msgid "Mobs sync trace logging"
+msgstr "Registro de trazas de sincronización de enemigos"
+
+#: SettingsUI.cs
 msgid "Start perk"
 msgstr "Perk inicial"
 

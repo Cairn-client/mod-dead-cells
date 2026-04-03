@@ -324,6 +324,14 @@ public class SettingsUI :
             Ref<bool>.From(ref explorersRuneNow),
             widgetParent);
 
+        bool mobsSyncTraceNow = MultiplayerSettingsStorage.DebugMobsSyncTrace;
+        self.addToggleWidget(
+            GameMenu.Localize("Mobs sync trace logging").AsHaxeString(),
+            null,
+            new HlFunc<bool>(ToggleDebugMobsSyncTraceSetting),
+            Ref<bool>.From(ref mobsSyncTraceNow),
+            widgetParent);
+
         var perkChoices = BuildDebugPerkChoices();
         var selectedPerkIndex = ResolveCurrentDebugPerkIndex(perkChoices);
         var selectedPerk = perkChoices[selectedPerkIndex];
@@ -486,6 +494,13 @@ public class SettingsUI :
     {
         var enabled = !MultiplayerSettingsStorage.DebugUseExplorersRune;
         MultiplayerSettingsStorage.DebugUseExplorersRune = enabled;
+        return enabled;
+    }
+
+    private static bool ToggleDebugMobsSyncTraceSetting()
+    {
+        var enabled = !MultiplayerSettingsStorage.DebugMobsSyncTrace;
+        MultiplayerSettingsStorage.DebugMobsSyncTrace = enabled;
         return enabled;
     }
 

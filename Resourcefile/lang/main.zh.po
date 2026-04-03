@@ -380,6 +380,10 @@ msgid "Use Explorer's Rune"
 msgstr "使用探险家符文"
 
 #: SettingsUI.cs
+msgid "Mobs sync trace logging"
+msgstr "怪物同步跟踪日志"
+
+#: SettingsUI.cs
 msgid "Start perk"
 msgstr "起始变异"
 

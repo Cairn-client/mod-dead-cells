@@ -198,6 +198,10 @@ msgid "Use Explorer's Rune"
 msgstr "Use Explorer's Rune"
 
 #: SettingsUI.cs
+msgid "Mobs sync trace logging"
+msgstr "Mobs sync trace logging"
+
+#: SettingsUI.cs
 msgid "Start perk"
 msgstr "Start perk"
 

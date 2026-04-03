@@ -5,10 +5,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double HostPayloadRefreshSeconds = 0.72;
         private const double ClientAffectSampleSeconds = 0.40;
         private const double ClientAffectResendSeconds = 0.675;
-        private const double ClientAnimPayloadRefreshSeconds = 0.38;
+        private const double ClientAnimPayloadRefreshSeconds = 0.33;
         private const int ParsedAnimPayloadCacheLimit = 1024;
         private const double ClientDrawKeepAliveSeconds = 0.9;
-        private const double ClientInterpolationAlpha = 0.62;
+        private const double ClientInterpolationAlpha = 0.70;
         private const double MobSyncDistance = 20;
         private const double MobSyncDistanceSq = MobSyncDistance * MobSyncDistance;
         private const double MobDrawNearDistance = 20;
@@ -55,13 +55,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const int ClientAffectSyncDefaultFrames = 21;
         private const int AffectTimeIncreaseThresholdFrames = 12;
 
-        /// <summary>Stagger phases for far, distance-only client visual interpolation (reduces fixedUpdate load).</summary>
-        private const int ClientVisualInterpolationStaggerPhases = 3;
+        /// <summary>Stagger phases for far, distance-only client visuals (1 = off, 2 = light, 3 = aggressive CPU save).</summary>
+        private const int ClientVisualInterpolationStaggerPhases = 2;
 
         /// <summary>When tracked mob count is at or above this, non-active host mobs get slightly longer state eval intervals.</summary>
-        private const int HostCrowdMobCountThreshold = 22;
+        private const int HostCrowdMobCountThreshold = 32;
 
-        private const double HostCrowdEvalStretchMultiplier = 1.22;
+        private const double HostCrowdEvalStretchMultiplier = 1.12;
 
         private static double GetClientInterpolationAlpha()
         {

@@ -435,7 +435,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             ScaleMobHpForMultiplayer(mob);
 
-            TryGetMobSyncId(mob, out _);
+            TryGetMobSyncId(mob, out var registerSyncId);
 
             lock (Sync)
             {
@@ -446,6 +446,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return;
 
                 AddTrackedMobLocked(mob);
+            }
+
+            if (TryGetTrackedIndex(mob, out var registerLocalIndex))
+            {
+                var regNet = GameMenu.NetRef;
+                var regRole = regNet == null || !regNet.IsAlive ? "none" : (regNet.IsHost ? "host" : "client");
+                MobSyncTrace.LogRegisterTracked(regRole, registerSyncId, registerLocalIndex, BuildMobStateTypeSignature(mob));
             }
         }
 
@@ -582,6 +589,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (shouldSendDie && dieNet != null && dieNet.IsAlive && dieSyncId >= 0)
             {
                 var update = new NetNode.MobEventUpdate(dieSyncId, dieX, dieY, 0, new[] { "die" });
+                MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(dieNet), new[] { update });
                 dieNet.SendMobEvents(new[] { update });
             }
 
@@ -669,6 +677,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     var hy = GetWorldY(self);
                     var hitEvent = $"hit|{life.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
                     var update = new NetNode.MobEventUpdate(mobSyncId, hx, hy, NormalizeDir(self.dir), new[] { hitEvent });
+                    MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(net), new[] { update });
                     net.SendMobEvents(new[] { update });
                 }
 
@@ -709,6 +718,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                     var clientHitEvent = $"hit|{life.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
                     var clientUpdate = new NetNode.MobEventUpdate(mobSyncId, x, y, 0, new[] { clientHitEvent });
+                    MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(net), new[] { clientUpdate });
                     net.SendMobEvents(new[] { clientUpdate });
                 }
             }
@@ -717,6 +727,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 TryRecoverSuppressedClientBossDie(self, preDamageLife);
             }
         }
+
+        private static string MobSyncNetRoleForTrace(NetNode? net) =>
+            net == null || !net.IsAlive ? "none" : (net.IsHost ? "host" : "client");
 
         private static bool ShouldSuppressClientBossDie(Mob? mob)
         {
@@ -955,7 +968,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             // Mob sync encoding is in-process.
             if (s_batchSnapshotsScratch.Count > 0)
+            {
+                MobSyncTrace.LogSendStatesBatch("host", s_batchSnapshotsScratch);
                 net.SendMobStates(s_batchSnapshotsScratch);
+            }
         }
 
         private static void TrySendClientMobBatchesNetFrame(NetNode net, long now)
@@ -1055,9 +1071,16 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             if (s_drawsScratch.Count > 0)
+            {
+                MobSyncTrace.LogSendDrawBatch("client", s_drawsScratch);
                 net.SendMobDrawBatch(s_drawsScratch);
+            }
+
             if (s_batchSnapshotsScratch.Count > 0)
+            {
+                MobSyncTrace.LogSendStatesBatch("client", s_batchSnapshotsScratch);
                 net.SendMobStates(s_batchSnapshotsScratch);
+            }
 
             s_drawsScratch.Clear();
         }
@@ -1864,6 +1887,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var attackEvent = $"attack|{encodedSkill}|0|0|{reqTarget}|{dataVal}|{targetUserId}|{dir}";
             var mobType = BuildMobStateTypeSignature(mob);
             var update = new NetNode.MobEventUpdate(mobSyncId, x, y, dir, new[] { attackEvent }, mobType);
+            MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(net), new[] { update });
             net.SendMobEvents(new[] { update });
         }
 
@@ -2364,6 +2388,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (candidate != null)
                 {
                     SyncMobIdRegistry.BindSyncId(candidate, state.Index);
+                    MobSyncTrace.LogBindSyncId("state", state.Index, state.Type ?? string.Empty, state.X, state.Y);
                     return rebindIndex;
                 }
             }
@@ -2507,6 +2532,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (candidate != null)
                 {
                     SyncMobIdRegistry.BindSyncId(candidate, attack.Index);
+                    MobSyncTrace.LogBindSyncId("attack", attack.Index, expectedType ?? string.Empty, attack.X, attack.Y);
                     return rebindIndex;
                 }
             }
@@ -3538,6 +3564,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!net.TryConsumeMobStates(out var states))
                 return;
 
+            MobSyncTrace.LogRecvStates("hostStatesFromHost", states);
             ApplyIncomingHostMobStates(states);
         }
 
@@ -3546,6 +3573,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!net.TryConsumeMobStates(out var states))
                 return;
 
+            MobSyncTrace.LogRecvStates("clientAffectFromClient", states);
             ApplyIncomingClientMobStatesOnHost(states);
         }
 
@@ -3863,6 +3891,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!net.TryConsumeMobAttacks(out var attacks))
                 return;
 
+            MobSyncTrace.LogRecvAttacks("hostAttacksFromHost", attacks);
             ApplyIncomingHostMobAttacks(attacks);
         }
 
@@ -3895,6 +3924,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!net.TryConsumeMobDraws(out var draws))
                 return;
 
+            MobSyncTrace.LogRecvDraws("clientDrawsFromClient", draws);
             ApplyIncomingMobDraws(draws);
         }
 
@@ -3996,6 +4026,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             var skillId = intent.SkillId;
+            var traceRoute = ResolveClientAttackRouteForTrace(skillId);
+            _ = TryGetMobSyncId(mob, out var traceSyncId);
+            MobSyncTrace.LogClientAttackRoute(traceRoute, traceSyncId, skillId);
 
             if (string.Equals(skillId, ContactAttackPacketSkillId, StringComparison.Ordinal))
             {
@@ -4028,6 +4061,26 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             ProcessClientOldSkillQueue(mob, intent);
+        }
+
+        private static string ResolveClientAttackRouteForTrace(string skillId)
+        {
+            if (string.Equals(skillId, ContactAttackPacketSkillId, StringComparison.Ordinal))
+                return "contact";
+
+            if (skillId.StartsWith(OldSkillExecutePacketPrefix, StringComparison.Ordinal))
+                return "oldSkillExecute";
+
+            if (skillId.StartsWith(OldSkillPreparePacketPrefix, StringComparison.Ordinal))
+                return "oldSkillPrepare";
+
+            if (skillId.StartsWith(OldSkillChargeCompletePacketPrefix, StringComparison.Ordinal))
+                return "oldSkillChargeComplete";
+
+            if (skillId.StartsWith(NewSkillExecutePacketPrefix, StringComparison.Ordinal))
+                return "newSkillExecute";
+
+            return "oldSkillQueue";
         }
 
         private static void ProcessClientContactAttack(Mob mob, ClientMobAttackIntent intent)
@@ -4714,6 +4767,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!net.TryConsumeMobHits(out var hits))
                 return;
 
+            MobSyncTrace.LogRecvHits(net.IsHost ? "hitsOnHost" : "hitsOnClient", hits);
             ApplyIncomingMobHits(hits);
         }
 
@@ -4722,6 +4776,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!net.TryConsumeMobDies(out var dies))
                 return;
 
+            MobSyncTrace.LogRecvDies(net.IsHost ? "diesOnHost" : "diesOnClient", dies);
             ApplyIncomingMobDies(dies);
         }
 
@@ -4831,6 +4886,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     var forceDie = targetLife <= 0 && prevLife > 0;
                     var syncId = -1;
                     TryGetMobSyncId(mob, out syncId);
+                    MobSyncTrace.LogIncomingHitApply(syncId, hit.Hp, hit.UserId, replaySpecialHit, forceDie);
                     s_pendingMobHitAppliesScratch.Add(new PendingMobHitApply(
                         mob,
                         targetLife,
@@ -4905,6 +4961,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     var dir = NormalizeDir(mob.dir);
                     var hitEv = $"hit|{appliedLife.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
                     var evUpdate = new NetNode.MobEventUpdate(update.SyncId, sx, sy, dir, new[] { hitEv });
+                    MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(net), new[] { evUpdate });
                     net.SendMobEvents(new[] { evUpdate });
                 }
             }

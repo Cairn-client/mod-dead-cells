@@ -425,7 +425,7 @@ internal static class KingWeaponHooks
         if(!KingWeaponSupport.TryGetCurrentContextSource(out var kingSource) || kingSource.destroyed)
             return false;
 
-        redirectedSource = kingSource;
+        redirectedSource = (Entity)kingSource;
         return true;
     }
 

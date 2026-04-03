@@ -30,6 +30,9 @@ public partial class ModEntry
     private string _lastSentDiveInfoPayload = string.Empty;
     private readonly Dictionary<int, string> _remoteDiveInfoPayloadById = new();
 
+    /// <summary>Vanilla <c>onOwnerLand</c> delegate from the hook; set on first hook invocation so remote replay can call the same path without re-entering the hook.</summary>
+    private static Hook_DiveAttack.orig_onOwnerLand? s_diveOnOwnerLandOrig;
+
     private void Hook_DiveAttack_onStart(Hook_DiveAttack.orig_onStart orig, DiveAttack self)
     {
         if (!IsDiveAttackHookContextValid(self, out _))
@@ -51,6 +54,7 @@ public partial class ModEntry
 
     private void Hook_DiveAttack_onOwnerLand(Hook_DiveAttack.orig_onOwnerLand orig, DiveAttack self, double high)
     {
+        s_diveOnOwnerLandOrig ??= orig;
         if (!IsDiveAttackHookContextValid(self, out var hero))
             return;
 
@@ -66,7 +70,39 @@ public partial class ModEntry
             return;
         }
 
-        NotifyLocalDiveAttackLandedFromHooks(self, high, wasDiving);
+        try
+        {
+            NotifyLocalDiveAttackLandedFromHooks(self, high, wasDiving);
+        }
+        catch (Exception nex)
+        {
+            Logger.Warning("[NetMod] DiveAttack.onOwnerLand notify failed: {Message}", nex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Runs the same validation + quad sanitization + vanilla land as <see cref="Hook_DiveAttack_onOwnerLand"/>,
+    /// using the cached vanilla delegate (avoids re-entering the hook). Returns false if the vanilla delegate is not
+    /// yet available or validation fails; callers may fall back to <c>dive.onOwnerLand</c> (hooked path).
+    /// </summary>
+    internal static bool TryInvokeSafeDiveAttackOnOwnerLand(DiveAttack? self, double high)
+    {
+        if (self == null || s_diveOnOwnerLandOrig == null)
+            return false;
+
+        if (!IsDiveAttackHookContextValid(self, out var hero))
+            return false;
+
+        try
+        {
+            ExecuteDiveAttackLand(s_diveOnOwnerLandOrig, self, high, hero!);
+            return true;
+        }
+        catch
+        {
+            try { self.end(); } catch { }
+            return true;
+        }
     }
 
     private static bool IsDiveAttackHookContextValid(DiveAttack? self, out Hero? hero)

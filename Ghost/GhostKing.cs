@@ -271,13 +271,16 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
                         if (startOnly)
                             return;
 
-                        try
+                        if (!ModEntry.TryInvokeSafeDiveAttackOnOwnerLand(dive, high))
                         {
-                            dive.onOwnerLand(high);
-                        }
-                        catch
-                        {
-                            try { dive.end(); } catch { }
+                            try
+                            {
+                                dive.onOwnerLand(high);
+                            }
+                            catch
+                            {
+                                try { dive.end(); } catch { }
+                            }
                         }
                     });
                 });
