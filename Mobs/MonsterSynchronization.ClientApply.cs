@@ -30,7 +30,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (!preserveLocalMotion)
             {
-                var syncY = ClientSyncVerticalPosition;
+                var syncY = IsClientVerticalSyncEnabled();
                 try
                 {
                     if (!self.hasGravity)
@@ -42,9 +42,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 var currentX = GetWorldX(self);
                 var currentY = GetWorldY(self);
-                var lerpedX = currentX + (target.X - currentX) * ClientInterpolationAlpha;
+                var interpolationAlpha = GetClientInterpolationAlpha();
+                var lerpedX = currentX + (target.X - currentX) * interpolationAlpha;
                 var lerpedY = syncY
-                    ? currentY + (target.Y - currentY) * ClientInterpolationAlpha
+                    ? currentY + (target.Y - currentY) * interpolationAlpha
                     : currentY;
 
                 try
@@ -127,7 +128,38 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return true;
             }
 
-            return TryGetNearestPlayerDistanceSq(mob, out var distanceSq) && distanceSq <= MobSyncMidDistanceSq;
+            if (!TryGetNearestPlayerDistanceSq(mob, out var distanceSq) || distanceSq > MobSyncDistanceSq)
+                return false;
+
+            if (ShouldStaggerFarClientVisualInterpolation(mob, localIndex))
+                return false;
+
+            return true;
+        }
+
+        /// <summary>Spreads distance-only visual work across frames when the mob is far / off-screen.</summary>
+        private static bool ShouldStaggerFarClientVisualInterpolation(Mob mob, int localIndex)
+        {
+            if (mob == null)
+                return false;
+
+            try
+            {
+                if (!TryGetMobSyncId(mob, out var syncId))
+                    syncId = localIndex;
+
+                var level = mob._level;
+                if (level == null)
+                    return false;
+
+                var phase = (int)System.Math.Floor(level.ftime * 45.0) % ClientVisualInterpolationStaggerPhases;
+                var bucket = ((syncId % ClientVisualInterpolationStaggerPhases) + ClientVisualInterpolationStaggerPhases) % ClientVisualInterpolationStaggerPhases;
+                return bucket != phase;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static void ApplyAuthoritativeLifeState(Mob mob, int targetLife, int targetMaxLife)
@@ -244,12 +276,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             var safePayload = payload ?? string.Empty;
             var nowTick = Stopwatch.GetTimestamp();
-            var refreshTicks = (long)(Stopwatch.Frequency * ClientAnimPayloadRefreshSeconds);
             lock (Sync)
             {
                 if (clientLastAppliedAnimPayloadByLocalIndex.TryGetValue(localIndex, out var lastApplied) &&
                     string.Equals(lastApplied.Payload, safePayload, StringComparison.Ordinal) &&
-                    nowTick - lastApplied.Tick < refreshTicks)
+                    ElapsedSeconds(lastApplied.Tick, nowTick) < ClientAnimPayloadRefreshSeconds)
                 {
                     return;
                 }

@@ -271,13 +271,16 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
                         if (startOnly)
                             return;
 
-                        try
+                        if (!ModEntry.TryInvokeSafeDiveAttackOnOwnerLand(dive, high))
                         {
-                            dive.onOwnerLand(high);
-                        }
-                        catch
-                        {
-                            try { dive.end(); } catch { }
+                            try
+                            {
+                                dive.onOwnerLand(high);
+                            }
+                            catch
+                            {
+                                try { dive.end(); } catch { }
+                            }
                         }
                     });
                 });
@@ -929,9 +932,26 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 
         public override void dispose()
         {
+            DisposeKingWeaponsManager();
             DisposeScarf();
             DisposeRemoteDiveAttack();
             base.dispose();
+        }
+
+        private void DisposeKingWeaponsManager()
+        {
+            if(kingWeaponsManager == null)
+                return;
+
+            try
+            {
+                kingWeaponsManager.DisposeManagedWeapon();
+            }
+            catch
+            {
+            }
+
+            kingWeaponsManager = null;
         }
 
 

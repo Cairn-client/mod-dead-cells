@@ -290,3 +290,103 @@ msgstr ""
 
 msgid "Game Over"
 msgstr ""
+
+msgid "Choose multiplayer save slot"
+msgstr ""
+
+msgid "Copy your save in that slot"
+msgstr ""
+
+msgid "Choose original save to copy"
+msgstr ""
+
+msgid "Saved games"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Multiplayer settings"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Enable mobs sync"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Mobs interpolation quality"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Mobs HP multiplier"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Bosses HP multiplier"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Sync vertical position"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Module: language"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Module: cinematics hooks"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Module: multiplayer UI"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Module: level init"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Module: mobs sync"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Module: minimap reveal"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Module: level exit sync"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Module: interaction sync"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Module: connection UI"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Module"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Player immortal"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Use Explorer's Rune"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Mobs sync trace logging"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Start perk"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Previous perk"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Next perk"
+msgstr ""

@@ -111,3 +111,104 @@ msgstr ""
 
 msgid "Back to multiplayer menu"
 msgstr ""
+
+#: GameMenu.MultiplayerSaveSlots.cs
+msgid "Choose multiplayer save slot"
+msgstr ""
+
+msgid "Copy your save in that slot"
+msgstr ""
+
+msgid "Choose original save to copy"
+msgstr ""
+
+msgid "Saved games"
+msgstr ""
+
+#: SettingsUI.cs
+msgid "Multiplayer settings"
+msgstr "Multiplayer settings"
+
+#: SettingsUI.cs
+msgid "Enable mobs sync"
+msgstr "Enable mobs sync"
+
+#: SettingsUI.cs
+msgid "Mobs interpolation quality"
+msgstr "Mobs interpolation quality"
+
+#: SettingsUI.cs
+msgid "Mobs HP multiplier"
+msgstr "Mobs HP multiplier"
+
+#: SettingsUI.cs
+msgid "Bosses HP multiplier"
+msgstr "Bosses HP multiplier"
+
+#: SettingsUI.cs
+msgid "Sync vertical position"
+msgstr "Sync vertical position"
+
+#: SettingsUI.cs
+msgid "Module: language"
+msgstr "Module: language"
+
+#: SettingsUI.cs
+msgid "Module: cinematics hooks"
+msgstr "Module: cinematics hooks"
+
+#: SettingsUI.cs
+msgid "Module: multiplayer UI"
+msgstr "Module: multiplayer UI"
+
+#: SettingsUI.cs
+msgid "Module: level init"
+msgstr "Module: level init"
+
+#: SettingsUI.cs
+msgid "Module: mobs sync"
+msgstr "Module: mobs sync"
+
+#: SettingsUI.cs
+msgid "Module: minimap reveal"
+msgstr "Module: minimap reveal"
+
+#: SettingsUI.cs
+msgid "Module: level exit sync"
+msgstr "Module: level exit sync"
+
+#: SettingsUI.cs
+msgid "Module: interaction sync"
+msgstr "Module: interaction sync"
+
+#: SettingsUI.cs
+msgid "Module: connection UI"
+msgstr "Module: connection UI"
+
+#: SettingsUI.cs
+msgid "Module"
+msgstr "Module"
+
+#: SettingsUI.cs
+msgid "Player immortal"
+msgstr "Player immortal"
+
+#: SettingsUI.cs
+msgid "Use Explorer's Rune"
+msgstr "Use Explorer's Rune"
+
+#: SettingsUI.cs
+msgid "Mobs sync trace logging"
+msgstr "Mobs sync trace logging"
+
+#: SettingsUI.cs
+msgid "Start perk"
+msgstr "Start perk"
+
+#: SettingsUI.cs
+msgid "Previous perk"
+msgstr "Previous perk"
+
+#: SettingsUI.cs
+msgid "Next perk"
+msgstr "Next perk"

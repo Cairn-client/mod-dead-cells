@@ -1249,7 +1249,9 @@ namespace DeadCellsMultiplayerMod
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
 
+                var multiplayerSaveLabel = GetMultiplayerSaveButtonLabel();
                 AddMenuButton(screen, GetText.Instance.GetString("Play"), () => StartHostRun(screen), GetText.Instance.GetString("Launch game"));
+                AddMenuButton(screen, multiplayerSaveLabel, () => OpenMultiplayerSlotMenu(screen), Localize("Choose multiplayer save slot"));
                 AddMenuButton(screen, GetText.Instance.GetString("Back"), () =>
                 {
                     StopNetworkFromMenu();
@@ -1260,7 +1262,7 @@ namespace DeadCellsMultiplayerMod
                 }, GetText.Instance.GetString("Back to host setup"));
 
                 RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
-                RemoveDuplicatesKeepFirst(screen, GetText.Instance.GetString("Play"), GetText.Instance.GetString("Back"));
+                RemoveDuplicatesKeepFirst(screen, GetText.Instance.GetString("Play"), multiplayerSaveLabel, GetText.Instance.GetString("Back"));
                 _inHostStatusMenu = true;
                 _inClientWaitingMenu = false;
             }
@@ -1290,9 +1292,11 @@ namespace DeadCellsMultiplayerMod
                     GetText.Instance.GetString("Disconnect"),
                     () => {DisconnectFromMenu(screen); screen.ShouldAutoHideConnectionUI(false);},
                     GetText.Instance.GetString("Disconnect and return to main menu"));
+                var multiplayerSaveLabel = GetMultiplayerSaveButtonLabel();
+                AddMenuButton(screen, multiplayerSaveLabel, () => OpenMultiplayerSlotMenu(screen), Localize("Choose multiplayer save slot"));
 
                 RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
-                RemoveDuplicatesKeepFirst(screen, GetText.Instance.GetString("Disconnect"));
+                RemoveDuplicatesKeepFirst(screen, GetText.Instance.GetString("Disconnect"), multiplayerSaveLabel);
                 _inClientWaitingMenu = true;
                 _inHostStatusMenu = false;
             }
@@ -1575,7 +1579,7 @@ namespace DeadCellsMultiplayerMod
             ForceExitToMainMenu();
         }
 
-        private static string Localize(string message)
+        internal static string Localize(string message)
         {
             return GetText.Instance.GetString(message);
         }
@@ -2466,6 +2470,8 @@ namespace DeadCellsMultiplayerMod
                 for (int i = 0; i < len; i++)
                 {
                     var item = getDyn.Invoke(arrObj, new object[] { i });
+                    if (item == null)
+                        continue;
                     var label = GetMenuLabel(item);
                     foreach (var l in labels)
                     {
@@ -2509,6 +2515,8 @@ namespace DeadCellsMultiplayerMod
                 for (int i = 0; i < len; i++)
                 {
                     var item = getDyn.Invoke(arrObj, new object[] { i });
+                    if (item == null)
+                        continue;
                     var label = GetMenuLabel(item);
                     foreach (var l in labels)
                     {

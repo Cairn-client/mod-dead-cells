@@ -134,8 +134,6 @@ public sealed partial class NetNode
                     int? cachedSeed;
                     int? cachedSerializerSeq;
                     int? cachedSerializerUid;
-                    string? cachedCountersPayload;
-                    string? cachedBlueprintsPayload;
                     string? cachedLevelDescPayload;
                     string? cachedLevelSeedPayload;
                     string? cachedLevelGraphPayload;
@@ -145,8 +143,6 @@ public sealed partial class NetNode
                         cachedSeed = _cachedHostSeed;
                         cachedSerializerSeq = _cachedHostSerializerSeq;
                         cachedSerializerUid = _cachedHostSerializerUid;
-                        cachedCountersPayload = _cachedHostCountersPayload;
-                        cachedBlueprintsPayload = _cachedHostBlueprintsPayload;
                         cachedLevelDescPayload = _cachedHostLevelDescPayload;
                         cachedLevelSeedPayload = _cachedHostLevelSeedPayload;
                         cachedLevelGraphPayload = _cachedHostLevelGraphPayload;
@@ -160,12 +156,6 @@ public sealed partial class NetNode
 
                     if (cachedSeed.HasValue)
                         await SendLineToClientSafe(connection, $"SEED|{cachedSeed.Value}\n").ConfigureAwait(false);
-
-                    if (cachedCountersPayload != null)
-                        await SendLineToClientSafe(connection, $"COUNTERS|{cachedCountersPayload}\n").ConfigureAwait(false);
-
-                    if (cachedBlueprintsPayload != null)
-                        await SendLineToClientSafe(connection, $"BLUEPRINTS|{cachedBlueprintsPayload}\n").ConfigureAwait(false);
 
                     if (cachedLevelDescPayload != null)
                         await SendLineToClientSafe(connection, $"LDESC|{cachedLevelDescPayload}\n").ConfigureAwait(false);

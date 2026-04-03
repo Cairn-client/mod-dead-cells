@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Globalization;
 using DeadCellsMultiplayerMod;
 using DeadCellsMultiplayerMod.Interaction;
+using DeadCellsMultiplayerMod.Mobs.MobsSynchronization;
 using Serilog;
 using Serilog.Core;
 using Steamworks;
@@ -117,6 +118,7 @@ public sealed partial class NetNode : IDisposable
         public RemoteState(int id)
         {
             Id = id;
+            HeadAnim = string.Empty;
         }
     }
 
@@ -584,9 +586,6 @@ public sealed partial class NetNode : IDisposable
     private int? _cachedHostBossRune;
     private int? _cachedHostSerializerSeq;
     private int? _cachedHostSerializerUid;
-    private string? _cachedHostProgressPayload;
-    private string? _cachedHostCountersPayload;
-    private string? _cachedHostBlueprintsPayload;
     private string? _cachedHostLevelDescPayload;
     private string? _cachedHostLevelSeedPayload;
     private string? _cachedHostHeroSkin;
@@ -1030,9 +1029,6 @@ public sealed partial class NetNode : IDisposable
         int? cachedSeed;
         int? cachedSerializerSeq;
         int? cachedSerializerUid;
-        string? cachedProgressPayload;
-        string? cachedCountersPayload;
-        string? cachedBlueprintsPayload;
         string? cachedLevelDescPayload;
         string? cachedLevelSeedPayload;
         string? cachedLevelGraphPayload;
@@ -1044,9 +1040,6 @@ public sealed partial class NetNode : IDisposable
             cachedSeed = _cachedHostSeed;
             cachedSerializerSeq = _cachedHostSerializerSeq;
             cachedSerializerUid = _cachedHostSerializerUid;
-            cachedProgressPayload = _cachedHostProgressPayload;
-            cachedCountersPayload = _cachedHostCountersPayload;
-            cachedBlueprintsPayload = _cachedHostBlueprintsPayload;
             cachedLevelDescPayload = _cachedHostLevelDescPayload;
             cachedLevelSeedPayload = _cachedHostLevelSeedPayload;
             cachedLevelGraphPayload = _cachedHostLevelGraphPayload;
@@ -1060,12 +1053,6 @@ public sealed partial class NetNode : IDisposable
             await SendLineToSteamClientSafe(connection, $"BOSSRUNE|{cachedBossRune.Value}\n").ConfigureAwait(false);
         if (cachedSeed.HasValue)
             await SendLineToSteamClientSafe(connection, $"SEED|{cachedSeed.Value}\n").ConfigureAwait(false);
-        if (cachedProgressPayload != null)
-            await SendLineToSteamClientSafe(connection, $"PROGRESS|{cachedProgressPayload}\n").ConfigureAwait(false);
-        if (cachedCountersPayload != null)
-            await SendLineToSteamClientSafe(connection, $"COUNTERS|{cachedCountersPayload}\n").ConfigureAwait(false);
-        if (cachedBlueprintsPayload != null)
-            await SendLineToSteamClientSafe(connection, $"BLUEPRINTS|{cachedBlueprintsPayload}\n").ConfigureAwait(false);
         if (cachedLevelDescPayload != null)
             await SendLineToSteamClientSafe(connection, $"LDESC|{cachedLevelDescPayload}\n").ConfigureAwait(false);
         if (cachedLevelSeedPayload != null)
@@ -1252,30 +1239,6 @@ public sealed partial class NetNode : IDisposable
             var payload = line["HXSYNC|".Length..];
             lock (_sync) _hasRemote = true;
             GameDataSync.ReceiveSerializerSync(payload);
-            return true;
-        }
-
-        if (line.StartsWith("PROGRESS|", StringComparison.Ordinal))
-        {
-            var payload = line["PROGRESS|".Length..];
-            lock (_sync) _hasRemote = true;
-            GameDataSync.ReceiveProgressSync(payload);
-            return true;
-        }
-
-        if (line.StartsWith("COUNTERS|"))
-        {
-            var payload = line["COUNTERS|".Length..];
-            lock (_sync) _hasRemote = true;
-            GameDataSync.ReceiveCounters(payload);
-            return true;
-        }
-
-        if (line.StartsWith("BLUEPRINTS|"))
-        {
-            var payload = line["BLUEPRINTS|".Length..];
-            lock (_sync) _hasRemote = true;
-            GameDataSync.ReceiveBlueprints(payload);
             return true;
         }
 
@@ -1680,6 +1643,33 @@ public sealed partial class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("MOBSTATE2|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["MOBSTATE2|".Length..].TrimEnd('\r', '\n');
+            var tParse = Stopwatch.GetTimestamp();
+            var parsedStates = new List<MobStateSnapshot>();
+            if (MobWireBinary.TryParseMobStatesBase64(payload, parsedStates))
+            {
+                MobSyncProfiler.AddWireParse(Stopwatch.GetTimestamp() - tParse);
+                lock (_sync)
+                {
+                    if (_role == NetRole.Host)
+                    {
+                        if (parsedStates.Count > 0)
+                            _pendingMobStates.AddRange(parsedStates);
+                    }
+                    else
+                    {
+                        _pendingMobStates = parsedStates;
+                    }
+
+                    _hasRemote = true;
+                }
+            }
+
+            return true;
+        }
+
         if (line.StartsWith("MOBSTATE|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line["MOBSTATE|".Length..];
@@ -1765,7 +1755,7 @@ public sealed partial class NetNode : IDisposable
                 }
 
                 if (_role == NetRole.Host && senderId.HasValue)
-                    forwardLine = BuildMobDieLine(die);
+                    forwardLine = MobWireCodec.BuildMobDieLine(die);
             }
             return true;
         }
@@ -2485,9 +2475,13 @@ public sealed partial class NetNode : IDisposable
 
     private static List<MobStateSnapshot> ParseMobStatesPayload(string payload)
     {
+        var t0 = Stopwatch.GetTimestamp();
         var states = new List<MobStateSnapshot>();
         if (string.IsNullOrWhiteSpace(payload))
+        {
+            MobSyncProfiler.AddWireParse(Stopwatch.GetTimestamp() - t0);
             return states;
+        }
 
         var entries = payload.Split(';', StringSplitOptions.RemoveEmptyEntries);
         foreach (var entry in entries)
@@ -2515,6 +2509,7 @@ public sealed partial class NetNode : IDisposable
             states.Add(new MobStateSnapshot(index, x, y, dir, life, maxLife, animPayload, type, statePayload));
         }
 
+        MobSyncProfiler.AddWireParse(Stopwatch.GetTimestamp() - t0);
         return states;
     }
 
@@ -3293,178 +3288,6 @@ public sealed partial class NetNode : IDisposable
         }
     }
 
-    private static string BuildMobStatesLine(IReadOnlyList<MobStateSnapshot> states)
-    {
-        var sb = new StringBuilder("MOBSTATE|");
-        if (states != null)
-        {
-            for (int i = 0; i < states.Count; i++)
-            {
-                var state = states[i];
-                if (i > 0)
-                    sb.Append(';');
-                sb.Append(state.Index.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(state.X.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(state.Y.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(state.Dir.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(state.Life.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(state.MaxLife.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(state.AnimPayload ?? string.Empty);
-                sb.Append(',');
-                sb.Append(state.Type ?? string.Empty);
-                sb.Append(',');
-                sb.Append(state.StatePayload ?? string.Empty);
-            }
-        }
-        sb.Append('\n');
-        return sb.ToString();
-    }
-
-    private static string BuildMobEventsLine(IReadOnlyList<MobEventUpdate> updates)
-    {
-        const char EventSep = '\u00A7'; // section sign - events contain '|' so we use different separator
-        var sb = new StringBuilder("MOBEVENT|");
-        if (updates != null)
-        {
-            for (int i = 0; i < updates.Count; i++)
-            {
-                var u = updates[i];
-                if (i > 0)
-                    sb.Append(';');
-                sb.Append(u.Index.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(u.X.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(u.Y.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(u.Dir.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(u.Type ?? string.Empty);
-                if (u.Events != null)
-                {
-                    for (int j = 0; j < u.Events.Count; j++)
-                    {
-                        sb.Append(EventSep);
-                        sb.Append(u.Events[j] ?? string.Empty);
-                    }
-                }
-            }
-        }
-        sb.Append('\n');
-        return sb.ToString();
-    }
-
-    private static string BuildMobMovesLine(IReadOnlyList<MobMoveSnapshot> moves)
-    {
-        var sb = new StringBuilder("MOBMOVE|");
-        if (moves != null)
-        {
-            for (int i = 0; i < moves.Count; i++)
-            {
-                var move = moves[i];
-                if (i > 0)
-                    sb.Append(';');
-                sb.Append(move.Index.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(move.X.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(move.Y.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(move.Dir.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(move.AnimPayload ?? string.Empty);
-            }
-        }
-        sb.Append('\n');
-        return sb.ToString();
-    }
-
-    private static string BuildMobChargesLine(IReadOnlyList<MobChargeSnapshot> charges)
-    {
-        var sb = new StringBuilder("MOBCHARGE|");
-        if (charges != null)
-        {
-            for (int i = 0; i < charges.Count; i++)
-            {
-                var charge = charges[i];
-                if (i > 0)
-                    sb.Append(';');
-                sb.Append(charge.Index.ToString(CultureInfo.InvariantCulture));
-                sb.Append(',');
-                sb.Append(charge.SkillId ?? string.Empty);
-                sb.Append(',');
-                sb.Append(charge.Ratio.ToString(CultureInfo.InvariantCulture));
-            }
-        }
-        sb.Append('\n');
-        return sb.ToString();
-    }
-
-    private static string BuildMobAttackLine(MobAttack attack)
-    {
-        string encodedSkill;
-        try
-        {
-            encodedSkill = Uri.EscapeDataString(attack.SkillId ?? string.Empty);
-        }
-        catch
-        {
-            encodedSkill = attack.SkillId ?? string.Empty;
-        }
-
-        var hasData = attack.Data.HasValue;
-        var dataPart = attack.Data.GetValueOrDefault().ToString(CultureInfo.InvariantCulture);
-
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"MOBATK|{attack.Index},{encodedSkill},{(attack.RequiresTargetInArea ? 1 : 0)},{(hasData ? 1 : 0)},{dataPart},{attack.X},{attack.Y},{attack.TargetUserId},{attack.Dir}\n");
-    }
-
-    private static string BuildMobDieLine(MobDie die)
-    {
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"MOBDIE|{die.UserId}|{die.MobIndex}|{die.X}|{die.Y}\n");
-    }
-
-    private static string BuildMobDrawLine(int userId, int mobIndex, bool isOutOfGame, bool isOnScreen)
-    {
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"MOBDRAW|{userId}|{mobIndex}|{(isOutOfGame ? 1 : 0)}|{(isOnScreen ? 1 : 0)}\n");
-    }
-
-    private static string BuildMobDrawLine(IReadOnlyList<MobDraw> draws)
-    {
-        var sb = new StringBuilder("MOBDRAW|");
-        if (draws != null)
-        {
-            for (int i = 0; i < draws.Count; i++)
-            {
-                var draw = draws[i];
-                if (i > 0)
-                    sb.Append(';');
-
-                sb.Append(draw.UserId.ToString(CultureInfo.InvariantCulture));
-                sb.Append('|');
-                sb.Append(draw.MobIndex.ToString(CultureInfo.InvariantCulture));
-                sb.Append('|');
-                sb.Append(draw.IsOutOfGame ? '1' : '0');
-                sb.Append('|');
-                sb.Append(draw.IsOnScreen ? '1' : '0');
-            }
-        }
-
-        sb.Append('\n');
-        return sb.ToString();
-    }
-
     private static string BuildExitReadyLine(ExitReadyState state)
     {
         return string.Create(
@@ -3540,6 +3363,7 @@ public sealed partial class NetNode : IDisposable
                trimmed.StartsWith("HEADANIM|", StringComparison.OrdinalIgnoreCase) ||
                trimmed.StartsWith("HP|", StringComparison.OrdinalIgnoreCase) ||
                trimmed.StartsWith("MOBSTATE|", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("MOBSTATE2|", StringComparison.OrdinalIgnoreCase) ||
                trimmed.StartsWith("MOBMOVE|", StringComparison.OrdinalIgnoreCase) ||
                trimmed.StartsWith("MOBCHARGE|", StringComparison.OrdinalIgnoreCase) ||
                trimmed.StartsWith("MOBDRAW|", StringComparison.OrdinalIgnoreCase);
@@ -3594,6 +3418,24 @@ public sealed partial class NetNode : IDisposable
         }
 
         return _stream != null && _client != null && _client.Connected;
+    }
+
+    /// <summary>Sends a pre-encoded mob protocol line (used by MobSyncWorker). Line must start with MOB.</summary>
+    public Task SendMobWireLine(string line)
+    {
+        if (string.IsNullOrEmpty(line))
+            return Task.CompletedTask;
+
+        if (!line.StartsWith("MOB", StringComparison.OrdinalIgnoreCase))
+            return Task.CompletedTask;
+
+        if (_role != NetRole.Host && _role != NetRole.Client)
+            return Task.CompletedTask;
+
+        if (!HasAnyConnection())
+            return Task.CompletedTask;
+
+        return SendLineSafe(line);
     }
 
     private Task SendLineSafe(string line)
@@ -3784,65 +3626,17 @@ public sealed partial class NetNode : IDisposable
 
     public void SendCounters(string countersPayload)
     {
-        var safeCounters = (countersPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
-        if (_role == NetRole.Host)
-        {
-            lock (_hostCacheSync)
-            {
-                _cachedHostCountersPayload = safeCounters;
-            }
-        }
-
-        if (!HasAnyConnection())
-        {
-            _log.Information("[NetNode] Skip sending counters sync: no connected client");
-            return;
-        }
-
-        SendRaw($"COUNTERS|{safeCounters}");
-        _log.Information("[NetNode] Sent counters sync");
+        return;
     }
 
     public void SendProgress(string progressPayload)
     {
-        var safeProgress = (progressPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
-        if (_role == NetRole.Host)
-        {
-            lock (_hostCacheSync)
-            {
-                _cachedHostProgressPayload = safeProgress;
-            }
-        }
-
-        if (!HasAnyConnection())
-        {
-            _log.Information("[NetNode] Skip sending progress sync: no connected client");
-            return;
-        }
-
-        SendRaw($"PROGRESS|{safeProgress}");
-        _log.Information("[NetNode] Sent progress sync");
+        return;
     }
 
     public void SendBlueprints(string blueprintsPayload)
     {
-        var safeBlueprints = (blueprintsPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
-        if (_role == NetRole.Host)
-        {
-            lock (_hostCacheSync)
-            {
-                _cachedHostBlueprintsPayload = safeBlueprints;
-            }
-        }
-
-        if (!HasAnyConnection())
-        {
-            _log.Information("[NetNode] Skip sending blueprints sync: no connected client");
-            return;
-        }
-
-        SendRaw($"BLUEPRINTS|{safeBlueprints}");
-        _log.Information("[NetNode] Sent blueprints sync");
+        return;
     }
 
     public void SendUsername(string username)
@@ -4222,8 +4016,17 @@ public sealed partial class NetNode : IDisposable
         if (states == null || states.Count == 0)
             return;
 
-        var line = BuildMobStatesLine(states);
-        _ = SendLineSafe(line);
+        if (MobWireBinary.UseBinaryWire && MobWireBinary.TryBuildMobStatesBinary(states, out var bin) && bin != null)
+        {
+            var line = "MOBSTATE2|" + Convert.ToBase64String(bin) + "\n";
+            _ = SendLineSafe(line);
+            return;
+        }
+
+        var t0 = Stopwatch.GetTimestamp();
+        var textLine = MobWireCodec.BuildMobStatesLine(states);
+        MobSyncProfiler.AddWireEncode(Stopwatch.GetTimestamp() - t0);
+        _ = SendLineSafe(textLine);
     }
 
     public void SendMobMoves(IReadOnlyList<MobMoveSnapshot> moves)
@@ -4235,7 +4038,7 @@ public sealed partial class NetNode : IDisposable
         if (moves == null || moves.Count == 0)
             return;
 
-        var line = BuildMobMovesLine(moves);
+        var line = MobWireCodec.BuildMobMovesLine(moves);
         _ = SendLineSafe(line);
     }
 
@@ -4248,7 +4051,7 @@ public sealed partial class NetNode : IDisposable
         if (charges == null || charges.Count == 0)
             return;
 
-        var line = BuildMobChargesLine(charges);
+        var line = MobWireCodec.BuildMobChargesLine(charges);
         _ = SendLineSafe(line);
     }
 
@@ -4262,7 +4065,7 @@ public sealed partial class NetNode : IDisposable
             return;
 
         var attack = new MobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y, targetUserId, dir);
-        var line = BuildMobAttackLine(attack);
+        var line = MobWireCodec.BuildMobAttackLine(attack);
         _ = SendLineSafe(line);
     }
 
@@ -4276,7 +4079,7 @@ public sealed partial class NetNode : IDisposable
         if (updates == null || updates.Count == 0)
             return;
 
-        var line = BuildMobEventsLine(updates);
+        var line = MobWireCodec.BuildMobEventsLine(updates);
         _ = SendLineSafe(line);
     }
 
@@ -4321,7 +4124,7 @@ public sealed partial class NetNode : IDisposable
         if (mobIndex < 0)
             return;
 
-        var line = BuildMobDrawLine(ID, mobIndex, isOutOfGame, isOnScreen);
+        var line = MobWireCodec.BuildMobDrawLine(ID, mobIndex, isOutOfGame, isOnScreen);
         _ = SendLineSafe(line);
     }
 
@@ -4336,7 +4139,7 @@ public sealed partial class NetNode : IDisposable
         if (draws == null || draws.Count == 0)
             return;
 
-        var line = BuildMobDrawLine(draws);
+        var line = MobWireCodec.BuildMobDrawLine(draws);
         _ = SendLineSafe(line);
     }
 
@@ -5096,9 +4899,6 @@ public sealed partial class NetNode : IDisposable
             _cachedHostBossRune = null;
             _cachedHostSerializerSeq = null;
             _cachedHostSerializerUid = null;
-            _cachedHostProgressPayload = null;
-            _cachedHostCountersPayload = null;
-            _cachedHostBlueprintsPayload = null;
             _cachedHostLevelDescPayload = null;
             _cachedHostLevelSeedPayload = null;
             _cachedHostHeroSkin = null;
@@ -5135,5 +4935,6 @@ public sealed partial class NetNode : IDisposable
             _steamBridge = null;
         }
         catch { }
+
     }
 }

@@ -109,3 +109,103 @@ msgstr "Falta el ID de anfitrión de Steam. Revisa la consola."
 
 msgid "Back to multiplayer menu"
 msgstr "Volver al menú multijugador"
+
+msgid "Choose multiplayer save slot"
+msgstr "Elige ranura de guardado multijugador"
+
+msgid "Copy your save in that slot"
+msgstr "Copia tu partida en esa ranura"
+
+msgid "Choose original save to copy"
+msgstr "Elige la partida original a copiar"
+
+msgid "Saved games"
+msgstr "Partidas guardadas"
+
+#: SettingsUI.cs
+msgid "Multiplayer settings"
+msgstr "Configuración multijugador"
+
+#: SettingsUI.cs
+msgid "Enable mobs sync"
+msgstr "Activar sincronización de enemigos"
+
+#: SettingsUI.cs
+msgid "Mobs interpolation quality"
+msgstr "Calidad de interpolación de enemigos"
+
+#: SettingsUI.cs
+msgid "Mobs HP multiplier"
+msgstr "Multiplicador de PV de enemigos"
+
+#: SettingsUI.cs
+msgid "Bosses HP multiplier"
+msgstr "Multiplicador de PV de jefes"
+
+#: SettingsUI.cs
+msgid "Sync vertical position"
+msgstr "Sincronizar posición vertical"
+
+#: SettingsUI.cs
+msgid "Module: language"
+msgstr "Módulo: idioma"
+
+#: SettingsUI.cs
+msgid "Module: cinematics hooks"
+msgstr "Módulo: cinemáticas"
+
+#: SettingsUI.cs
+msgid "Module: multiplayer UI"
+msgstr "Módulo: UI multijugador"
+
+#: SettingsUI.cs
+msgid "Module: level init"
+msgstr "Módulo: inicio de nivel"
+
+#: SettingsUI.cs
+msgid "Module: mobs sync"
+msgstr "Módulo: sincronización de enemigos"
+
+#: SettingsUI.cs
+msgid "Module: minimap reveal"
+msgstr "Módulo: revelar minimapa"
+
+#: SettingsUI.cs
+msgid "Module: level exit sync"
+msgstr "Módulo: salida de nivel"
+
+#: SettingsUI.cs
+msgid "Module: interaction sync"
+msgstr "Módulo: interacciones"
+
+#: SettingsUI.cs
+msgid "Module: connection UI"
+msgstr "Módulo: UI de conexión"
+
+#: SettingsUI.cs
+msgid "Module"
+msgstr "Módulo"
+
+#: SettingsUI.cs
+msgid "Player immortal"
+msgstr "Jugador inmortal"
+
+#: SettingsUI.cs
+msgid "Use Explorer's Rune"
+msgstr "Usar la Runa del Explorador"
+
+#: SettingsUI.cs
+msgid "Mobs sync trace logging"
+msgstr "Registro de trazas de sincronización de enemigos"
+
+#: SettingsUI.cs
+msgid "Start perk"
+msgstr "Perk inicial"
+
+#: SettingsUI.cs
+msgid "Previous perk"
+msgstr "Perk anterior"
+
+#: SettingsUI.cs
+msgid "Next perk"
+msgstr "Perk siguiente"

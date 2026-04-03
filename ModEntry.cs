@@ -42,6 +42,7 @@ using dc.en.mob.boss;
 using Steamworks;
 using System.Reflection;
 using DeadCellsMultiplayerMod.Interaction;
+using DeadCellsMultiplayerMod.UI;
 
 
 namespace DeadCellsMultiplayerMod
@@ -83,10 +84,22 @@ namespace DeadCellsMultiplayerMod
         public static string?[] clientSkins = new string?[NetNode.MaxClientSlots];
         public static string?[] clientHeadSkins = new string?[NetNode.MaxClientSlots];
         private static bool[] pendingClientHeadRecreate = new bool[NetNode.MaxClientSlots];
-        public static Hero me = null;
-        public static GhostHero _ghost = null;
+        public static Hero me = null!;
+        public static GhostHero _ghost = null!;
 
-        private GameDataSync gds;
+        private GameDataSync? gds;
+        private Hero? _debugPerkAppliedHero;
+        private string _debugPerkAppliedId = string.Empty;
+        private string _lastDebugPerkApplyErrorId = string.Empty;
+        private long _nextDebugPerkApplyTick;
+        private ItemMetaManager? _debugExplorerRuneInjectedMeta;
+        private bool _debugExplorerRuneInjectedByDebug;
+        private const string ExplorerRunePermanentItemId = "ExploKey";
+        /// <summary>Last successful minimap reveal signature (level + branch); cleared on level/wakeup.</summary>
+        private string _debugExplorerRevealAppliedSignature = string.Empty;
+        private long _nextDebugExplorerRevealRetryTick;
+        private int _debugExplorerRevealAllCount;
+        private const int MaxDebugExplorerRevealAllCalls = 3;
 
         private string? _lastAnimSent;
         private int? _lastAnimQueueSent;
@@ -95,21 +108,21 @@ namespace DeadCellsMultiplayerMod
         private string? _lastSentHeroSkin;
         private string? _lastSentHeroHeadSkin;
 
-        public static MiniMap miniMap;
+        public static MiniMap miniMap = null!;
 
         public static bool kingInitialized = false;
 
-        public string levelId;
+        public string levelId = string.Empty;
 
         public static int remotePlayerId = -1;
 
-        public string remoteSkin;
-        public string remoteHeadSkin;
+        public string remoteSkin = string.Empty;
+        public string remoteHeadSkin = string.Empty;
 
-        public string lastHeadAnim;
-        public static ArrayDyn customHeads;
+        public string lastHeadAnim = string.Empty;
+        public static ArrayDyn customHeads = null!;
 
-        public InventItem inventItem;
+        public InventItem inventItem = null!;
         private bool _inventorySyncGuard;
         private bool _localFakeDead;
         private bool _localExitPenaltyApplied;
@@ -375,6 +388,15 @@ namespace DeadCellsMultiplayerMod
             GameMenu.SetRole(NetRole.None);
             s_steamOverlayCallbackPending = true;
             s_steamOverlayCallbackRetryCount = 0;
+            _debugPerkAppliedHero = null;
+            _debugPerkAppliedId = string.Empty;
+            _lastDebugPerkApplyErrorId = string.Empty;
+            _nextDebugPerkApplyTick = 0;
+            _debugExplorerRuneInjectedMeta = null;
+            _debugExplorerRuneInjectedByDebug = false;
+            _debugExplorerRevealAppliedSignature = string.Empty;
+            _nextDebugExplorerRevealRetryTick = 0;
+            _debugExplorerRevealAllCount = 0;
             TryEnsureSteamApiInitialized("OnGameEndInit", logFailure: true);
             TryParseConnectLobbyFromCommandLine();
         }
@@ -699,19 +721,63 @@ namespace DeadCellsMultiplayerMod
             Instance = this;
 
             this.gds = new GameDataSync(Logger);
-            MultiplayerModLang modLang = new MultiplayerModLang(this);
-            CineHooks CineHooks = new CineHooks();
-            MultiplayerUI MultiplayerUI = new MultiplayerUI(this, 0);
-            Levelinit levelinit = new Levelinit(info);
-            MobsSynchronization mobs = new MobsSynchronization(this);
-            Minimapreveal minimapreveal = new Minimapreveal();
-            LevelExitSync levelExitSync = new LevelExitSync(this);
-            InteractionSync interactionSync = new InteractionSync(this);
-            ConnectionUI.Initialize(this);
+            InitializeOptionalModule(
+                DebugModuleId.MultiplayerModLang,
+                "MultiplayerModLang",
+                () => _ = new MultiplayerModLang(this));
+            InitializeOptionalModule(
+                DebugModuleId.CineHooks,
+                "CineHooks",
+                () => _ = new CineHooks());
+            InitializeOptionalModule(
+                DebugModuleId.MultiplayerUI,
+                "MultiplayerUI",
+                () => _ = new MultiplayerUI(this, 0));
+
+            _ = new SettingsUI(this);
+
+            InitializeOptionalModule(
+                DebugModuleId.LevelInit,
+                "Levelinit",
+                () => _ = new Levelinit(info));
+            InitializeOptionalModule(
+                DebugModuleId.MobsSynchronization,
+                "MobsSynchronization",
+                () => _ = new MobsSynchronization(this));
+            InitializeOptionalModule(
+                DebugModuleId.MinimapReveal,
+                "Minimapreveal",
+                () => _ = new Minimapreveal());
+            InitializeOptionalModule(
+                DebugModuleId.LevelExitSync,
+                "LevelExitSync",
+                () => _ = new LevelExitSync(this));
+            InitializeOptionalModule(
+                DebugModuleId.InteractionSync,
+                "InteractionSync",
+                () => _ = new InteractionSync(this));
+            InitializeOptionalModule(
+                DebugModuleId.ConnectionUI,
+                "ConnectionUI",
+                () => ConnectionUI.Initialize(this));
+
             GameMenu.Initialize(Logger);
             s_steamOverlayCallbackPending = true;
             s_steamOverlayCallbackRetryCount = 0;
             EventSystem.BroadcastEvent<IOnAdvancedModuleInitializing, ModEntry>(this);
+
+            void InitializeOptionalModule(DebugModuleId moduleId, string moduleName, Action init)
+            {
+                var isEnabled = !MultiplayerSettingsStorage.IsDebugSectionEnabled ||
+                                MultiplayerSettingsStorage.IsModuleEnabled(moduleId);
+                if (isEnabled)
+                {
+                    init();
+                    return;
+                }
+
+                Logger.Information("[NetMod][Debug] Module disabled by settings: {Module}", moduleName);
+            }
         }
 
         void IOnAdvancedModuleInitializing.OnAdvancedModuleInitializing(ModEntry entry)
@@ -728,17 +794,6 @@ namespace DeadCellsMultiplayerMod
             Hook_User.unserialize += Hook_User_unserialize;
             Hook_Game.onDispose += Hook_Game_onDispose;
             Hook__Save.save += Hook__Save_save;
-            Hook_ItemMetaManager.revealItem += Hook_ItemMetaManager_revealItem;
-            Hook_ItemMetaManager.unlockItem += Hook_ItemMetaManager_unlockItem;
-            Hook_ItemMetaManager.addPermanentItem += Hook_ItemMetaManager_addPermanentItem;
-            Hook_ItemMetaManager.investOnItemProgress += Hook_ItemMetaManager_investOnItemProgress;
-            Hook_ItemMetaManager.f_investOn += Hook_ItemMetaManager_f_investOn;
-            Hook_StoryManager.incNpcProgress += Hook_StoryManager_incNpcProgress;
-            Hook_StoryManager.setNpcProgress += Hook_StoryManager_setNpcProgress;
-            Hook_StoryManager.setBitFlag += Hook_StoryManager_setBitFlag;
-            Hook_StoryManager.markLoreRoomAsVisited += Hook_StoryManager_markLoreRoomAsVisited;
-            Hook_StoryManager.markLoreRoomAsGenerated += Hook_StoryManager_markLoreRoomAsGenerated;
-            Hook_StoryManager.cleanStoryData += Hook_StoryManager_cleanStoryData;
             Hook_AnimManager.play += Hook_AnimManager_play;
             Hook_MiniMap.track += Hook_MiniMap_track;
             Hook__LevelStruct.get += Hook__LevelStruct_get;
@@ -747,6 +802,7 @@ namespace DeadCellsMultiplayerMod
             Hook_Game.pause += Hook_Game_pause;
             Hook_Hero.kill += Hook_Hero_kill;
             Hook_Hero.onDie += Hook_Hero_onDie;
+            Hook_Hero.onDamage += Hook_Hero_onDamage;
             Hook_Hero.checkCursedWeaponHit += Hook_Hero_checkCursedWeaponHit;
             Hook_Hero.startDeathCine += Hook_Hero_startDeathCine;
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
@@ -843,114 +899,6 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private void TrySendLiveProgressSync(User? user)
-        {
-            if (_netRole != NetRole.Host)
-                return;
-
-            var net = _net;
-            if (net == null || !net.IsAlive || user == null)
-                return;
-
-            var activeUser = dc.Main.Class.ME?.user;
-            if (activeUser == null || !ReferenceEquals(activeUser, user))
-                return;
-
-            GameDataSync.MarkProgressPayloadDirty();
-            GameDataSync.SendProgressSync(user, net);
-        }
-
-        private void TrySendLiveProgressSync(ItemMetaManager? itemMeta)
-        {
-            var user = itemMeta?._user ?? dc.Main.Class.ME?.user;
-            TrySendLiveProgressSync(user);
-        }
-
-        private void TrySendLiveProgressSync(StoryManager? story)
-        {
-            var user = dc.Main.Class.ME?.user;
-            if (user == null || story == null || !ReferenceEquals(user.story, story))
-                return;
-
-            TrySendLiveProgressSync(user);
-        }
-
-        private bool Hook_ItemMetaManager_revealItem(Hook_ItemMetaManager.orig_revealItem orig, ItemMetaManager self, dc.String showAsNew, bool e)
-        {
-            var changed = orig(self, showAsNew, e);
-            if (changed)
-                TrySendLiveProgressSync(self);
-            return changed;
-        }
-
-        private bool Hook_ItemMetaManager_unlockItem(Hook_ItemMetaManager.orig_unlockItem orig, ItemMetaManager self, dc.String e)
-        {
-            var changed = orig(self, e);
-            if (changed)
-                TrySendLiveProgressSync(self);
-            return changed;
-        }
-
-        private bool Hook_ItemMetaManager_addPermanentItem(Hook_ItemMetaManager.orig_addPermanentItem orig, ItemMetaManager self, dc.String k)
-        {
-            var changed = orig(self, k);
-            if (changed)
-                TrySendLiveProgressSync(self);
-            return changed;
-        }
-
-        private bool Hook_ItemMetaManager_investOnItemProgress(Hook_ItemMetaManager.orig_investOnItemProgress orig, ItemMetaManager self, dc.String e)
-        {
-            var changed = orig(self, e);
-            if (changed)
-                TrySendLiveProgressSync(self);
-            return changed;
-        }
-
-        private bool Hook_ItemMetaManager_f_investOn(Hook_ItemMetaManager.orig_f_investOn orig, ItemMetaManager self, int upLevel)
-        {
-            var changed = orig(self, upLevel);
-            if (changed)
-                TrySendLiveProgressSync(self);
-            return changed;
-        }
-
-        private void Hook_StoryManager_incNpcProgress(Hook_StoryManager.orig_incNpcProgress orig, StoryManager self, NpcId id)
-        {
-            orig(self, id);
-            TrySendLiveProgressSync(self);
-        }
-
-        private void Hook_StoryManager_setNpcProgress(Hook_StoryManager.orig_setNpcProgress orig, StoryManager self, NpcId id, int v)
-        {
-            orig(self, id, v);
-            TrySendLiveProgressSync(self);
-        }
-
-        private void Hook_StoryManager_setBitFlag(Hook_StoryManager.orig_setBitFlag orig, StoryManager self, dc.String slot, int value, bool curValue)
-        {
-            orig(self, slot, value, curValue);
-            TrySendLiveProgressSync(self);
-        }
-
-        private void Hook_StoryManager_markLoreRoomAsVisited(Hook_StoryManager.orig_markLoreRoomAsVisited orig, StoryManager self, dc.String k)
-        {
-            orig(self, k);
-            TrySendLiveProgressSync(self);
-        }
-
-        private void Hook_StoryManager_markLoreRoomAsGenerated(Hook_StoryManager.orig_markLoreRoomAsGenerated orig, StoryManager self, virtual_baseLootLevel_biome_bonusTripleScrollAfterBC_cellBonus_dlc_doubleUps_eliteRoomChance_eliteWanderChance_flagsProps_group_icon_id_index_loreDescriptions_mapDepth_minGold_mobDensity_mobs_name_nextLevels_parallax_props_quarterUpsBC3_quarterUpsBC4_specificLoots_specificSubBiome_transitionTo_tripleUps_worldDepth_ l, dc.String k)
-        {
-            orig(self, l, k);
-            TrySendLiveProgressSync(self);
-        }
-
-        private void Hook_StoryManager_cleanStoryData(Hook_StoryManager.orig_cleanStoryData orig, StoryManager self)
-        {
-            orig(self);
-            TrySendLiveProgressSync(self);
-        }
-
         private void Hook_ZDoor_onActivate(Hook_ZDoor.orig_onActivate orig, ZDoor self, Hero lp, bool mob)
         {
             orig(self, lp, mob);
@@ -962,7 +910,17 @@ namespace DeadCellsMultiplayerMod
                 ReferenceEquals(lp, me))
             {
                 try { SendCurrentRoomTarget(force: true); } catch { }
-                try { ReceiveGhostCoords(); } catch (Exception ex) { Logger.Warning(ex, "[NetMod] ReceiveGhostCoords failed"); }
+                GameMenu.EnqueueMainThread(() =>
+                {
+                    try
+                    {
+                        ReceiveGhostCoords();
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Warning(ex, "[NetMod] ReceiveGhostCoords failed after door activate");
+                    }
+                });
             }
         }
 
@@ -1102,32 +1060,15 @@ namespace DeadCellsMultiplayerMod
             if (_netRole == NetRole.Host)
             {
                 orig(u, onlyGameData);
-                if (u != null)
-                {
-                    GameDataSync.MarkProgressPayloadDirty();
-                    GameDataSync.SendProgressSync(u, _net);
-                }
                 return;
             }
 
             if (_netRole == NetRole.Client)
             {
                 var serializerSwapped = GameDataSync.SwapToLocalSerializerSync();
-                User? saveUser = u;
-                if (u != null)
-                    GameDataSync.CaptureOriginalUserData(u, allowReplaceWhenBetter: true);
-
-                if (u != null && !GameDataSync.TryBuildSafeSaveUser(u, onlyGameData, out saveUser))
-                {
-                    Logger.Warning("[NetMod] Skipping client save: local progress snapshot clone is unavailable, preventing host progress overwrite");
-                    if (serializerSwapped)
-                        GameDataSync.RestoreRemoteSerializerSync();
-                    return;
-                }
-
                 try
                 {
-                    orig(saveUser, onlyGameData);
+                    orig(u, onlyGameData);
                 }
                 finally
                 {
@@ -1255,7 +1196,11 @@ namespace DeadCellsMultiplayerMod
                     GameDataSync.SendLevelGraph(graphLevelId, root, graph, rng, _net);
                     var activeUser = user ?? game?.user ?? dc.Main.Class.ME?.user;
                     if (activeUser != null)
-                        GameDataSync.SendBossRune(activeUser, _net);
+                    {
+                        var currentRune = GameDataSync.GetBossRuneInt(activeUser);
+                        if (!GameDataSync.TryGetHostBossRune(out var lastSent) || lastSent != currentRune)
+                            GameDataSync.SendBossRune(activeUser, _net);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1284,7 +1229,7 @@ namespace DeadCellsMultiplayerMod
                 }
             }
 
-            return root;
+            return root!;
         }
 
 
@@ -1374,7 +1319,21 @@ namespace DeadCellsMultiplayerMod
             }
 
             DrainRemoteCombatQueuesAfterLevelChange();
-            ReceiveGhostCoords();
+            GameMenu.EnqueueMainThread(() =>
+            {
+                try
+                {
+                    ReceiveGhostCoords();
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warning(ex, "[NetMod] ReceiveGhostCoords failed after level change");
+                }
+            });
+
+            _debugExplorerRevealAppliedSignature = string.Empty;
+            _nextDebugExplorerRevealRetryTick = 0;
+            _debugExplorerRevealAllCount = 0;
         }
 
 
@@ -1382,6 +1341,7 @@ namespace DeadCellsMultiplayerMod
         {
             me = self;
             try { me._targetable = true; } catch { }
+            _debugExplorerRevealAppliedSignature = string.Empty;
             orig(self, lvl, cx, cy);
             EnsureHeroVisibilityAfterRoomChange(me);
             SendCurrentRoomTarget(force: true);
@@ -1398,7 +1358,7 @@ namespace DeadCellsMultiplayerMod
         public void OnHeroInit()
         {
             GameMenu.MarkInRun();
-
+            ApplyDebugHeroRuntimeOptions();
         }
 
         public void OnFrameUpdate(double dt)
@@ -2134,7 +2094,16 @@ namespace DeadCellsMultiplayerMod
                         RunWithSuppressedBossCineSend(() =>
                         {
                             var storyProgress = 0;
-                            try { storyProgress = (int)level.game.user.story.getNpcProgress(new NpcId.TickPriest()); } catch { }
+                            try
+                            {
+                                var ug = level.game?.user;
+                                if (ug != null)
+                                {
+                                    var sp = ug.story.getNpcProgress(new NpcId.TickPriest());
+                                    storyProgress = sp ?? 0;
+                                }
+                            }
+                            catch { }
 
                             if (storyProgress > 0 && level.boss is MamaTick mamaTick)
                             {
@@ -2492,6 +2461,7 @@ namespace DeadCellsMultiplayerMod
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
             if (me == null) return;
+            ApplyDebugHeroRuntimeOptions();
             TryRecoverMissedFakeDeathFromLife();
             if (_netRole == NetRole.None || _net == null)
                 return;
@@ -2506,6 +2476,266 @@ namespace DeadCellsMultiplayerMod
             ReceiveGhostAttacks();
             UpdateGhostWeapons();
             UpdateGhostHeads();
+        }
+
+        private static bool IsDebugImmortalLocalHero(Hero? hero)
+        {
+            return hero != null &&
+                   me != null &&
+                   ReferenceEquals(hero, me) &&
+                   MultiplayerSettingsStorage.IsDebugSectionEnabled &&
+                   MultiplayerSettingsStorage.DebugPlayerImmortal;
+        }
+
+        private static void ApplyDebugImmortalState(Hero hero)
+        {
+            if (hero == null)
+                return;
+
+            try { hero.noDamageDuringBossBattle = true; } catch { }
+            try
+            {
+                if (hero.maxLife > 0 && hero.life < hero.maxLife)
+                    hero.life = hero.maxLife;
+            }
+            catch
+            {
+                try { hero.fullHeal(); } catch { }
+            }
+            try { hero._targetable = true; } catch { }
+        }
+
+        private void ApplyDebugHeroRuntimeOptions()
+        {
+            var hero = me;
+            if (hero == null || !MultiplayerSettingsStorage.IsDebugSectionEnabled)
+                return;
+
+            if (IsDebugImmortalLocalHero(hero))
+            {
+                ApplyDebugImmortalState(hero);
+            }
+            else
+            {
+                try { hero.noDamageDuringBossBattle = false; } catch { }
+            }
+
+            TryApplyDebugStartPerk(hero);
+            TryApplyDebugExplorerRune(hero);
+        }
+
+        private void TryApplyDebugStartPerk(Hero hero)
+        {
+            if (hero == null)
+                return;
+
+            var configuredPerkId = MultiplayerSettingsStorage.DebugStartPerkId;
+            if (string.IsNullOrWhiteSpace(configuredPerkId) ||
+                string.Equals(configuredPerkId, MultiplayerSettingsStorage.NoStartPerkValue, StringComparison.OrdinalIgnoreCase))
+            {
+                _debugPerkAppliedHero = null;
+                _debugPerkAppliedId = string.Empty;
+                _lastDebugPerkApplyErrorId = string.Empty;
+                _nextDebugPerkApplyTick = 0;
+                return;
+            }
+
+            var perkId = configuredPerkId.Trim();
+            if (ReferenceEquals(_debugPerkAppliedHero, hero) &&
+                string.Equals(_debugPerkAppliedId, perkId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var now = Stopwatch.GetTimestamp();
+            if (_nextDebugPerkApplyTick != 0 && now < _nextDebugPerkApplyTick)
+                return;
+
+            try
+            {
+                var item = new InventItem(new InventItemKind.Perk(perkId.AsHaxeString()));
+                hero.applyItemPickEffect(hero, item);
+
+                if (string.Equals(perkId, "P_Yolo", StringComparison.OrdinalIgnoreCase))
+                {
+                    try { hero.tryToApplyYoloPerk(); } catch { }
+                }
+
+                _debugPerkAppliedHero = hero;
+                _debugPerkAppliedId = perkId;
+                _lastDebugPerkApplyErrorId = string.Empty;
+                _nextDebugPerkApplyTick = 0;
+            }
+            catch (Exception ex)
+            {
+                _nextDebugPerkApplyTick = now + (long)(Stopwatch.Frequency * 1.5);
+                if (string.Equals(_lastDebugPerkApplyErrorId, perkId, StringComparison.Ordinal))
+                    return;
+
+                _lastDebugPerkApplyErrorId = perkId;
+                Logger.Warning(ex, "[NetMod] Failed to apply debug start perk {PerkId}", perkId);
+            }
+        }
+
+        private void TryApplyDebugExplorerRune(Hero hero)
+        {
+            if (hero == null)
+                return;
+
+            ItemMetaManager? itemMeta = null;
+            try
+            {
+                var user = hero._level?.game?.user ?? game?.user ?? dc.pr.Game.Class.ME?.user;
+                if (user == null)
+                    return;
+
+                itemMeta = user.itemMeta ?? new ItemMetaManager(user);
+                itemMeta.itemProgress ??= (ArrayObj)ArrayUtils.CreateDyn().array;
+                itemMeta.permanentItems ??= (ArrayObj)ArrayUtils.CreateDyn().array;
+                user.itemMeta = itemMeta;
+            }
+            catch
+            {
+                return;
+            }
+
+            if (itemMeta == null)
+                return;
+
+            if (MultiplayerSettingsStorage.DebugUseExplorersRune)
+            {
+                try
+                {
+                    var runeKey = ExplorerRunePermanentItemId.AsHaxeString();
+                    if (!itemMeta.hasPermanentItem(runeKey))
+                    {
+                        if (itemMeta.addPermanentItem(runeKey))
+                        {
+                            _debugExplorerRuneInjectedByDebug = true;
+                            _debugExplorerRuneInjectedMeta = itemMeta;
+                        }
+                    }
+                }
+                catch
+                {
+                }
+
+                TryRevealAllMinimapForDebugExplorerRune(hero);
+
+                return;
+            }
+
+            if (!_debugExplorerRuneInjectedByDebug)
+                return;
+
+            try
+            {
+                var runeKey = ExplorerRunePermanentItemId.AsHaxeString();
+                var targetMeta = _debugExplorerRuneInjectedMeta ?? itemMeta;
+                var permanentItems = targetMeta?.permanentItems;
+                if (permanentItems != null)
+                {
+                    while (permanentItems.remove(runeKey))
+                    {
+                    }
+                }
+            }
+            catch
+            {
+            }
+            finally
+            {
+                _debugExplorerRuneInjectedByDebug = false;
+                _debugExplorerRuneInjectedMeta = null;
+                _debugExplorerRevealAppliedSignature = string.Empty;
+                _nextDebugExplorerRevealRetryTick = 0;
+            }
+        }
+
+        private void TryRevealAllMinimapForDebugExplorerRune(Hero hero)
+        {
+            if (_debugExplorerRevealAllCount >= MaxDebugExplorerRevealAllCalls)
+                return;
+
+            var now = Stopwatch.GetTimestamp();
+
+            var sig = GetDebugExplorerRevealSignature(hero);
+            if (!string.IsNullOrWhiteSpace(sig) &&
+                string.Equals(_debugExplorerRevealAppliedSignature, sig, StringComparison.Ordinal))
+                return;
+
+            if (_nextDebugExplorerRevealRetryTick != 0 && now < _nextDebugExplorerRevealRetryTick)
+                return;
+
+            try
+            {
+                var feedback = false;
+                try
+                {
+                    // Match the native game flow: reveal rooms + refresh minimap trackers.
+                    hero.triggerExplorerInstinct(Ref<bool>.From(ref feedback));
+                }
+                catch
+                {
+                }
+
+                var minimap = hero._level?.game?.hud?.minimap ?? dc.ui.HUD.Class.ME?.minimap;
+                if (minimap == null)
+                {
+                    _nextDebugExplorerRevealRetryTick = now + (long)(Stopwatch.Frequency * 0.05);
+                    return;
+                }
+
+                minimap.revealAll();
+                _debugExplorerRevealAllCount++;
+                try { minimap.forceRenderRooms(); } catch { }
+                try { minimap.invalidateMinimap(); } catch { }
+
+                if (string.IsNullOrWhiteSpace(sig))
+                    sig = GetDebugExplorerRevealSignature(hero);
+
+                if (!string.IsNullOrWhiteSpace(sig))
+                    _debugExplorerRevealAppliedSignature = sig;
+
+                _nextDebugExplorerRevealRetryTick = 0;
+            }
+            catch
+            {
+                _nextDebugExplorerRevealRetryTick = now + (long)(Stopwatch.Frequency * 0.25);
+            }
+        }
+
+        /// <summary>Level id + branch token so we re-reveal after room/sub-level changes with the same map id.</summary>
+        private string GetDebugExplorerRevealSignature(Hero hero)
+        {
+            if (TryGetCurrentVisibilityContext(out var levelId, out var branch) && branch >= 0 &&
+                !string.IsNullOrWhiteSpace(levelId))
+                return $"{levelId.Trim()}|{branch}";
+
+            var fallback = GetDebugExplorerRevealLevelKey(hero);
+            if (!string.IsNullOrWhiteSpace(fallback))
+                return $"{fallback.Trim()}|0";
+
+            return string.Empty;
+        }
+
+        private string GetDebugExplorerRevealLevelKey(Hero hero)
+        {
+            try
+            {
+                var levelFromHero = hero?._level?.map?.id?.ToString();
+                if (!string.IsNullOrWhiteSpace(levelFromHero))
+                    return levelFromHero.Trim();
+            }
+            catch
+            {
+            }
+
+            var currentLevelId = GetCurrentLevelId();
+            if (!string.IsNullOrWhiteSpace(currentLevelId))
+                return currentLevelId.Trim();
+
+            return string.Empty;
         }
 
         private void UpdateGhostHeads()
