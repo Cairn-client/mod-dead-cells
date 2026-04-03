@@ -1,3 +1,8 @@
+<div align="center">
+
+English • [Русский](CONTRIBUTING_ru.md)
+  
+</div>
 # Contributing to DeadCellsMultiplayerMod
 
 Thank you for your interest in improving this mod. This document describes how to build the project and what we expect from contributions.
