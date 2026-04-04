@@ -1020,16 +1020,6 @@ namespace DeadCellsMultiplayerMod
             return result;
         }
 
-        private static void ApplyLevelGraphGenData(RoomNode node, LevelGraphGenDataSync? genData)
-        {
-            if (node == null || genData == null)
-                return;
-
-            // WARNING:
-            // Mutating RoomNode.genData from C# (even via Reflect) can corrupt HL objects and later
-            // explode as unrelated casts like "tool.InventItem -> level.LevelMap".
-            // Keep genData sync capture for diagnostics, but do not apply it here until a native-safe path exists.
-        }
 
         private static bool ApplyLevelGraph(LevelStruct target, LevelGraphSync sync, out RoomNode? rebuiltRoot, out string reason)
         {
@@ -1128,8 +1118,6 @@ namespace DeadCellsMultiplayerMod
                         {
                         }
                     }
-
-                    ApplyLevelGraphGenData(node, src.GenData);
 
                     orderedNodes.Add(node);
                     byUid[src.Uid] = node;
@@ -1573,6 +1561,7 @@ namespace DeadCellsMultiplayerMod
                     continue;
                 if (!byUid.TryGetValue(uid, out var node))
                     continue;
+
                 arr.array.pushDyn(node);
             }
 

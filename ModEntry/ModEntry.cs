@@ -3,6 +3,7 @@ using ModCore.Events.Interfaces.Game;
 using ModCore.Events.Interfaces.Game.Hero;
 using ModCore.Mods;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using dc.en;
 using dc.en.inter;
 using dc.pr;
@@ -503,27 +504,89 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
+        /// <summary>
+        /// Client often lacks Boss Rush door animation frames until assets settle; HL throws "Unknown frame: bossRushDoor*".
+        /// Only swallow those — rethrow everything else so unrelated bugs are not masked (and to avoid odd door state).
+        /// </summary>
+        private static bool IsBossRushDoorMissingFrameException(Exception ex)
+        {
+            for (var cur = ex; cur != null; cur = cur.InnerException)
+            {
+                var msg = cur.Message;
+                if (string.IsNullOrWhiteSpace(msg))
+                    continue;
+                if (msg.IndexOf("Unknown frame", StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+                if (msg.IndexOf("bossRushDoor", StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// At most one deferred <see cref="GameMenu.EnqueueMainThread"/> <c>orig(self)</c> per door instance.
+        /// </summary>
+        private static readonly ConditionalWeakTable<BossRushDoor, object> s_bossRushDoorGfxDeferredPending = new();
+
+        /// <summary>
+        /// Client-only: missing boss-rush door anim frames. Do not call <see cref="Assets.Class.lib.getLevel"/> for
+        /// BossRushZone from this hook — it can run during level/entity init and corrupt unrelated HL state (casts such as
+        /// <c>tool.CPoint</c> vs <c>level.LevelMap</c>).
+        /// </summary>
         private void Hook_BossRushDoor_initGfx(Hook_BossRushDoor.orig_initGfx orig, BossRushDoor self)
         {
             try
             {
                 orig(self);
-                return;
             }
             catch (Exception ex)
             {
-                if (_netRole != NetRole.Client || self == null)
+                if (_netRole != NetRole.Client || self == null || !IsBossRushDoorMissingFrameException(ex))
                     throw;
 
                 string? bossRushType = null;
                 try { bossRushType = self.bossRushType?.ToString(); } catch { }
 
-                Logger.Warning("[NetMod] BossRushDoor.initGfx skipped on client level={LevelId}: type={Type} ({Msg})",
+                Logger.Warning("[NetMod] BossRushDoor.initGfx failed on client level={LevelId}: type={Type} ({Msg})",
                     levelId,
                     bossRushType ?? "null",
                     ex.Message);
-                try { self.spr = null; } catch (Exception ex2) { Logger.Warning(ex2, "[NetMod] BossRushDoor spr=null failed"); }
-                return;
+
+                if (s_bossRushDoorGfxDeferredPending.TryGetValue(self, out _))
+                {
+                    Logger.Warning("[NetMod] BossRushDoor.initGfx second sync failure before deferred retry; clearing spr level={LevelId}", levelId);
+                    try { self.spr = null; } catch (Exception ex2) { Logger.Warning(ex2, "[NetMod] BossRushDoor spr=null failed"); }
+                    return;
+                }
+
+                s_bossRushDoorGfxDeferredPending.Add(self, new object());
+                var localOrig = orig;
+                var localSelf = self;
+                GameMenu.EnqueueMainThread(() =>
+                {
+                    try
+                    {
+                        localOrig(localSelf);
+                    }
+                    catch (Exception ex2)
+                    {
+                        if (_netRole != NetRole.Client || !IsBossRushDoorMissingFrameException(ex2))
+                        {
+                            Logger.Warning(ex2, "[NetMod] BossRushDoor.initGfx deferred retry unexpected error");
+                            return;
+                        }
+
+                        string? t = null;
+                        try { t = localSelf.bossRushType?.ToString(); } catch { }
+                        Logger.Warning("[NetMod] BossRushDoor.initGfx deferred retry still missing frames level={LevelId}: type={Type} ({Msg})",
+                            levelId,
+                            t ?? "null",
+                            ex2.Message);
+                        try { localSelf.spr = null; } catch (Exception ex3) { Logger.Warning(ex3, "[NetMod] BossRushDoor spr=null failed"); }
+                    }
+                });
             }
         }
 

@@ -117,28 +117,57 @@ namespace DeadCellsMultiplayerMod
 
         private int ComputeLevelBranchToken(Level currentLevel, string levelContextId)
         {
-            if (!currentLevel.isSubLevel)
+            try
+            {
+                if (!currentLevel.isSubLevel)
+                    return 0;
+            }
+            catch
+            {
                 return 0;
+            }
 
             unchecked
             {
-                var ownerGame = currentLevel.game ?? game;
-                var subLevels = ownerGame?.subLevels;
-                if (subLevels != null)
+                try
                 {
-                    var targetUid = currentLevel.__uid;
+                    var ownerGame = currentLevel.game ?? game;
+                    var subLevels = ownerGame?.subLevels;
+                    if (subLevels == null)
+                        return ComputeStablePositiveToken($"SUB|{levelContextId}");
+
+                    int targetUid;
+                    try
+                    {
+                        targetUid = currentLevel.__uid;
+                    }
+                    catch
+                    {
+                        return ComputeStablePositiveToken($"SUB|{levelContextId}");
+                    }
+
                     for (int i = 0; i < subLevels.length; i++)
                     {
-                        var candidate = subLevels.getDyn(i) as Level;
-                        if (candidate == null)
+                        try
+                        {
+                            if (subLevels.getDyn(i) is not Level candidate)
+                                continue;
+
+                            if (ReferenceEquals(candidate, currentLevel))
+                                return i + 1;
+
+                            if (candidate.__uid == targetUid)
+                                return i + 1;
+                        }
+                        catch
+                        {
                             continue;
-
-                        if (ReferenceEquals(candidate, currentLevel))
-                            return i + 1;
-
-                        if (candidate.__uid == targetUid)
-                            return i + 1;
+                        }
                     }
+                }
+                catch
+                {
+                    return ComputeStablePositiveToken($"SUB|{levelContextId}");
                 }
 
                 return ComputeStablePositiveToken($"SUB|{levelContextId}");
