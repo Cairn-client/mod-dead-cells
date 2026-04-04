@@ -1124,7 +1124,6 @@ namespace DeadCellsMultiplayerMod
                     syncByUid[src.Uid] = src;
                 }
 
-                // Populate struct lookup early so RoomNode.addZChild() can resolve @struct.getId(uid).
                 var earlyAll = ArrayUtils.CreateDyn();
                 var earlyNodes = new StringMap();
                 for (int i = 0; i < sync.Nodes.Count; i++)
@@ -1166,7 +1165,6 @@ namespace DeadCellsMultiplayerMod
                     if (!byUid.TryGetValue(src.Uid, out var node))
                         continue;
 
-                    // Rebuild Z-links through native RoomNode.addZChild to keep HL object layout valid.
                     if (!src.IsZRoot || string.IsNullOrWhiteSpace(src.ParentUid))
                         continue;
                     if (!byUid.TryGetValue(src.ParentUid, out var parent))

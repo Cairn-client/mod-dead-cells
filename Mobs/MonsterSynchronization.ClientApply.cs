@@ -22,6 +22,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return;
             }
 
+            // Life/death must sync even when the mob is far/off-screen (visual interpolation stays gated below).
+            ApplyAuthoritativeLifeState(self, target.Life, target.MaxLife);
+
             if (!ShouldProcessClientVisualState(self, localIndex))
                 return;
 
@@ -84,8 +87,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var responsiveDir = ComputeResponsiveFacingDir(self, target);
             if (responsiveDir != 0)
                 self.dir = responsiveDir;
-
-            ApplyAuthoritativeLifeState(self, target.Life, target.MaxLife);
         }
 
         private static bool ShouldPreserveClientAttackMotion(Mob mob)

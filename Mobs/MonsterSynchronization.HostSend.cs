@@ -54,7 +54,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 var mob = s_batchMobsScratch[i];
                 if (!TryGetMobSyncId(mob, out var mobSyncId) || mobSyncId < 0)
                     continue;
-                if (!IsMobOnScreenForSync(mob))
+                if (!IsMobOnScreenForSync(mob) && !ShouldForceHostOffScreenMobStateForHpOrDie(mob, mobSyncId))
                     continue;
                 var priority = GetHostMobSyncPriority(mob);
                 var forceAnimTransitionSend = ShouldForceHostAnimStateSend(mob, mobSyncId, out var prebuiltAnim);
@@ -132,7 +132,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     }
                 }
 
-                if (!IsMobOnScreenForSync(mob))
+                if (!IsMobOnScreenForSync(mob) && !ShouldForceClientOffScreenMobStateForHpOrDie(mob))
                     continue;
 
                 if (!ShouldEvaluateMobBySyncId(
@@ -206,6 +206,66 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// When a mob is off-screen we still must push state for HP changes and death (host → clients).
+        /// </summary>
+        private static bool ShouldForceHostOffScreenMobStateForHpOrDie(Mob mob, int mobSyncId)
+        {
+            if (mob == null)
+                return false;
+
+            int life;
+            int maxLife;
+            try
+            {
+                life = mob.life;
+                maxLife = mob.maxLife;
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (life <= 0)
+                return true;
+
+            if (maxLife > 0 && life < maxLife)
+                return true;
+
+            lock (Sync)
+            {
+                if (hostLastSentMobStatesBySyncId.TryGetValue(mobSyncId, out var prev) && prev.Life != life)
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Client → host affect payloads must still send when HP/death matters while off-screen.
+        /// </summary>
+        private static bool ShouldForceClientOffScreenMobStateForHpOrDie(Mob mob)
+        {
+            if (mob == null)
+                return false;
+
+            try
+            {
+                if (mob.life <= 0)
+                    return true;
+
+                var max = mob.maxLife;
+                if (max <= 0)
+                    return false;
+
+                return mob.life < max;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool HasActiveHostClientVisibilityLease(int mobSyncId, long nowTick, bool pruneExpired)
