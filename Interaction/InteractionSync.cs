@@ -1,6 +1,7 @@
 using dc;
 using dc.en;
 using dc.en.inter;
+using dc.hl.types;
 using dc.pr;
 using dc.tool.atk;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
@@ -8,6 +9,7 @@ using HaxeProxy.Runtime;
 using ModCore.Events;
 using ModCore.Events.Interfaces.Game.Hero;
 using Serilog;
+using System.Reflection;
 
 namespace DeadCellsMultiplayerMod.Interaction;
 
@@ -968,19 +970,50 @@ public class InteractionSync :
         return nearest;
     }
 
+    private static object? TryGetLevelTriggers(Level level)
+    {
+        try
+        {
+            var p = typeof(Level).GetProperty("triggers", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            return p?.GetValue(level);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static int GetTriggerArrayLength(object? triggers)
+    {
+        if (triggers is ArrayObj ao)
+            return ao.length;
+        if (triggers is ArrayDyn ad)
+            return ad.get_length();
+        return 0;
+    }
+
+    private static T? GetTriggerAt<T>(object? triggers, int i) where T : class
+    {
+        if (triggers is ArrayObj ao)
+            return ao.getDyn(i) as T;
+        if (triggers is ArrayDyn ad)
+            return ad.getDyn(i) as T;
+        return null;
+    }
+
     private static Elevator? FindElevatorInTriggers(Level level, double x, double y)
     {
         try
         {
-            var triggers = (level as dynamic)?.triggers;
+            var triggers = TryGetLevelTriggers(level);
             if (triggers == null)
                 return null;
-            var len = (int)(triggers.length ?? 0);
+            var len = GetTriggerArrayLength(triggers);
             Elevator? nearest = null;
             double nearestSq = ElevatorPosTolerance * ElevatorPosTolerance * 4;
             for (var i = 0; i < len; i++)
             {
-                var t = triggers.getDyn(i) as Elevator;
+                var t = GetTriggerAt<Elevator>(triggers, i);
                 if (t?.spr == null) continue;
                 var dx = t.spr.x - x;
                 var dy = t.spr.y - y;
@@ -1030,15 +1063,15 @@ public class InteractionSync :
     {
         try
         {
-            var triggers = (level as dynamic)?.triggers;
+            var triggers = TryGetLevelTriggers(level);
             if (triggers == null)
                 return null;
-            var len = (int)(triggers.length ?? 0);
+            var len = GetTriggerArrayLength(triggers);
             Portal? nearest = null;
             double nearestSq = PortalPosTolerance * PortalPosTolerance * 4;
             for (var i = 0; i < len; i++)
             {
-                var t = triggers.getDyn(i) as Portal;
+                var t = GetTriggerAt<Portal>(triggers, i);
                 if (t?.spr == null) continue;
                 var dx = t.spr.x - x;
                 var dy = t.spr.y - y;
@@ -1061,15 +1094,15 @@ public class InteractionSync :
     {
         try
         {
-            var triggers = (level as dynamic)?.triggers;
+            var triggers = TryGetLevelTriggers(level);
             if (triggers == null)
                 return null;
-            var len = (int)(triggers.length ?? 0);
+            var len = GetTriggerArrayLength(triggers);
             Teleport? nearest = null;
             double nearestSq = TeleportPosTolerance * TeleportPosTolerance * 4;
             for (var i = 0; i < len; i++)
             {
-                var t = triggers.getDyn(i) as Teleport;
+                var t = GetTriggerAt<Teleport>(triggers, i);
                 if (t?.spr == null) continue;
                 var dx = t.spr.x - x;
                 var dy = t.spr.y - y;

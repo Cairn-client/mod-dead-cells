@@ -813,7 +813,7 @@ namespace DeadCellsMultiplayerMod
 
             try
             {
-                dynamic? gameData = user.game?.data;
+                var gameData = user.game?.data;
                 if (gameData?.cgData != null)
                     gameData.cgData.numBossCells = bossRune;
             }
@@ -835,7 +835,7 @@ namespace DeadCellsMultiplayerMod
             // Prefer that when available so decreases are propagated too.
             try
             {
-                dynamic? gameData = user.game?.data;
+                var gameData = user.game?.data;
                 if (gameData?.cgData != null)
                 {
                     var cgBossRune = ToInt(gameData.cgData.numBossCells);
@@ -1566,7 +1566,7 @@ namespace DeadCellsMultiplayerMod
 
             try
             {
-                dynamic keys = map.keys.Invoke();
+                var keys = map.keys.Invoke();
                 while (keys.hasNext.Invoke())
                 {
                     var keyObj = keys.next.Invoke();

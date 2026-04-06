@@ -6,6 +6,7 @@ using System.Globalization;
 using System.Text;
 using dc;
 using dc.en;
+using dc.hl.types;
 using dc.h2d;
 using dc.libs.heaps.slib;
 using dc.libs.heaps.slib._AnimManager;
@@ -334,12 +335,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static int TryGetDynLength(object? dynArray)
         {
-            if (dynArray == null)
+            if (dynArray is not ArrayObj ao)
                 return 0;
 
             try
             {
-                return ((dynamic)dynArray).length;
+                return ao.length;
             }
             catch
             {
@@ -349,12 +350,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static virtual_a_t_uniqId_val_? TryGetDynAffectEntry(object? dynArray, int index)
         {
-            if (dynArray == null || index < 0)
+            if (dynArray is not ArrayObj ao || index < 0 || index >= ao.length)
                 return null;
 
             try
             {
-                return ((dynamic)dynArray).getDyn(index) as virtual_a_t_uniqId_val_;
+                return ao.getDyn(index) as virtual_a_t_uniqId_val_;
             }
             catch
             {

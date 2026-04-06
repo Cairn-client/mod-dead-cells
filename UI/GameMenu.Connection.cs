@@ -59,6 +59,9 @@ namespace DeadCellsMultiplayerMod
 
         private static void ShowHostStatusMenu(TitleScreen screen)
         {
+            if (_menuRebuildDepth > 0)
+                return;
+            _menuRebuildDepth++;
             var prevSuppress = _suppressAutoButton;
             _suppressAutoButton = true;
             var prevIsMain = GetIsMainMenu(screen);
@@ -92,11 +95,15 @@ namespace DeadCellsMultiplayerMod
             {
                 SetIsMainMenu(screen, prevIsMain);
                 _suppressAutoButton = prevSuppress;
+                _menuRebuildDepth--;
             }
         }
 
         private static void ShowClientWaitingMenu(TitleScreen screen)
         {
+            if (_menuRebuildDepth > 0)
+                return;
+            _menuRebuildDepth++;
             var prevSuppress = _suppressAutoButton;
             _suppressAutoButton = true;
             var prevIsMain = GetIsMainMenu(screen);
@@ -126,6 +133,7 @@ namespace DeadCellsMultiplayerMod
             {
                 SetIsMainMenu(screen, prevIsMain);
                 _suppressAutoButton = prevSuppress;
+                _menuRebuildDepth--;
             }
         }
 

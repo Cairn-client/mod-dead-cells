@@ -65,9 +65,9 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Minimap
                 int length = obj.length;
                 for (int i = 0; i < length; i++)
                 {
-                    dynamic arrayElement = obj.array[i]!;
+                    var arrayElement = obj.getDyn(i);
                     if (arrayElement == null) continue;
-                    mmtracker = arrayElement;
+                    mmtracker = (MMTracker)arrayElement;
                     if (king != null && mmtracker != null && Std.Class.@is(mmtracker.e, GhostKing.Class))
                     {
                         var clients = ModEntry.clients;

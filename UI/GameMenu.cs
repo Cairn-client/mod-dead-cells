@@ -39,6 +39,7 @@ namespace DeadCellsMultiplayerMod
         private static ulong _steamLobbyId;
         private static string _steamLobbyCode = string.Empty;
         private static ulong _steamHostSteamId;
+        private static bool _steamJoinLobbyResolvePending;
         private static ulong? _pendingOverlayJoinLobbyId;
         private static bool _waitingForHost;
         internal const int ClientConnectMaxAttempts = 3;
@@ -84,10 +85,15 @@ namespace DeadCellsMultiplayerMod
 
             return SteamConnect.TryCopyLobbyCodeToClipboard(code);
         }
+
+        /// <summary>True while clipboard/overlay join is resolving the Steam lobby (before <see cref="ApplySteamJoinResult"/>).</summary>
+        internal static bool IsSteamJoinLobbyResolvePending() => _steamJoinLobbyResolvePending;
         private static bool _localReady;
         private static List<PlayerInfo> _playersDisplay = new();
         private static bool _inHostStatusMenu;
         private static bool _inClientWaitingMenu;
+        /// <summary>Prevents nested host/client status menu rebuilds when addMenu hook runs ProcessMainThreadQueue before orig.</summary>
+        private static int _menuRebuildDepth;
         private static bool _genArrived;
         private static LevelDescSync? _cachedLevelDescSync;
         private static readonly object TextInputSync = new();
@@ -849,10 +855,10 @@ namespace DeadCellsMultiplayerMod
             _steamLobbyId = 0;
             _steamLobbyCode = string.Empty;
             _steamHostSteamId = 0UL;
-            ConnectionUI.NotifyConnectionsChanged();
             ApplySteamPersonaUsername();
 
-            ShowSteamConnectingMenu(screen);
+            _steamJoinLobbyResolvePending = true;
+            PrepareSteamJoinConnectionUiOnly(screen);
             _ = Task.Run(() =>
             {
                 var ok = SteamConnect.TryResolveJoinEndpointFromClipboard(out var join);
@@ -878,10 +884,10 @@ namespace DeadCellsMultiplayerMod
             _steamLobbyId = 0;
             _steamLobbyCode = string.Empty;
             _steamHostSteamId = 0UL;
-            ConnectionUI.NotifyConnectionsChanged();
             ApplySteamPersonaUsername();
 
-            ShowSteamConnectingMenu(screen);
+            _steamJoinLobbyResolvePending = true;
+            PrepareSteamJoinConnectionUiOnly(screen);
             _ = Task.Run(() =>
             {
                 _log?.Information("[NetMod][Steam] Overlay join resolving lobby (lobbyId={LobbyId})", lobbyId);
@@ -905,7 +911,8 @@ namespace DeadCellsMultiplayerMod
             SendUsernameToRemote();
         }
 
-        private static void ShowSteamConnectingMenu(TitleScreen screen)
+        /// <summary>Clears title menu and shows ConnectionUI while the Steam lobby is resolved off-thread.</summary>
+        private static void PrepareSteamJoinConnectionUiOnly(TitleScreen screen)
         {
             var prevSuppress = _suppressAutoButton;
             _suppressAutoButton = true;
@@ -914,14 +921,15 @@ namespace DeadCellsMultiplayerMod
             {
                 SetIsMainMenu(screen, false);
                 screen.clearMenu();
-                AddInfoLine(screen, GetText.Instance.GetString("Connecting to Steam lobby..."), infoColor: 0xE0E0E0);
                 RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
                 _inClientWaitingMenu = false;
                 _inHostStatusMenu = false;
+                screen.ShouldAutoHideConnectionUI(true);
+                ConnectionUI.NotifyConnectionsChanged();
             }
             catch (Exception ex)
             {
-                _log?.Warning("[NetMod] Failed to show Steam connecting menu: {Message}", ex.Message);
+                _log?.Warning("[NetMod] Failed to prepare Steam join UI: {Message}", ex.Message);
             }
             finally
             {
@@ -932,6 +940,8 @@ namespace DeadCellsMultiplayerMod
 
         private static void ApplySteamJoinResult(TitleScreen screen, bool ok, SteamConnect.JoinLobbyResult join, bool fromOverlay)
         {
+            _steamJoinLobbyResolvePending = false;
+
             if (fromOverlay)
                 _log?.Information("[NetMod][Steam] Overlay join result: ok={Ok} error={Error}", ok, join.Error ?? "(none)");
 

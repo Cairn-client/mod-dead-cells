@@ -35,7 +35,7 @@ namespace DeadCellsMultiplayerMod
 
             try
             {
-                dynamic keys = map.keys.Invoke();
+                var keys = map.keys.Invoke();
                 while (keys.hasNext.Invoke())
                 {
                     var keyObj = keys.next.Invoke();
@@ -111,7 +111,7 @@ namespace DeadCellsMultiplayerMod
             try
             {
                 var keysToRemove = new List<object>();
-                dynamic keys = map.keys.Invoke();
+                var keys = map.keys.Invoke();
                 while (keys.hasNext.Invoke())
                 {
                     var keyObj = keys.next.Invoke();
@@ -148,7 +148,7 @@ namespace DeadCellsMultiplayerMod
             try
             {
                 var keysToRemove = new List<object>();
-                dynamic keys = map.keys.Invoke();
+                var keys = map.keys.Invoke();
                 while (keys.hasNext.Invoke())
                 {
                     var keyObj = keys.next.Invoke();

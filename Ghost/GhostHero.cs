@@ -80,8 +80,7 @@ namespace DeadCellsMultiplayerMod
             if (!string.IsNullOrWhiteSpace(label))
                 SetLabel(king, label);
             this.UI = new MultiplayerUI(modEntry);
-            // dynamic key = Data.Class.item.all.getDyn(278);
-            // dynamic props = key.props;
+            // (removed) item key/props experiment: Data.Class.item.all.getDyn(278) ...
             // props.prct = 0;
             king.spr._animManager.play("idle".AsHaxeString(), null, null).loop(null);
             return king;

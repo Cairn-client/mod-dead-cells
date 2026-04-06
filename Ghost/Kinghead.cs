@@ -48,7 +48,7 @@ namespace DeadCellsMultiplayerMod.KingHead
 
             try
             {
-                ((dynamic)this).hero = heroRef;
+                this.hero = heroRef;
             }
             catch
             {

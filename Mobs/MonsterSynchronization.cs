@@ -668,6 +668,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private void Hook_Mob_onDamage(Hook_Mob.orig_onDamage orig, Mob self, AttackData i)
         {
             var preDamageLife = GetMobLifeOrFallback(self, 0);
+            // Lethal damage runs onDie inside orig, which removes the mob from tracking before this hook resumes.
+            // Cache ids before orig so hit|life still sends when the mob is already untracked/destroyed.
+            var preTrackOk = false;
+            var cachedLocalIndex = -1;
+            var preSyncOk = false;
+            var cachedMobSyncId = -1;
+            if (self != null && i != null && GameMenu.NetRef is { } netPre && IsSyncMob(self))
+            {
+                preTrackOk = TryGetTrackedIndex(self, out cachedLocalIndex);
+                preSyncOk = TryGetMobSyncId(self, out cachedMobSyncId);
+            }
+
             orig(self, i);
 
             try
@@ -676,7 +688,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return;
 
                 var net = GameMenu.NetRef;
-                if (net == null || !IsSyncMob(self))
+                if (net == null)
+                    return;
+
+                // After lethal orig(), the mob may be destroyed; IsSyncMob can fail even though we were tracked before orig.
+                if (!IsSyncMob(self) && !preSyncOk)
                     return;
 
                 var isClient = IsClient(net);
@@ -702,12 +718,20 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return;
 
                 if (!TryGetTrackedIndex(self, out var localIndex))
-                    return;
+                {
+                    if (!preTrackOk || !shouldReport)
+                        return;
+                    localIndex = cachedLocalIndex;
+                }
 
                 if (!TryGetMobSyncId(self, out var mobSyncId))
-                    return;
+                {
+                    if (!preSyncOk || !shouldReport)
+                        return;
+                    mobSyncId = cachedMobSyncId;
+                }
 
-                var life = self.life;
+                var life = GetMobLifeOrFallback(self, 0);
                 var x = GetSyncX(self);
                 var y = GetSyncY(self);
 
@@ -747,7 +771,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                                 clientLastMobHitReportTick.TryGetValue(localIndex, out var lastTick) &&
                                 ElapsedSeconds(lastTick, now) < ClientMobHitReportMinIntervalSeconds)
                             {
-                                clientLastReportedMobLife[localIndex] = life;
+                                // Do not update last-reported life here: we did not send; host still has the previous HP.
                                 return;
                             }
 
