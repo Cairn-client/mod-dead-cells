@@ -5,6 +5,7 @@ using dc.hl.types;
 using dc.pr;
 using dc.tool.atk;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
+using DeadCellsMultiplayerMod.Tools;
 using HaxeProxy.Runtime;
 using ModCore.Events;
 using ModCore.Events.Interfaces.Game.Hero;
@@ -389,6 +390,7 @@ public class InteractionSync :
 
     void IOnHeroUpdate.OnHeroUpdate(double dt)
     {
+        var hitchStart = RuntimeHitchWatch.Start();
         var net = GameMenu.NetRef;
         if (net == null || !net.IsAlive)
             return;
@@ -439,6 +441,18 @@ public class InteractionSync :
         {
             ApplyRemoteBossRuneUpdateCells(updateCellsEvents);
         }
+
+        var hitchMs = RuntimeHitchWatch.GetElapsedMilliseconds(hitchStart);
+        if (hitchMs >= RuntimeHitchWatch.InteractionSlowThresholdMs)
+        {
+            RuntimeHitchWatch.LogSlow(
+                _log,
+                "InteractionSync.OnHeroUpdate",
+                hitchMs,
+                string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"openedDoors={_openedDoors.Count} elevatorSends={_elevatorLastInterSendTickMs.Count}"));
+        }
     }
 
     private void CheckAndCloseDoorsWhenNoOneNearby()
@@ -447,7 +461,8 @@ public class InteractionSync :
         if (level == null)
             return;
 
-        var toRemove = default(List<Door>?);
+        List<Door>? toRemove = null;
+        List<Door>? toClose = null;
         foreach (var door in _openedDoors)
         {
             try
@@ -469,6 +484,19 @@ public class InteractionSync :
                 if (SafeRead(() => door.broken, false))
                     continue;
 
+                toClose ??= new List<Door>();
+                toClose.Add(door);
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "[InteractionSync] Door auto-close check failed");
+            }
+        }
+
+        if (toClose != null)
+        {
+            foreach (var door in toClose)
+            {
                 _openedDoors.Remove(door);
                 try
                 {
@@ -479,10 +507,6 @@ public class InteractionSync :
                 {
                     _log.Warning(ex, "[InteractionSync] closeFast failed (door may be broken)");
                 }
-            }
-            catch (Exception ex)
-            {
-                _log.Warning(ex, "[InteractionSync] Door auto-close check failed");
             }
         }
 

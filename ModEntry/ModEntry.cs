@@ -33,6 +33,7 @@ using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using DeadCellsMultiplayerMod.MultiplayerModUI.LevelExit;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
 using DeadCellsMultiplayerMod.Tools.ModLang;
+using DeadCellsMultiplayerMod.Tools;
 using DeadCellsMultiplayerMod.KingHead;
 using DeadCellsMultiplayerMod.Mobs.Levelinit;
 using dc.en.inter.door;
@@ -923,7 +924,6 @@ namespace DeadCellsMultiplayerMod
             var localId = net?.id ?? 0;
             _ghost = new GhostHero(localId, game!, me, Logger, this);
             _ghost.SetLabel(me, GameMenu.Username);
-
             for (int i = 0; i < clients.Length; i++)
             {
                 DisposeClientSlot(i, clearIdentity: false);
@@ -969,31 +969,104 @@ namespace DeadCellsMultiplayerMod
         public void OnFrameUpdate(double dt)
         {
             if (!_ready) return;
+            var hitchStart = RuntimeHitchWatch.Start();
             GameMenu.ProcessMainThreadQueue();
             GameMenu.TickMenu(dt);
             DetectAndSendBossCine();
             ApplyReceivedBossHeroTeleport();
             ApplyReceivedBossCine();
             SuppressRemoteBossDeathCineIfNeeded();
+
+            var hitchMs = RuntimeHitchWatch.GetElapsedMilliseconds(hitchStart);
+            if (hitchMs >= RuntimeHitchWatch.ModFrameSlowThresholdMs)
+            {
+                RuntimeHitchWatch.LogSlow(
+                    Logger,
+                    "ModEntry.OnFrameUpdate",
+                    hitchMs,
+                    string.Create(
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        $"role={_netRole} ready={(_ready ? 1 : 0)} remoteDowned={_remoteDowned.Count} pendingDispose={_pendingClientDisposeTicks.Count}"));
+            }
         }
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
             if (me == null) return;
+            var hitchStart = RuntimeHitchWatch.Start();
+            var stepStart = RuntimeHitchWatch.Start();
             ApplyDebugHeroRuntimeOptions();
+            LogHeroUpdateStepIfSlow("ModEntry.OnHeroUpdate.ApplyDebugHeroRuntimeOptions", stepStart, null);
+
+            stepStart = RuntimeHitchWatch.Start();
             TryRecoverMissedFakeDeathFromLife();
+            LogHeroUpdateStepIfSlow("ModEntry.OnHeroUpdate.TryRecoverMissedFakeDeathFromLife", stepStart, null);
+
             if (_netRole == NetRole.None || _net == null)
                 return;
+
+            stepStart = RuntimeHitchWatch.Start();
             TrySendCurrentDiveSkillInfoSnapshot();
+            LogHeroUpdateStepIfSlow("ModEntry.OnHeroUpdate.TrySendCurrentDiveSkillInfoSnapshot", stepStart, null);
+
+            stepStart = RuntimeHitchWatch.Start();
             SendCurrentRoomTarget(force: false);
+            LogHeroUpdateStepIfSlow("ModEntry.OnHeroUpdate.SendCurrentRoomTarget", stepStart, null);
+
             if (!_localFakeDead)
+            {
+                stepStart = RuntimeHitchWatch.Start();
                 SendHeroCoords();
+                LogHeroUpdateStepIfSlow("ModEntry.OnHeroUpdate.SendHeroCoords", stepStart, null);
+            }
+
+            stepStart = RuntimeHitchWatch.Start();
             ReceiveGhostCoords();
+            LogHeroUpdateStepIfSlow("ModEntry.OnHeroUpdate.ReceiveGhostCoords", stepStart, null);
+
+            stepStart = RuntimeHitchWatch.Start();
             UpdateFakeDeathFlow(dt);
+            LogHeroUpdateStepIfSlow("ModEntry.OnHeroUpdate.UpdateFakeDeathFlow", stepStart, null);
+
+            stepStart = RuntimeHitchWatch.Start();
             MaintainPostRevivePositionLock();
+            LogHeroUpdateStepIfSlow("ModEntry.OnHeroUpdate.MaintainPostRevivePositionLock", stepStart, null);
+
+            stepStart = RuntimeHitchWatch.Start();
             ReceiveGhostWeapons();
+            LogHeroUpdateStepIfSlow("ModEntry.OnHeroUpdate.ReceiveGhostWeapons", stepStart, null);
+
+            stepStart = RuntimeHitchWatch.Start();
             ReceiveGhostAttacks();
+            LogHeroUpdateStepIfSlow("ModEntry.OnHeroUpdate.ReceiveGhostAttacks", stepStart, null);
+
+            stepStart = RuntimeHitchWatch.Start();
             UpdateGhostWeapons();
+            LogHeroUpdateStepIfSlow("ModEntry.OnHeroUpdate.UpdateGhostWeapons", stepStart, null);
+
+            stepStart = RuntimeHitchWatch.Start();
             UpdateGhostHeads();
+            LogHeroUpdateStepIfSlow("ModEntry.OnHeroUpdate.UpdateGhostHeads", stepStart, null);
+
+            var hitchMs = RuntimeHitchWatch.GetElapsedMilliseconds(hitchStart);
+            if (hitchMs >= RuntimeHitchWatch.ModHeroSlowThresholdMs)
+            {
+                RuntimeHitchWatch.LogSlow(
+                    Logger,
+                    "ModEntry.OnHeroUpdate",
+                    hitchMs,
+                    string.Create(
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        $"role={_netRole} localFakeDead={(_localFakeDead ? 1 : 0)} remoteDowned={_remoteDowned.Count} clients={clients.Length}"));
+            }
+        }
+
+        private void LogHeroUpdateStepIfSlow(string key, long stepStart, string? details)
+        {
+            var stepMs = RuntimeHitchWatch.GetElapsedMilliseconds(stepStart);
+            if (stepMs < RuntimeHitchWatch.ModHeroStepSlowThresholdMs)
+                return;
+
+            RuntimeHitchWatch.LogSlow(Logger, key, stepMs, details);
         }
 
 

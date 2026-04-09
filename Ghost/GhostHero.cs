@@ -10,8 +10,6 @@ using Hashlink.Virtuals;
 using dc.libs.heaps.slib;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
-
-
 namespace DeadCellsMultiplayerMod
 {
     public class GhostHero

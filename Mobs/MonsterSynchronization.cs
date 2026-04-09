@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
-using System.Threading.Tasks;
 using dc;
 using dc.en;
 using dc.h2d;
@@ -17,6 +16,7 @@ using DeadCellsMultiplayerMod.Ghost;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using DeadCellsMultiplayerMod.Mobs.Bosses;
 using DeadCellsMultiplayerMod.Mobs.Levelinit;
+using DeadCellsMultiplayerMod.Tools;
 using Hashlink.Virtuals;
 using HaxeProxy.Runtime;
 using ModCore.Events;
@@ -330,16 +330,34 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (IsHost(net))
             {
-                RunHostIncomingFrameConsumeAsync(net).GetAwaiter().GetResult();
+                var consumeStart = RuntimeHitchWatch.Start();
+                RunHostIncomingFrameConsume(net);
+                var consumeMs = RuntimeHitchWatch.GetElapsedMilliseconds(consumeStart);
+                if (consumeMs >= RuntimeHitchWatch.MobSyncConsumeSlowThresholdMs)
+                    RuntimeHitchWatch.LogSlow(modEntry.Logger, "MobsSynchronization.HostConsume", consumeMs, BuildRuntimeQueueDetails());
+
+                var flushStart = RuntimeHitchWatch.Start();
                 FlushHostDirtyMobQueue(net);
+                var flushMs = RuntimeHitchWatch.GetElapsedMilliseconds(flushStart);
+                if (flushMs >= RuntimeHitchWatch.MobSyncFlushSlowThresholdMs)
+                    RuntimeHitchWatch.LogSlow(modEntry.Logger, "MobsSynchronization.HostFlush", flushMs, BuildRuntimeQueueDetails());
 
                 return;
             }
 
             if (IsClient(net))
             {
-                RunClientIncomingFrameConsumeAsync(net).GetAwaiter().GetResult();
+                var consumeStart = RuntimeHitchWatch.Start();
+                RunClientIncomingFrameConsume(net);
+                var consumeMs = RuntimeHitchWatch.GetElapsedMilliseconds(consumeStart);
+                if (consumeMs >= RuntimeHitchWatch.MobSyncConsumeSlowThresholdMs)
+                    RuntimeHitchWatch.LogSlow(modEntry.Logger, "MobsSynchronization.ClientConsume", consumeMs, BuildRuntimeQueueDetails());
+
+                var flushStart = RuntimeHitchWatch.Start();
                 FlushClientDirtyMobQueue(net);
+                var flushMs = RuntimeHitchWatch.GetElapsedMilliseconds(flushStart);
+                if (flushMs >= RuntimeHitchWatch.MobSyncFlushSlowThresholdMs)
+                    RuntimeHitchWatch.LogSlow(modEntry.Logger, "MobsSynchronization.ClientFlush", flushMs, BuildRuntimeQueueDetails());
             }
         }
 
@@ -925,6 +943,16 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             return false;
+        }
+
+        private static string BuildRuntimeQueueDetails()
+        {
+            lock (Sync)
+            {
+                return string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"tracked={trackedMobs.Count} hostDirty={hostDirtyMobQueue.Count}/{hostDirtyFlagsBySyncId.Count} clientDirty={clientDirtyMobQueue.Count}/{clientDirtyFlagsBySyncId.Count} moves={s_moveSnapshotsScratch.Count} states={s_batchSnapshotsScratch.Count}");
+            }
         }
 
     }
