@@ -16,7 +16,7 @@
 
     <SteamApi64HintPath Condition="'$(SteamApi64HintPath)' == '' and '$(DCCM_MDK_ROOT)' != ''">$(DCCM_MDK_ROOT)\..\native\win-x64\steam_api64.dll</SteamApi64HintPath>
   </PropertyGroup>
-
+  
   <ItemGroup>
     <PackageReference Include="DeadCellsCoreModding.MDK" Version="1.0.1" />
     <PackageReference Include="MonoMod.RuntimeDetour" Version="25.3.3" />
@@ -36,7 +36,9 @@
   <PropertyGroup>
     <GenerateSinglePakFile>true</GenerateSinglePakFile>
   </PropertyGroup>
-
+  <PropertyGroup>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
   <ItemGroup>
     <PackAssets Include="Resourcefile\**\*" RootInPak="DeadCellsMultiplayerModLang" />
   </ItemGroup>

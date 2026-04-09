@@ -34,18 +34,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!IsHost(net))
                 return;
 
-            var trackedMobCount = 0;
-            lock (Sync)
-            {
-                trackedMobCount = trackedMobs.Count;
-            }
-
-            if (trackedMobCount <= 0)
-                return;
-
             var now = Stopwatch.GetTimestamp();
 
-            if (!TryCaptureTrackedMobsForBatch(out trackedMobCount))
+            // Single capture after prune: trackedMobCount matches s_batchMobsScratch.Count (same as trackedMobs.Count).
+            if (!TryCaptureTrackedMobsForBatch(out var trackedMobCount))
                 return;
 
             s_batchSnapshotsScratch.Clear();

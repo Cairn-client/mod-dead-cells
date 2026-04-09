@@ -74,6 +74,12 @@ public class LevelExitSync :
     private string _transitionDoorKey = string.Empty;
     private bool _timerPausedByExit;
 
+    /// <summary>Exit/portal/boss-door entities only — avoids scanning <c>level.entities</c> every hero frame.</summary>
+    private readonly List<Entity?> _exitTargetCandidates = new();
+
+    private Level? _exitCandidatesLevel;
+    private int _exitCandidatesHeroTick;
+
     public LevelExitSync(ModEntry entry)
     {
         _log = entry.Logger;
@@ -837,21 +843,50 @@ public class LevelExitSync :
         }
     }
 
+    private void EnsureExitTargetCandidates(Level? level)
+    {
+        if (level == null || level.entities == null)
+        {
+            _exitTargetCandidates.Clear();
+            _exitCandidatesLevel = null;
+            return;
+        }
+
+        _exitCandidatesHeroTick++;
+        // Refresh periodically so late-spawned exits/portals are picked up without scanning every frame.
+        var needRebuild = !ReferenceEquals(_exitCandidatesLevel, level)
+                          || (_exitCandidatesHeroTick % 48 == 0);
+
+        if (!needRebuild)
+            return;
+
+        _exitCandidatesLevel = level;
+        _exitTargetCandidates.Clear();
+        var entities = level.entities;
+        for (int i = 0; i < entities.length; i++)
+        {
+            var e = entities.getDyn(i) as Entity;
+            if (IsSupportedExitTarget(e))
+                _exitTargetCandidates.Add(e);
+        }
+    }
+
     private Entity? FindNearestExitTarget(Hero hero, Level? level, out bool insideCircle)
     {
         insideCircle = false;
-        if (hero == null || level == null || level.entities == null)
+        if (hero == null || level == null)
             return null;
+
+        EnsureExitTargetCandidates(level);
 
         var heroX = GetEntityX(hero);
         var heroY = GetEntityY(hero);
 
         Entity? best = null;
         var bestDistSq = double.MaxValue;
-        var entities = level.entities;
-        for (int i = 0; i < entities.length; i++)
+        for (int i = 0; i < _exitTargetCandidates.Count; i++)
         {
-            var target = entities.getDyn(i) as Entity;
+            var target = _exitTargetCandidates[i];
             if (!IsAvailableExitTarget(target))
                 continue;
 
@@ -1005,6 +1040,9 @@ public class LevelExitSync :
     private void ResetLevelState(Level? newLevel)
     {
         _lastLevel = newLevel;
+        _exitCandidatesLevel = null;
+        _exitTargetCandidates.Clear();
+        _exitCandidatesHeroTick = 0;
         _localDoorKey = string.Empty;
         _localDoorCx = 0;
         _localDoorCy = 0;

@@ -1,16 +1,8 @@
-using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
-using System.Text;
 using dc;
 using dc.en;
 using dc.hl.types;
-using dc.h2d;
-using dc.libs.heaps.slib;
-using dc.libs.heaps.slib._AnimManager;
-using dc.pr;
 using dc.tool.atk;
 using dc.tool.skill;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
@@ -557,15 +549,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 Log.Warning(ex, "[MobsSync] Client contactAttack failed for mob");
             }
-
-            try
-            {
-                mob.onTouch(target);
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "[MobsSync] Client onTouch failed for mob");
-            }
         }
 
         private static void ProcessClientOldSkillExecute(Mob mob, string rawSkillId, ClientMobAttackIntent intent)
@@ -601,6 +584,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 TryWakeMobForForcedSimulation(mob);
                 if (ResolveClientAttackTargetEntity(mob, intent.TargetUserId) == null)
                     TrySetClientMobAttackTarget(mob, 0, intent.AttackDir, forceRetarget: true);
+
+                if (!ClientMobHasUsableTargetForNetworkedOldSkill(mob))
+                    return;
 
                 if (!TryGetChargingOldSkillId(mob, out _))
                 {
@@ -640,6 +626,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 TryWakeMobForForcedSimulation(mob);
                 if (ResolveClientAttackTargetEntity(mob, intent.TargetUserId) == null)
                     TrySetClientMobAttackTarget(mob, 0, intent.AttackDir, forceRetarget: true);
+
+                if (!ClientMobHasUsableTargetForNetworkedOldSkill(mob))
+                    return;
 
                 if (oldSkill is OldMobSkill oldMobSkill && TryExecuteClientOldSkillNativeLike(oldMobSkill, intent.Data))
                     return;
@@ -684,6 +673,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 TrySetClientMobAttackTarget(mob, intent.TargetUserId, intent.AttackDir, forceRetarget: true);
                 TryWakeMobForForcedSimulation(mob);
 
+                if (!ClientMobHasUsableTargetForNetworkedOldSkill(mob))
+                    return;
+
                 var skillId = normalizedSkillId.AsHaxeString();
                 var skill = mob.getSkill(skillId) as MobSkill;
                 if (skill == null)
@@ -710,6 +702,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 TryWakeMobForForcedSimulation(mob);
                 if (ResolveClientAttackTargetEntity(mob, intent.TargetUserId) == null)
                     TrySetClientMobAttackTarget(mob, 0, intent.AttackDir, forceRetarget: true);
+
+                if (!ClientMobHasUsableTargetForNetworkedOldSkill(mob))
+                    return;
 
                 var haxeSkillId = intent.SkillId.AsHaxeString();
                 if (!mob.hasOldSkill(haxeSkillId))
@@ -946,6 +941,36 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
+        /// <summary>
+        /// Vanilla <see cref="OldSkill.update"/> expects combat context (e.g. target cell .cx). Skipping networked
+        /// prepare/execute when we cannot resolve any valid player target avoids null dereferences on the next tick.
+        /// </summary>
+        private static bool ClientMobHasUsableTargetForNetworkedOldSkill(Mob mob)
+        {
+            if (!IsMobHostileToPlayers(mob))
+                return true;
+
+            try
+            {
+                if (IsEntityValidForAttack(mob.aTarget))
+                    return true;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (IsEntityValidForAttack(mob.nemesisTarget))
+                    return true;
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
         private static void TrySetClientMobAttackTarget(Mob mob, int targetUserId, int attackDir, bool forceRetarget = false)
         {
             Entity? target = null;
@@ -966,6 +991,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (target == null)
             {
                 target = ResolveClientAttackTargetEntity(mob, targetUserId);
+                if (target == null && IsMobHostileToPlayers(mob))
+                    target = ResolveDetectedClientTargetEntity(mob);
                 if (target == null)
                     return;
 
