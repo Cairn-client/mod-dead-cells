@@ -12,8 +12,13 @@ internal static class MobSyncTrace
         Environment.GetEnvironmentVariable("DCCM_MOB_SYNC_TRACE"),
         "1",
         StringComparison.Ordinal);
+    private static readonly bool EnvAssertEnabled = string.Equals(
+        Environment.GetEnvironmentVariable("DCCM_MOB_SYNC_ASSERT"),
+        "1",
+        StringComparison.Ordinal);
 
     public static bool Enabled => EnvTraceEnabled || MultiplayerSettingsStorage.DebugMobsSyncTrace;
+    public static bool AssertEnabled => EnvAssertEnabled || MultiplayerSettingsStorage.DebugMobsSyncTrace;
 
     public static void LogSendStatesBatch(string role, IReadOnlyList<NetNode.MobStateSnapshot> states)
     {
@@ -188,6 +193,143 @@ internal static class MobSyncTrace
             mobType ?? string.Empty,
             x,
             y);
+    }
+
+    public static void LogRegistryRebuild(
+        string role,
+        string levelId,
+        int trackedBefore,
+        int trackedAfter,
+        int registryCount,
+        int minSyncId,
+        int maxSyncId,
+        int nextRuntimeSyncId,
+        int generation,
+        int identityToken)
+    {
+        if (!Enabled)
+            return;
+
+        Log.Information(
+            "[MobSync] REBUILD role={Role} level={LevelId} trackedBefore={TrackedBefore} trackedAfter={TrackedAfter} registryCount={RegistryCount} minSyncId={MinSyncId} maxSyncId={MaxSyncId} nextRuntimeSyncId={NextRuntimeSyncId} generation={Generation} identityToken={IdentityToken}",
+            role ?? string.Empty,
+            levelId ?? string.Empty,
+            trackedBefore,
+            trackedAfter,
+            registryCount,
+            minSyncId,
+            maxSyncId,
+            nextRuntimeSyncId,
+            generation,
+            identityToken);
+    }
+
+    public static void LogLevelReset(string reason, string levelId, int trackedBefore)
+    {
+        if (!Enabled)
+            return;
+
+        Log.Information(
+            "[MobSync] RESET reason={Reason} level={LevelId} trackedBefore={TrackedBefore}",
+            reason ?? string.Empty,
+            levelId ?? string.Empty,
+            trackedBefore);
+    }
+
+    public static void LogDeferredMobRegistration(string role, string levelId, string mobType)
+    {
+        if (!Enabled)
+            return;
+
+        Log.Information(
+            "[MobSync] REGISTER deferred role={Role} level={LevelId} type={MobType}",
+            role ?? string.Empty,
+            levelId ?? string.Empty,
+            mobType ?? string.Empty);
+    }
+
+    public static void LogStaleTrackedMapping(int syncId, int localIndex, string reason)
+    {
+        Log.Warning(
+            "[MobSync] stale tracked sync mapping syncId={SyncId} localIndex={LocalIndex} reason={Reason}",
+            syncId,
+            localIndex,
+            reason ?? string.Empty);
+    }
+
+    public static void LogIncomingMappingMismatch(
+        string context,
+        int syncId,
+        string expectedType,
+        string actualType,
+        string reason)
+    {
+        Log.Warning(
+            "[MobSync] mapping mismatch context={Context} syncId={SyncId} expectedType={ExpectedType} actualType={ActualType} reason={Reason}",
+            context ?? string.Empty,
+            syncId,
+            expectedType ?? string.Empty,
+            actualType ?? string.Empty,
+            reason ?? string.Empty);
+    }
+
+    public static void LogAmbiguousMatchRejected(
+        string context,
+        int syncId,
+        string mobType,
+        double x,
+        double y,
+        int candidateCount)
+    {
+        Log.Warning(
+            "[MobSync] ambiguous fallback rejected context={Context} syncId={SyncId} type={MobType} x={X} y={Y} candidateCount={CandidateCount}",
+            context ?? string.Empty,
+            syncId,
+            mobType ?? string.Empty,
+            x,
+            y,
+            candidateCount);
+    }
+
+    public static void LogFallbackMatchResolved(
+        string context,
+        int syncId,
+        string mobType,
+        double x,
+        double y,
+        int candidateCount,
+        bool rebound)
+    {
+        if (!Enabled)
+            return;
+
+        Log.Information(
+            "[MobSync] fallback resolved context={Context} syncId={SyncId} type={MobType} x={X} y={Y} candidateCount={CandidateCount} rebound={Rebound}",
+            context ?? string.Empty,
+            syncId,
+            mobType ?? string.Empty,
+            x,
+            y,
+            candidateCount,
+            rebound);
+    }
+
+    public static void LogPacketGenerationRejected(string context, int packetGeneration, int currentGeneration, int count)
+    {
+        Log.Warning(
+            "[MobSync] packet generation rejected context={Context} packetGeneration={PacketGeneration} currentGeneration={CurrentGeneration} count={Count}",
+            context ?? string.Empty,
+            packetGeneration,
+            currentGeneration,
+            count);
+    }
+
+    public static void LogInvariantViolation(string reason, string detail)
+    {
+        Log.Warning(
+            "[MobSync] invariant violation reason={Reason} detail={Detail}",
+            reason ?? string.Empty,
+            detail ?? string.Empty);
     }
 
     public static void LogIncomingHitApply(

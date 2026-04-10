@@ -86,6 +86,9 @@ namespace DeadCellsMultiplayerMod
         private static string?[] clientLastHeadAnims = new string?[NetNode.MaxClientSlots];
         private static int[] clientLastDirs = new int[NetNode.MaxClientSlots];
         private static bool[] clientLastDownedOffsets = new bool[NetNode.MaxClientSlots];
+        private static bool[] clientHeadDirty = new bool[NetNode.MaxClientSlots];
+        private static long[] clientNextHeadFxTick = new long[NetNode.MaxClientSlots];
+        private static long[] clientNextHeadRecreateTick = new long[NetNode.MaxClientSlots];
         public static Hero me = null!;
         public static GhostHero _ghost = null!;
 
@@ -143,7 +146,6 @@ namespace DeadCellsMultiplayerMod
         private int _reviveHoldTargetId;
         private long _reviveHoldStartedTicks;
         private const double ReviveUseDistancePx = 48.0;
-        private const int ReviveInteractKey = 82; // R
         private const double ReviveAttemptCooldownSeconds = 0.2;
         private const double ReviveHoldSeconds = 0.7;
         private const double ReviveHomunculusBodyMaxDistancePx = 64.0;
@@ -187,6 +189,8 @@ namespace DeadCellsMultiplayerMod
         private readonly Dictionary<int, long> _pendingClientDisposeTicks = new();
         private const double ClientDisposeTransitionSeconds = 0.28;
         private const double PendingDoorMarkerHideMaxSeconds = 1.5;
+        private const double GhostHeadDormantUpdateSeconds = 0.20;
+        private const double GhostHeadRecreateRetrySeconds = 0.25;
 
         private static readonly HashSet<string> BossLevelIds = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -306,6 +310,7 @@ namespace DeadCellsMultiplayerMod
                 clientLastDownedOffsets[i] = false;
                 rLastX[i] = 0;
                 rLastY[i] = 0;
+                ResetGhostHeadRuntimeState(i);
             }
         }
 
@@ -511,7 +516,7 @@ namespace DeadCellsMultiplayerMod
                 ReferenceEquals(lp, me))
             {
                 SendCurrentRoomTarget(force: true);
-                GameMenu.EnqueueMainThread(() => ReceiveGhostCoords());
+                GameMenu.EnqueueMainThreadCoalesced("ghost:receive-coords", ReceiveGhostCoords);
             }
         }
 
@@ -785,6 +790,7 @@ namespace DeadCellsMultiplayerMod
         private void hook_boot_update(Hook_Boot.orig_update orig, Boot self, double dt)
         {
             orig(self, dt);
+            PumpSteamCallbacksForOverlay();
             GameMenu.ProcessMainThreadQueue();
             GameMenu.HandleTextInputClipboardShortcuts();
             _ghost?.UpdateLabels();
@@ -939,10 +945,11 @@ namespace DeadCellsMultiplayerMod
                 DisposeClientSlot(i, clearIdentity: false);
                 rLastX[i] = 0;
                 rLastY[i] = 0;
+                ResetGhostHeadRuntimeState(i);
             }
 
             DrainRemoteCombatQueuesAfterLevelChange();
-            GameMenu.EnqueueMainThread(() => ReceiveGhostCoords());
+            GameMenu.EnqueueMainThreadCoalesced("ghost:receive-coords", ReceiveGhostCoords);
             MarkDiveNetGuardAfterSpawnOrRoomChange();
 
             _debugExplorerRevealAppliedSignature = string.Empty;
@@ -980,6 +987,7 @@ namespace DeadCellsMultiplayerMod
         {
             if (!_ready) return;
             var hitchStart = RuntimeHitchWatch.Start();
+            PumpSteamCallbacksForOverlay();
             GameMenu.ProcessMainThreadQueue();
             GameMenu.TickMenu(dt);
             DetectAndSendBossCine();

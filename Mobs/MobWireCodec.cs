@@ -47,6 +47,8 @@ internal static class MobWireCodec
                 sb.Append(',');
                 sb.Append(m.Dir.ToString(CultureInfo.InvariantCulture));
                 sb.Append(',');
+                sb.Append(m.Generation.ToString(CultureInfo.InvariantCulture));
+                sb.Append(',');
                 sb.Append(m.AnimPayload ?? string.Empty);
             }
         }
@@ -68,6 +70,8 @@ internal static class MobWireCodec
 
                 var c = charges[i];
                 sb.Append(c.Index.ToString(CultureInfo.InvariantCulture));
+                sb.Append(',');
+                sb.Append(c.Generation.ToString(CultureInfo.InvariantCulture));
                 sb.Append(',');
                 sb.Append(c.SkillId ?? string.Empty);
                 sb.Append(',');
@@ -97,7 +101,7 @@ internal static class MobWireCodec
 
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"MOBATTACK|{attack.Index},{encodedSkill},{(attack.RequiresTargetInArea ? 1 : 0)},{hasData},{data},{attack.X},{attack.Y},{attack.TargetUserId},{attack.Dir}\n");
+            $"MOBATTACK|{attack.Index},{encodedSkill},{(attack.RequiresTargetInArea ? 1 : 0)},{hasData},{data},{attack.X},{attack.Y},{attack.TargetUserId},{attack.Dir},{attack.Generation}\n");
     }
 
     public static string BuildMobEventsLine(IReadOnlyList<NetNode.MobEventUpdate> updates)
@@ -120,6 +124,8 @@ internal static class MobWireCodec
                 sb.Append(u.Y.ToString(CultureInfo.InvariantCulture));
                 sb.Append(',');
                 sb.Append(u.Dir.ToString(CultureInfo.InvariantCulture));
+                sb.Append(',');
+                sb.Append(u.Generation.ToString(CultureInfo.InvariantCulture));
                 if (!string.IsNullOrWhiteSpace(u.Type))
                 {
                     sb.Append(',');
@@ -140,11 +146,11 @@ internal static class MobWireCodec
         return sb.ToString();
     }
 
-    public static string BuildMobDrawLine(int userId, int mobIndex, bool isOutOfGame, bool isOnScreen)
+    public static string BuildMobDrawLine(int userId, int mobIndex, bool isOutOfGame, bool isOnScreen, int generation = 0)
     {
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"MOBDRAW|{userId}|{mobIndex}|{(isOutOfGame ? 1 : 0)}|{(isOnScreen ? 1 : 0)}\n");
+            $"MOBDRAW|{userId}|{mobIndex}|{(isOutOfGame ? 1 : 0)}|{(isOnScreen ? 1 : 0)}|{generation}\n");
     }
 
     public static string BuildMobDrawLine(IReadOnlyList<NetNode.MobDraw> draws)
@@ -167,6 +173,8 @@ internal static class MobWireCodec
                 sb.Append(d.IsOutOfGame ? '1' : '0');
                 sb.Append('|');
                 sb.Append(d.IsOnScreen ? '1' : '0');
+                sb.Append('|');
+                sb.Append(d.Generation.ToString(CultureInfo.InvariantCulture));
             }
         }
         sb.Append('\n');
@@ -177,7 +185,7 @@ internal static class MobWireCodec
     {
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"MOBDIE|{die.UserId}|{die.MobIndex}|{die.X}|{die.Y}\n");
+            $"MOBDIE|{die.UserId}|{die.MobIndex}|{die.X}|{die.Y}|{die.Generation}\n");
     }
 
     private static void AppendJoinedStates(StringBuilder sb, IReadOnlyList<NetNode.MobStateSnapshot>? states)
@@ -203,6 +211,8 @@ internal static class MobWireCodec
             sb.Append(',');
             sb.Append(s.MaxLife.ToString(CultureInfo.InvariantCulture));
             sb.Append(',');
+            sb.Append(s.Generation.ToString(CultureInfo.InvariantCulture));
+            sb.Append(',');
             sb.Append(s.AnimPayload ?? string.Empty);
             sb.Append(',');
             sb.Append(s.Type ?? string.Empty);
@@ -215,7 +225,7 @@ internal static class MobWireCodec
 /// <summary>Optional compact binary wire for MOBSTATE batches (enable DCCM_MOB_WIRE_BINARY=1).</summary>
 internal static class MobWireBinary
 {
-    public const byte WireVersion = 1;
+    public const byte WireVersion = 2;
 
     public static bool UseBinaryWire =>
         string.Equals(Environment.GetEnvironmentVariable("DCCM_MOB_WIRE_BINARY"), "1", StringComparison.Ordinal);
@@ -240,6 +250,7 @@ internal static class MobWireBinary
             {
                 var s = states[i];
                 bw.Write(s.Index);
+                bw.Write(s.Generation);
                 bw.Write(s.X);
                 bw.Write(s.Y);
                 bw.Write(s.Dir);
@@ -295,18 +306,25 @@ internal static class MobWireBinary
             return false;
 
         var ver = raw[0];
-        if (ver != WireVersion)
+        if (ver != 1 && ver != WireVersion)
             return false;
 
         var count = BinaryPrimitives.ReadUInt16LittleEndian(raw.Slice(1, 2));
         var offset = 3;
         for (int i = 0; i < count; i++)
         {
-            if (offset + 32 > raw.Length)
+            var fixedBytes = ver >= 2 ? 36 : 32;
+            if (offset + fixedBytes > raw.Length)
                 return false;
 
             var index = BinaryPrimitives.ReadInt32LittleEndian(raw.Slice(offset, 4));
             offset += 4;
+            var generation = 0;
+            if (ver >= 2)
+            {
+                generation = BinaryPrimitives.ReadInt32LittleEndian(raw.Slice(offset, 4));
+                offset += 4;
+            }
             var x = BitConverter.ToDouble(raw.Slice(offset, 8));
             offset += 8;
             var y = BitConverter.ToDouble(raw.Slice(offset, 8));
@@ -323,7 +341,7 @@ internal static class MobWireBinary
                 !TryReadUtf8Segment(raw, ref offset, out var state))
                 return false;
 
-            destination.Add(new NetNode.MobStateSnapshot(index, x, y, dir, life, maxLife, anim, type, state));
+            destination.Add(new NetNode.MobStateSnapshot(index, x, y, dir, life, maxLife, anim, type, state, generation));
         }
 
         return destination.Count > 0;

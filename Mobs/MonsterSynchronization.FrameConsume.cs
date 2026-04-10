@@ -8,6 +8,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
     {
         private static void RunHostIncomingFrameConsume(NetNode net)
         {
+            if (!IsIncomingMobIdentityReady())
+                return;
+
             ConsumeIncomingClientMobStates(net);
             ConsumeIncomingMobDraws(net);
             ConsumeIncomingMobDies(net);
@@ -16,6 +19,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static void RunClientIncomingFrameConsume(NetNode net)
         {
+            if (!IsIncomingMobIdentityReady())
+                return;
+
             ConsumeIncomingHostMobStates(net);
             ConsumeIncomingHostMobMoves(net);
             ConsumeIncomingHostMobAttacks(net);

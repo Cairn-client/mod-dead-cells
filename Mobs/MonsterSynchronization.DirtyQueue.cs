@@ -487,6 +487,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             draw = default;
             if (mob == null || syncId < 0 || net == null || net.id <= 0)
                 return false;
+            if (!TryGetCurrentLevelIdentityToken(out var identityToken))
+                return false;
 
             bool isOutOfGame;
             bool isOnScreen;
@@ -514,7 +516,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 clientLastSentDrawStateBySyncId[syncId] = new ClientDrawSentState(isOutOfGame, isOnScreen);
             }
 
-            draw = new NetNode.MobDraw(net.id, syncId, isOutOfGame, isOnScreen);
+            draw = new NetNode.MobDraw(net.id, syncId, isOutOfGame, isOnScreen, identityToken);
             return true;
         }
 
@@ -526,6 +528,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             snapshot = default;
             if (mob == null || syncId < 0)
+                return false;
+            if (!TryGetCurrentLevelIdentityToken(out var identityToken))
                 return false;
 
             var payload = BuildMobAffectPresencePayload(mob);
@@ -551,7 +555,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 0,
                 string.Empty,
                 string.Empty,
-                EncodeStatePayloadForWire(payload));
+                EncodeStatePayloadForWire(payload),
+                identityToken);
             return true;
         }
 
@@ -640,6 +645,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                    GetInvariantWireLength(snapshot.Dir) + 1 +
                    GetInvariantWireLength(snapshot.Life) + 1 +
                    GetInvariantWireLength(snapshot.MaxLife) + 1 +
+                   GetInvariantWireLength(snapshot.Generation) + 1 +
                    GetUtf8WireLength(snapshot.AnimPayload) + 1 +
                    GetUtf8WireLength(snapshot.Type) + 1 +
                    GetUtf8WireLength(snapshot.StatePayload);
@@ -652,6 +658,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                    GetInvariantWireLength(snapshot.X) + 1 +
                    GetInvariantWireLength(snapshot.Y) + 1 +
                    GetInvariantWireLength(snapshot.Dir) + 1 +
+                   GetInvariantWireLength(snapshot.Generation) + 1 +
                    GetUtf8WireLength(snapshot.AnimPayload);
         }
 
@@ -661,7 +668,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                    GetInvariantWireLength(draw.UserId) + 1 +
                    GetInvariantWireLength(draw.MobIndex) + 1 +
                    1 + 1 +
-                   1;
+                   1 +
+                   GetInvariantWireLength(draw.Generation);
         }
 
         private static int GetUtf8WireLength(string? value)

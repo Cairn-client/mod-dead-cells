@@ -12,23 +12,20 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
     {
         private static void ApplyInterpolatedState(Mob self)
         {
-            if (!TryGetTrackedIndex(self, out var localIndex))
-                return;
-
             ClientMobState target;
             lock (Sync)
             {
-                if (!clientMobTargets.TryGetValue(localIndex, out target))
+                if (!clientMobTargets.TryGetValue(self, out target))
                     return;
             }
 
             // Life/death must sync even when the mob is far/off-screen (visual interpolation stays gated below).
             ApplyAuthoritativeLifeState(self, target.Life, target.MaxLife);
 
-            if (!ShouldProcessClientVisualState(self, localIndex))
+            if (!ShouldProcessClientVisualState(self))
                 return;
 
-            var preserveLocalMotion = HasLocalQueuedOrChargingSkill(self) || IsClientNetworkAttackActive(localIndex);
+            var preserveLocalMotion = HasLocalQueuedOrChargingSkill(self) || IsClientNetworkAttackActive(self);
 
             if (!preserveLocalMotion)
             {
@@ -112,7 +109,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static bool ShouldProcessClientVisualState(Mob mob, int localIndex)
+        private static bool ShouldProcessClientVisualState(Mob mob)
         {
             if (mob == null)
                 return false;
@@ -120,7 +117,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return true;
             if (HasValidLivingPlayerCombatTarget(mob))
                 return true;
-            if (IsClientNetworkAttackActive(localIndex))
+            if (IsClientNetworkAttackActive(mob))
                 return true;
 
             if (TryGetMobVisibilityState(mob, out var isOnScreen, out var isOutOfGame, out var onScreenRecent))
@@ -183,20 +180,17 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static void ApplyClientAnimationStateBeforeUpdate(Mob self)
         {
-            if (!TryGetTrackedIndex(self, out var localIndex))
-                return;
-
             ClientMobState target;
             var shouldApplyAnimThisFrame = true;
             lock (Sync)
             {
-                if (!clientMobTargets.TryGetValue(localIndex, out target))
+                if (!clientMobTargets.TryGetValue(self, out target))
                     return;
 
-                shouldApplyAnimThisFrame = ShouldApplyClientAnimationForFrameLocked(self, localIndex);
+                shouldApplyAnimThisFrame = ShouldApplyClientAnimationForFrameLocked(self);
             }
 
-            if (!ShouldProcessClientVisualState(self, localIndex))
+            if (!ShouldProcessClientVisualState(self))
                 return;
 
             var responsiveDir = ComputeResponsiveFacingDir(self, target);
@@ -209,10 +203,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!shouldApplyAnimThisFrame)
                 return;
 
-            ApplyAnimPayload(localIndex, self, target.AnimPayload);
+            ApplyAnimPayload(self, target.AnimPayload);
         }
 
-        private static bool ShouldApplyClientAnimationForFrameLocked(Mob mob, int localIndex)
+        private static bool ShouldApplyClientAnimationForFrameLocked(Mob mob)
         {
             if (mob == null)
                 return true;
@@ -224,13 +218,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return true;
 
                 var frame = level.ftime;
-                if (clientLastAnimationApplyFrameByLocalIndex.TryGetValue(localIndex, out var lastFrame) &&
+                if (clientLastAnimationApplyFrameByMob.TryGetValue(mob, out var lastFrame) &&
                     lastFrame == frame)
                 {
                     return false;
                 }
 
-                clientLastAnimationApplyFrameByLocalIndex[localIndex] = frame;
+                clientLastAnimationApplyFrameByMob[mob] = frame;
                 return true;
             }
             catch
@@ -239,7 +233,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static void ApplyAnimPayload(int localIndex, Mob mob, string? payload)
+        private static void ApplyAnimPayload(Mob mob, string? payload)
         {
             if (mob == null || mob.life <= 0 || mob.destroyed)
                 return;
@@ -247,13 +241,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var safePayload = payload ?? string.Empty;
             lock (Sync)
             {
-                if (clientLastAppliedAnimPayloadByLocalIndex.TryGetValue(localIndex, out var lastApplied) &&
+                if (clientLastAppliedAnimPayloadByMob.TryGetValue(mob, out var lastApplied) &&
                     string.Equals(lastApplied, safePayload, StringComparison.Ordinal))
                 {
                     return;
                 }
 
-                clientLastAppliedAnimPayloadByLocalIndex[localIndex] = safePayload;
+                clientLastAppliedAnimPayloadByMob[mob] = safePayload;
             }
 
             if (!TryGetParsedAnimPayloadCached(safePayload, out var parsed))

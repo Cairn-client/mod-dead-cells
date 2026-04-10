@@ -24,8 +24,29 @@ namespace DeadCellsMultiplayerMod
         private static int? _remoteSeed;
         private const int MaxSeed = 999_999;
         public static NetNode? NetRef { get; set; }
-        private static readonly ConcurrentQueue<Action> _mainThreadQueue = new();
+        private readonly struct MainThreadWorkItem
+        {
+            public readonly Action? Action;
+            public readonly string? CoalesceKey;
+
+            public MainThreadWorkItem(Action action)
+            {
+                Action = action;
+                CoalesceKey = null;
+            }
+
+            public MainThreadWorkItem(string coalesceKey)
+            {
+                Action = null;
+                CoalesceKey = coalesceKey;
+            }
+        }
+
+        private static readonly ConcurrentQueue<MainThreadWorkItem> _mainThreadQueue = new();
         private static readonly ConcurrentDictionary<MethodInfo, string> _mainThreadActionLabelCache = new();
+        private static readonly object MainThreadCoalesceSync = new();
+        private static readonly Dictionary<string, Action> _coalescedMainThreadActions = new(StringComparer.Ordinal);
+        private static readonly HashSet<string> _pendingCoalescedMainThreadKeys = new(StringComparer.Ordinal);
         private static int _mainThreadQueueDepth;
         private const int MainThreadQueueMaxActionsPerPump = 64;
         private const double MainThreadQueueBudgetMs = 4.0;
@@ -165,6 +186,11 @@ namespace DeadCellsMultiplayerMod
                 _steamLobbyCode = string.Empty;
                 _steamHostSteamId = 0UL;
                 _mainThreadQueueDepth = _mainThreadQueue.Count;
+                lock (MainThreadCoalesceSync)
+                {
+                    _coalescedMainThreadActions.Clear();
+                    _pendingCoalescedMainThreadKeys.Clear();
+                }
             }
 
             InitializeMenuUiHooks();
@@ -173,7 +199,33 @@ namespace DeadCellsMultiplayerMod
         internal static void EnqueueMainThread(Action action)
         {
             if (action == null) return;
-            _mainThreadQueue.Enqueue(action);
+            _mainThreadQueue.Enqueue(new MainThreadWorkItem(action));
+            Interlocked.Increment(ref _mainThreadQueueDepth);
+        }
+
+        internal static void EnqueueMainThreadCoalesced(string coalesceKey, Action action)
+        {
+            if (action == null)
+                return;
+
+            if (string.IsNullOrWhiteSpace(coalesceKey))
+            {
+                EnqueueMainThread(action);
+                return;
+            }
+
+            var shouldEnqueue = false;
+            lock (MainThreadCoalesceSync)
+            {
+                _coalescedMainThreadActions[coalesceKey] = action;
+                if (_pendingCoalescedMainThreadKeys.Add(coalesceKey))
+                    shouldEnqueue = true;
+            }
+
+            if (!shouldEnqueue)
+                return;
+
+            _mainThreadQueue.Enqueue(new MainThreadWorkItem(coalesceKey));
             Interlocked.Increment(ref _mainThreadQueueDepth);
         }
 
@@ -186,11 +238,25 @@ namespace DeadCellsMultiplayerMod
             var slowActions = 0;
             var maxActionMs = 0.0;
             var maxActionLabel = string.Empty;
-            ModEntry.PumpSteamCallbacksForOverlay();
             var actionsStart = RuntimeHitchWatch.Start();
-            while (_mainThreadQueue.TryDequeue(out var action))
+            while (_mainThreadQueue.TryDequeue(out var workItem))
             {
                 Interlocked.Decrement(ref _mainThreadQueueDepth);
+                Action? action = workItem.Action;
+                var actionLabel = workItem.CoalesceKey;
+                if (actionLabel != null)
+                {
+                    lock (MainThreadCoalesceSync)
+                    {
+                        _pendingCoalescedMainThreadKeys.Remove(actionLabel);
+                        _coalescedMainThreadActions.TryGetValue(actionLabel, out action);
+                        _coalescedMainThreadActions.Remove(actionLabel);
+                    }
+                }
+
+                if (action == null)
+                    continue;
+
                 processed++;
                 var actionStart = perfEnabled ? RuntimeHitchWatch.Start() : 0;
                 try
@@ -206,10 +272,9 @@ namespace DeadCellsMultiplayerMod
                     if (perfEnabled)
                     {
                         var actionMs = RuntimeHitchWatch.GetElapsedMilliseconds(actionStart);
-                        string? actionLabel = null;
                         if (actionMs > maxActionMs)
                         {
-                            actionLabel = DescribeMainThreadAction(action);
+                            actionLabel ??= DescribeMainThreadAction(action);
                             maxActionMs = actionMs;
                             maxActionLabel = actionLabel;
                         }

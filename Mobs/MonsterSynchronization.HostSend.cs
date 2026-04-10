@@ -174,6 +174,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (mob == null)
                 return false;
 
+            if (!TryGetCurrentLevelIdentityToken(out var identityToken))
+                return false;
+
             var x = GetWorldX(mob);
             var y = GetWorldY(mob);
             var dir = NormalizeDir(mob.dir);
@@ -238,7 +241,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     x,
                     y,
                     dir,
-                    animChanged ? animPayload : string.Empty);
+                    animChanged ? animPayload : string.Empty,
+                    identityToken);
                 return true;
             }
 
@@ -267,7 +271,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 maxLife,
                 snapshotAnimPayload,
                 snapshotMobType,
-                snapshotStatePayload);
+                snapshotStatePayload,
+                identityToken);
             return true;
         }
 
@@ -415,7 +420,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!IsHost(net) || !IsPlayerCombatTargetEntity(pow))
                 return;
 
-            if (TryGetTrackedIndex(self, out var mobIndex) && ShouldSendHostContactPacket(self, mobIndex, pow))
+            if (ShouldSendHostContactPacket(self, pow))
                 TrySendHostMobAttack(self, ContactAttackPacketSkillId, false, null, pow);
         }
 
@@ -431,7 +436,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             EnsureMobTracked(self);
-            if (TryGetTrackedIndex(self, out var mobIndex) && ShouldSendHostContactPacket(self, mobIndex, atk))
+            if (ShouldSendHostContactPacket(self, atk))
                 TrySendHostMobAttack(self, ContactAttackPacketSkillId, false, null, atk);
         }
 
@@ -563,9 +568,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             EnsureMobTracked(self);
-            if (!TryGetTrackedIndex(self, out var mobIndex))
-                return;
-
             TrySendHostMobAttack(self, skillId, requiresTargetInArea, data);
         }
 

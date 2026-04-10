@@ -15,7 +15,7 @@ namespace DeadCellsMultiplayerMod
                     ulong.TryParse(args[i + 1], out var lobbyId) && lobbyId > 0)
                 {
                     Instance?.Logger.Information("[NetMod][Steam] Launch parameter +connect_lobby detected lobbyId={LobbyId}", lobbyId);
-                    GameMenu.EnqueueMainThread(() => GameMenu.HandleSteamOverlayJoinRequest(lobbyId));
+                    GameMenu.EnqueueMainThreadCoalesced("steam:overlay-join", () => GameMenu.HandleSteamOverlayJoinRequest(lobbyId));
                     return;
                 }
             }
@@ -121,7 +121,7 @@ namespace DeadCellsMultiplayerMod
             s_lastOverlayJoinLobbyId = lobbyId;
             s_lastOverlayJoinTicks = nowTicks;
             Instance?.Logger.Information("[NetMod][Steam] Queueing overlay join request lobbyId={LobbyId} source={Source}", lobbyId, source);
-            GameMenu.EnqueueMainThread(() => GameMenu.HandleSteamOverlayJoinRequest(lobbyId));
+            GameMenu.EnqueueMainThreadCoalesced("steam:overlay-join", () => GameMenu.HandleSteamOverlayJoinRequest(lobbyId));
         }
 
         private static ulong TryParseLobbyIdFromConnectString(string connect)
