@@ -227,6 +227,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private readonly struct PendingMobHitApply
         {
             public readonly Mob Mob;
+            public readonly int SourceUserId;
+            public readonly int PreviousLife;
             public readonly int TargetLife;
             public readonly int TargetMaxLife;
             public readonly bool ForceDie;
@@ -234,9 +236,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             public readonly bool IsBoss;
             public readonly bool ReplaySpecialHit;
 
-            public PendingMobHitApply(Mob mob, int targetLife, int targetMaxLife, bool forceDie, int syncId, bool isBoss, bool replaySpecialHit)
+            public PendingMobHitApply(Mob mob, int sourceUserId, int previousLife, int targetLife, int targetMaxLife, bool forceDie, int syncId, bool isBoss, bool replaySpecialHit)
             {
                 Mob = mob;
+                SourceUserId = sourceUserId;
+                PreviousLife = previousLife;
                 TargetLife = targetLife;
                 TargetMaxLife = targetMaxLife;
                 ForceDie = forceDie;
@@ -425,6 +429,85 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 return string.Empty;
             }
+        }
+
+        private static bool TryGetAuthoritativeGameplayLevel(out Level? level, out string source)
+        {
+            level = null;
+            source = string.Empty;
+
+            try
+            {
+                var localHero = ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+                var heroLevel = localHero?._level;
+                if (heroLevel != null)
+                {
+                    level = heroLevel;
+                    source = "hero";
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var game = dc.pr.Game.Class.ME;
+                var currentGameLevel = game?.curLevel;
+                if (currentGameLevel != null)
+                {
+                    level = currentGameLevel;
+                    source = "game";
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private static bool DoesLevelMatchIdentity(Level? candidateLevel, int candidateIdentityToken, Level? authoritativeLevel)
+        {
+            if (candidateLevel == null || authoritativeLevel == null || candidateIdentityToken <= 0)
+                return false;
+
+            if (ReferenceEquals(candidateLevel, authoritativeLevel))
+                return true;
+
+            var candidateLevelId = GetLevelTraceIdSafe(candidateLevel);
+            var authoritativeLevelId = GetLevelTraceIdSafe(authoritativeLevel);
+            if (!string.IsNullOrEmpty(candidateLevelId) &&
+                !string.IsNullOrEmpty(authoritativeLevelId) &&
+                !string.Equals(candidateLevelId, authoritativeLevelId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var authoritativeIdentityToken = ComputeLevelIdentityToken(authoritativeLevel);
+            return authoritativeIdentityToken > 0 && authoritativeIdentityToken == candidateIdentityToken;
+        }
+
+        private static bool DoesStoredIdentityMatchLevel(string storedLevelId, int storedIdentityToken, Level? authoritativeLevel)
+        {
+            if (authoritativeLevel == null ||
+                storedIdentityToken <= 0 ||
+                string.IsNullOrEmpty(storedLevelId))
+            {
+                return false;
+            }
+
+            var authoritativeLevelId = GetLevelTraceIdSafe(authoritativeLevel);
+            if (string.IsNullOrEmpty(authoritativeLevelId) ||
+                !string.Equals(storedLevelId, authoritativeLevelId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var authoritativeIdentityToken = ComputeLevelIdentityToken(authoritativeLevel);
+            return authoritativeIdentityToken > 0 && authoritativeIdentityToken == storedIdentityToken;
         }
 
         private static bool TryGetTrackedWeakReferenceTargetLocked(WeakReference<Level>? reference, out Level? level)

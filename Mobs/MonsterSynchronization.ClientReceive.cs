@@ -511,10 +511,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (mob == null || string.IsNullOrWhiteSpace(intent.SkillId))
                 return;
 
-            var netUi = GameMenu.NetRef;
-            if (IsClient(netUi) && ModEntry.IsSessionHostDowned(netUi))
-                return;
-
             var skillId = intent.SkillId;
             var traceRoute = ResolveClientAttackRouteForTrace(skillId);
             _ = TryGetMobSyncId(mob, out var traceSyncId);
@@ -630,7 +626,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (ResolveClientAttackTargetEntity(mob, intent.TargetUserId) == null)
                     TrySetClientMobAttackTarget(mob, 0, intent.AttackDir, forceRetarget: true);
 
-                if (!ClientMobHasUsableTargetForNetworkedOldSkill(mob))
+                if (!TryResolveClientExecuteTargetEntity(mob, intent.TargetUserId, out _))
                     return;
 
                 if (!TryGetChargingOldSkillId(mob, out _))
@@ -672,7 +668,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (ResolveClientAttackTargetEntity(mob, intent.TargetUserId) == null)
                     TrySetClientMobAttackTarget(mob, 0, intent.AttackDir, forceRetarget: true);
 
-                if (!ClientMobHasUsableTargetForNetworkedOldSkill(mob))
+                if (!TryResolveClientExecuteTargetEntity(mob, intent.TargetUserId, out _))
                     return;
 
                 if (oldSkill is OldMobSkill oldMobSkill && TryExecuteClientOldSkillNativeLike(oldMobSkill, intent.Data))
@@ -710,6 +706,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                         return;
 
                     RegisterClientNetworkAttackExecuted(mob);
+                    TrySetClientMobAttackTarget(mob, intent.TargetUserId, intent.AttackDir, forceRetarget: true);
+                    TryWakeMobForForcedSimulation(mob);
+                    if (!TryResolveClientExecuteTargetEntity(mob, intent.TargetUserId, out _))
+                        return;
                     chargingSkill.execute(null);
                     return;
                 }
@@ -718,7 +718,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 TrySetClientMobAttackTarget(mob, intent.TargetUserId, intent.AttackDir, forceRetarget: true);
                 TryWakeMobForForcedSimulation(mob);
 
-                if (!ClientMobHasUsableTargetForNetworkedOldSkill(mob))
+                if (!TryResolveClientExecuteTargetEntity(mob, intent.TargetUserId, out _))
                     return;
 
                 var skillId = normalizedSkillId.AsHaxeString();
@@ -748,7 +748,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (ResolveClientAttackTargetEntity(mob, intent.TargetUserId) == null)
                     TrySetClientMobAttackTarget(mob, 0, intent.AttackDir, forceRetarget: true);
 
-                if (!ClientMobHasUsableTargetForNetworkedOldSkill(mob))
+                if (!TryResolveClientExecuteTargetEntity(mob, intent.TargetUserId, out _))
                     return;
 
                 var haxeSkillId = intent.SkillId.AsHaxeString();
@@ -960,46 +960,62 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return false;
         }
 
-        private static bool IsEntityValidForAttack(Entity? e)
+        private static bool TryGetCurrentClientAttackTarget(Mob mob, out Entity target)
         {
-            if (e == null)
+            target = null!;
+            if (mob == null)
                 return false;
+
             try
             {
-                return !e.destroyed && e.life > 0;
+                var attackTarget = mob.aTarget;
+                if (attackTarget != null && IsPreservablePlayerCombatTargetForMob(mob, attackTarget))
+                {
+                    target = attackTarget;
+                    return true;
+                }
             }
             catch
             {
-                return false;
             }
+
+            return false;
         }
 
-        /// <summary>
-        /// Vanilla <see cref="OldSkill.update"/> expects combat context (e.g. target cell .cx). Skipping networked
-        /// prepare/execute when we cannot resolve any valid player target avoids null dereferences on the next tick.
-        /// </summary>
-        private static bool ClientMobHasUsableTargetForNetworkedOldSkill(Mob mob)
+        private static bool TryGetCurrentClientNemesisTarget(Mob mob, out Entity target)
         {
-            if (!IsMobHostileToPlayers(mob))
+            target = null!;
+            if (mob == null)
+                return false;
+
+            try
+            {
+                var nemesisTarget = mob.nemesisTarget;
+                if (nemesisTarget != null && IsPreservablePlayerCombatTargetForMob(mob, nemesisTarget))
+                {
+                    target = nemesisTarget;
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private static bool TryResolveClientExecuteTargetEntity(Mob mob, int targetUserId, out Entity target)
+        {
+            target = null!;
+            if (mob == null || !IsMobHostileToPlayers(mob))
+                return false;
+
+            if (targetUserId > 0 && TryResolveClientDirectPlayerCombatTarget(mob, targetUserId, out target))
                 return true;
-
-            try
-            {
-                if (IsEntityValidForAttack(mob.aTarget))
-                    return true;
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                if (IsEntityValidForAttack(mob.nemesisTarget))
-                    return true;
-            }
-            catch
-            {
-            }
+            if (TryGetCurrentClientAttackTarget(mob, out target))
+                return true;
+            if (TryGetCurrentClientNemesisTarget(mob, out target))
+                return true;
 
             return false;
         }
@@ -1012,7 +1028,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 if (!forceRetarget &&
                     clientCachedAttackTargetByMob.TryGetValue(mob, out var cached) &&
-                    IsEntityValidForAttack(cached))
+                    cached != null &&
+                    IsPreservablePlayerCombatTargetForMob(mob, cached))
                 {
                     target = cached;
                 }
@@ -1039,14 +1056,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 {
                     if (targetUserId <= 0)
                     {
-                        if (mob.aTarget != null && IsPlayerCombatTargetEntity(mob.aTarget))
+                        if (mob.aTarget != null && IsPreservablePlayerCombatTargetForMob(mob, mob.aTarget))
                         {
                             if (normalizedAttackDir != 0)
                                 mob.dir = normalizedAttackDir;
                             return;
                         }
 
-                        if (mob.nemesisTarget != null && IsPlayerCombatTargetEntity(mob.nemesisTarget))
+                        if (mob.nemesisTarget != null && IsPreservablePlayerCombatTargetForMob(mob, mob.nemesisTarget))
                         {
                             if (normalizedAttackDir != 0)
                                 mob.dir = normalizedAttackDir;
@@ -1105,52 +1122,52 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!IsMobHostileToPlayers(mob))
                 return null;
 
-            if (targetUserId > 0)
-            {
-                var net = GameMenu.NetRef;
-                var localId = net?.id ?? 0;
-                if (localId > 0)
-                {
-                    if (targetUserId == localId)
-                    {
-                        var localHero = ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
-                        if (localHero != null && !ModEntry.IsEntityDownedForCombat(localHero))
-                            return localHero;
-                        return null;
-                    }
-
-                    if (ModEntry.TryGetClientIndex(localId, targetUserId, out var index))
-                    {
-                        var client = ModEntry.clients[index];
-                        if (client != null && !ModEntry.IsEntityDownedForCombat(client))
-                            return client;
-                    }
-                }
-            }
-
-            try
-            {
-                if (mob.aTarget != null && IsPlayerCombatTargetEntity(mob.aTarget))
-                    return mob.aTarget;
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                if (mob.nemesisTarget != null && IsPlayerCombatTargetEntity(mob.nemesisTarget))
-                    return mob.nemesisTarget;
-            }
-            catch
-            {
-            }
+            if (targetUserId > 0 && TryResolveClientDirectPlayerCombatTarget(mob, targetUserId, out var directTarget))
+                return directTarget;
+            if (TryGetCurrentClientAttackTarget(mob, out var attackTarget))
+                return attackTarget;
+            if (TryGetCurrentClientNemesisTarget(mob, out var nemesisTarget))
+                return nemesisTarget;
 
             var detected = ResolveDetectedClientTargetEntity(mob);
             if (detected != null)
                 return detected;
 
             return null;
+        }
+
+        private static bool TryResolveClientDirectPlayerCombatTarget(Mob mob, int targetUserId, out Entity target)
+        {
+            target = null!;
+            if (mob == null || targetUserId <= 0 || !IsMobHostileToPlayers(mob))
+                return false;
+
+            var net = GameMenu.NetRef;
+            var localId = net?.id ?? 0;
+            if (localId <= 0)
+                return false;
+
+            if (targetUserId == localId)
+            {
+                var localHero = ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+                if (localHero != null && IsPreservablePlayerCombatTargetForMob(mob, localHero))
+                {
+                    target = localHero;
+                    return true;
+                }
+
+                return false;
+            }
+
+            if (!ModEntry.TryGetClientIndex(localId, targetUserId, out var index))
+                return false;
+
+            var client = ModEntry.clients[index];
+            if (client == null || !IsPreservablePlayerCombatTargetForMob(mob, client))
+                return false;
+
+            target = client;
+            return true;
         }
 
         private static Entity? ResolveDetectedClientTargetEntity(Mob mob)
@@ -1182,20 +1199,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 var candidate = s_clientDetectedTargetsScratch[i];
                 if (candidate == null || ReferenceEquals(candidate, mob))
                     continue;
-                if (ModEntry.IsEntityDownedForCombat(candidate))
+                if (!IsAcquirablePlayerCombatTargetForMob(mob, candidate, requireDetectArea: true))
                     continue;
-
-                try
-                {
-                    if (candidate.destroyed || candidate.life <= 0)
-                        continue;
-                    if (!mob.inDetectArea(candidate))
-                        continue;
-                }
-                catch
-                {
-                    continue;
-                }
 
                 var dx = GetWorldX(candidate) - mx;
                 var dy = GetWorldY(candidate) - my;
@@ -1215,6 +1220,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             if (mob == null)
                 return false;
+
+            try
+            {
+                if (mob.queuedSkill != null)
+                    return true;
+            }
+            catch
+            {
+            }
 
             try
             {
@@ -1393,6 +1407,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     MobSyncTrace.LogIncomingHitApply(syncId, hit.Hp, hit.UserId, replaySpecialHit, forceDie);
                     s_pendingMobHitAppliesScratch.Add(new PendingMobHitApply(
                         mob,
+                        hit.UserId,
+                        prevLife,
                         targetLife,
                         maxLife,
                         forceDie,
@@ -1474,6 +1490,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     ApplyAuthoritativeLifeState(mob, update.TargetLife, update.TargetMaxLife);
                     appliedLife = GetMobLifeOrFallback(mob, update.TargetLife);
                 }
+
+                if (isHost)
+                    TryApplyHostMobHitCombatRefresh(mob, update.SourceUserId, update.PreviousLife, appliedLife, update.ReplaySpecialHit);
 
                 if (isHost && net != null && update.SyncId >= 0)
                 {
@@ -1745,7 +1764,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return null;
                 }
 
-                if (currentLevel != null && mob._level != null && !ReferenceEquals(currentLevel, mob._level))
+                if (!DoesLevelMatchCurrentIdentityLocked(mob._level))
                 {
                     s_trackedMobValidationPending = true;
                     return null;

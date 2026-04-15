@@ -33,6 +33,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (mob == null || target == null)
                 return;
 
+            try
+            {
+                if (ReferenceEquals(mob.nemesisTarget, target))
+                    return;
+            }
+            catch
+            {
+            }
+
             if (TryResolveSafeBossNemesisTarget(mob, target, out var safeBossTarget))
                 target = safeBossTarget;
             else if (BossSyncHelpers.IsBossMob(mob))

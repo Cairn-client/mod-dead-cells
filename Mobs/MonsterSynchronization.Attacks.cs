@@ -48,8 +48,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var targetEntity = ResolveMobAttackTargetEntity(mob, explicitTarget);
 
             var targetUserId = ResolveHostTargetUserId(targetEntity, net!.id);
-            if (ModEntry.IsLocalPlayerDowned() && targetUserId > 0 && targetUserId != net.id)
-                return;
 
             var x = GetWorldX(mob);
             var y = GetWorldY(mob);
@@ -66,6 +64,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private void Hook_Mob_setAttackTarget(Hook_Mob.orig_setAttackTarget orig, Mob self, Entity e)
         {
+            var net = GameMenu.NetRef;
+            if (IsHost(net) && ShouldSuppressHostRetarget(self))
+            {
+                orig(self, e);
+                return;
+            }
+
             if (TryResolveFallbackPlayerCombatTarget(self, e, out var fallbackTarget))
             {
                 orig(self, fallbackTarget);
@@ -77,6 +82,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private void Hook_Mob_setNemesisTarget(Hook_Mob.orig_setNemesisTarget orig, Mob self, Entity e)
         {
+            var net = GameMenu.NetRef;
             if (System.Threading.Volatile.Read(ref forceExactNemesisTargetDepth) > 0)
             {
                 orig(self, e);
@@ -84,6 +90,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             if (!IsMobHostileToPlayers(self))
+            {
+                orig(self, e);
+                return;
+            }
+
+            if (IsHost(net) && ShouldSuppressHostRetarget(self))
             {
                 orig(self, e);
                 return;
@@ -106,42 +118,28 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!IsMobHostileToPlayers(mob))
                 return false;
             if (currentTarget == null)
-                return false;
-
-            var shouldReplace = ModEntry.IsEntityDownedForCombat(currentTarget);
-            if (!shouldReplace)
             {
-                var gameHero = ModCore.Modules.Game.Instance?.HeroInstance;
-                shouldReplace = gameHero != null && ReferenceEquals(currentTarget, gameHero);
-            }
+                if (TryGetCurrentHostAttackTarget(mob, out _))
+                    return false;
 
-            if (!shouldReplace)
-                return false;
-
-            try
-            {
-                var helper = mob._team?.get_targetHelper();
-                if (helper != null)
+                if (TryGetCurrentHostNemesisTarget(mob, out var livingNemesisTarget))
                 {
-                    helper.filterUntargetables();
-                    var best = helper.getBest();
-                    if (best != null && !ModEntry.IsEntityDownedForCombat(best))
-                    {
-                        fallbackTarget = best;
-                        return true;
-                    }
+                    fallbackTarget = livingNemesisTarget;
+                    return true;
                 }
-            }
-            catch
-            {
-            }
 
-            var detectedFallback = ResolveDetectedClientTargetEntity(mob);
-            if (detectedFallback == null)
+                return false;
+            }
+            else if (!IsInvalidPlayerTargetEntity(currentTarget))
                 return false;
 
-            fallbackTarget = detectedFallback;
-            return true;
+            if (TryGetAlternateCurrentHostCombatTarget(mob, currentTarget, out var existingTarget))
+            {
+                fallbackTarget = existingTarget;
+                return true;
+            }
+
+            return false;
         }
 
         private static bool RebuildMobArray(Level? level)
@@ -378,6 +376,44 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 baselineSource = "last_commit";
             }
 
+            if (TryGetAuthoritativeGameplayLevel(out var authoritativeLevel, out _))
+            {
+                var candidateMatchesAuthoritative =
+                    DoesLevelMatchIdentity(level, candidateIdentityToken, authoritativeLevel);
+                var currentMatchesAuthoritative =
+                    DoesLevelMatchIdentity(currentLevel, s_levelIdentityToken, authoritativeLevel);
+                var lastCommittedMatchesAuthoritative =
+                    DoesStoredIdentityMatchLevel(s_lastCommittedLevelId, s_lastCommittedIdentityToken, authoritativeLevel);
+
+                var authoritativeBaselineTrackedCount = 0;
+                var authoritativeBaselineSource = string.Empty;
+                if (currentMatchesAuthoritative && trackedMobs.Count > 0)
+                {
+                    authoritativeBaselineTrackedCount = trackedMobs.Count;
+                    authoritativeBaselineSource = "live_authoritative";
+                }
+                else if (lastCommittedMatchesAuthoritative && s_lastCommittedTrackedCount > 0)
+                {
+                    authoritativeBaselineTrackedCount = s_lastCommittedTrackedCount;
+                    authoritativeBaselineSource = "last_commit_authoritative";
+                }
+
+                if (authoritativeBaselineTrackedCount > baselineTrackedCount)
+                {
+                    baselineTrackedCount = authoritativeBaselineTrackedCount;
+                    baselineSource = authoritativeBaselineSource;
+                }
+
+                // Do not let a side/stale level replace the live gameplay combat level with an empty tracked set.
+                if (authoritativeBaselineTrackedCount > 0 &&
+                    !candidateMatchesAuthoritative &&
+                    candidateTrackedCount <= 0)
+                {
+                    reason = "non_active_level_rebuild";
+                    return false;
+                }
+            }
+
             if (baselineTrackedCount > 0)
             {
                 if (candidateTrackedCount <= 0)
@@ -502,10 +538,28 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static bool IsLevelIdentityReadyLocked(Level? level)
         {
-            return s_levelIdentityReady &&
-                   level != null &&
-                   currentLevel != null &&
-                   ReferenceEquals(currentLevel, level);
+            return DoesLevelMatchCurrentIdentityLocked(level);
+        }
+
+        private static bool DoesLevelMatchCurrentIdentityLocked(Level? level)
+        {
+            if (!s_levelIdentityReady || level == null || s_levelIdentityToken <= 0)
+                return false;
+
+            if (currentLevel != null && ReferenceEquals(currentLevel, level))
+                return true;
+
+            var currentLevelId = GetLevelTraceIdSafe(currentLevel);
+            var candidateLevelId = GetLevelTraceIdSafe(level);
+            if (!string.IsNullOrEmpty(currentLevelId) &&
+                !string.IsNullOrEmpty(candidateLevelId) &&
+                !string.Equals(currentLevelId, candidateLevelId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var candidateIdentityToken = ComputeLevelIdentityToken(level);
+            return candidateIdentityToken > 0 && candidateIdentityToken == s_levelIdentityToken;
         }
 
         private static bool IsIncomingMobIdentityReady()
@@ -790,12 +844,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     shouldRemove = true;
                 }
 
-                if (!shouldRemove && currentLevel != null)
+                if (!shouldRemove)
                 {
                     try
                     {
                         var mobLevel = mob._level;
-                        shouldRemove = mobLevel != null && !ReferenceEquals(mobLevel, currentLevel);
+                        shouldRemove = !DoesLevelMatchCurrentIdentityLocked(mobLevel);
                     }
                     catch
                     {
@@ -916,7 +970,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                if (currentLevel != null && mob._level != null && !ReferenceEquals(currentLevel, mob._level))
+                if (!DoesLevelMatchCurrentIdentityLocked(mob._level))
                     return null;
             }
             catch
@@ -1158,7 +1212,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (mob.destroyed || mob._level == null)
                     return false;
 
-                if (currentLevel != null && !ReferenceEquals(mob._level, currentLevel))
+                if (!DoesLevelMatchCurrentIdentityLocked(mob._level))
                     return false;
             }
             catch
@@ -1455,28 +1509,39 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             RefreshHostContactAttackState(mob);
             var clearedInvalidTargets = TryClearHostMobInvalidPlayerTargets(mob);
-            var hasLivingTarget = HasValidLivingPlayerCombatTarget(mob);
+
+            if (TryGetCurrentHostAttackTarget(mob, out _))
+                return;
+
             if (ShouldSuppressHostRetarget(mob))
                 return;
-            if (!clearedInvalidTargets && hasLivingTarget)
+
+            if (TryRepairHostAttackTargetFromCurrentState(mob))
+            {
                 return;
+            }
 
             if (!TryResolveDetectedHostCombatTarget(mob, out var selected))
             {
-                if (clearedInvalidTargets && !hasLivingTarget)
+                if (clearedInvalidTargets && !HasValidLivingPlayerCombatTarget(mob))
                     TryClearHostMobInvalidPlayerTargets(mob);
                 return;
             }
 
             try
             {
-                mob.setAttackTarget(selected);
+                if (!ReferenceEquals(mob.aTarget, selected))
+                    mob.setAttackTarget(selected);
             }
             catch
             {
             }
 
-            TrySetNemesisTargetExact(mob, selected);
+            if (!TryGetCurrentHostNemesisTarget(mob, out var currentNemesis) ||
+                !ReferenceEquals(currentNemesis, selected))
+            {
+                TrySetNemesisTargetExact(mob, selected);
+            }
         }
 
         private static bool HasValidLivingPlayerCombatTarget(Mob mob)
@@ -1484,21 +1549,28 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (mob == null)
                 return false;
 
-            try
-            {
-                var attackTarget = mob.aTarget;
-                if (attackTarget != null && IsPlayerCombatTargetEntity(attackTarget))
-                    return true;
-            }
-            catch
-            {
-            }
+            if (TryGetCurrentHostAttackTarget(mob, out _))
+                return true;
+            if (TryGetCurrentHostNemesisTarget(mob, out _))
+                return true;
+
+            return false;
+        }
+
+        private static bool TryGetCurrentHostAttackTarget(Mob mob, out Entity target)
+        {
+            target = null!;
+            if (mob == null)
+                return false;
 
             try
             {
-                var nemesisTarget = mob.nemesisTarget;
-                if (nemesisTarget != null && IsPlayerCombatTargetEntity(nemesisTarget))
+                var attackTarget = mob.aTarget;
+                if (attackTarget != null && IsPreservablePlayerCombatTargetForMob(mob, attackTarget))
+                {
+                    target = attackTarget;
                     return true;
+                }
             }
             catch
             {
@@ -1507,12 +1579,87 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return false;
         }
 
+        private static bool TryGetCurrentHostNemesisTarget(Mob mob, out Entity target)
+        {
+            target = null!;
+            if (mob == null)
+                return false;
+
+            try
+            {
+                var nemesisTarget = mob.nemesisTarget;
+                if (nemesisTarget != null && IsPreservablePlayerCombatTargetForMob(mob, nemesisTarget))
+                {
+                    target = nemesisTarget;
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private static bool TryGetAlternateCurrentHostCombatTarget(Mob mob, Entity? excludedTarget, out Entity target)
+        {
+            target = null!;
+            if (mob == null)
+                return false;
+
+            if (TryGetCurrentHostAttackTarget(mob, out var attackTarget) &&
+                !ReferenceEquals(attackTarget, excludedTarget))
+            {
+                target = attackTarget;
+                return true;
+            }
+
+            if (TryGetCurrentHostNemesisTarget(mob, out var nemesisTarget) &&
+                !ReferenceEquals(nemesisTarget, excludedTarget))
+            {
+                target = nemesisTarget;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryRepairHostAttackTargetFromCurrentState(Mob mob)
+        {
+            if (mob == null)
+                return false;
+
+            if (!TryGetCurrentHostNemesisTarget(mob, out var livingNemesisTarget))
+                return false;
+
+            try
+            {
+                if (!ReferenceEquals(mob.aTarget, livingNemesisTarget))
+                    mob.setAttackTarget(livingNemesisTarget);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static bool ShouldSuppressHostRetarget(Mob mob)
         {
             if (mob == null)
                 return false;
 
-            return HasLocalQueuedOrChargingSkill(mob);
+            if (HasLocalQueuedOrChargingSkill(mob))
+                return true;
+
+            try
+            {
+                return mob.aiLocked();
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool TryClearHostMobInvalidPlayerTargets(Mob mob)
@@ -1557,36 +1704,20 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
             if (ReferenceEquals(candidate, mob))
                 return;
-            if (ModEntry.IsEntityDownedForCombat(candidate))
+            if (!IsAcquirablePlayerCombatTargetForMob(mob, candidate, requireDetectArea: true))
                 return;
 
             try
             {
-                if (candidate.destroyed || candidate.life <= 0)
+                if (!DoesLevelMatchCurrentIdentityLocked(mob._level))
+                    return;
+                if (!DoesLevelMatchCurrentIdentityLocked(candidate._level))
                     return;
             }
             catch
             {
                 return;
             }
-
-            var mobLevel = mob._level;
-            var candidateLevel = candidate._level;
-            if (mobLevel != null && candidateLevel != null && !ReferenceEquals(mobLevel, candidateLevel))
-                return;
-
-            bool inDetectArea;
-            try
-            {
-                inDetectArea = mob.inDetectArea(candidate);
-            }
-            catch
-            {
-                return;
-            }
-
-            if (!inDetectArea)
-                return;
 
             if (!hostDetectedTargets.Contains(candidate))
                 hostDetectedTargets.Add(candidate);
@@ -1619,23 +1750,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (mob == null)
                 return null;
 
-            try
-            {
-                if (IsPlayerCombatTargetEntity(mob.aTarget))
-                    return mob.aTarget;
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                if (IsPlayerCombatTargetEntity(mob.nemesisTarget))
-                    return mob.nemesisTarget;
-            }
-            catch
-            {
-            }
+            if (TryGetCurrentHostAttackTarget(mob, out var attackTarget))
+                return attackTarget;
+            if (TryGetCurrentHostNemesisTarget(mob, out var nemesisTarget))
+                return nemesisTarget;
 
             return null;
         }
@@ -1687,6 +1805,56 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             return 0;
+        }
+
+        private static Entity? ResolveHostPlayerCombatEntity(int userId)
+        {
+            var net = GameMenu.NetRef;
+            if (!IsHost(net) || userId <= 0)
+                return null;
+
+            var localId = net!.id;
+            var localHero = ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+            if (userId == localId)
+                return localHero != null && IsPreservablePlayerCombatTargetEntity(localHero) ? localHero : null;
+
+            if (!ModEntry.TryGetClientIndex(localId, userId, out var index))
+                return null;
+
+            var client = ModEntry.clients[index];
+            return client != null && IsPreservablePlayerCombatTargetEntity(client) ? client : null;
+        }
+
+        private static void TryApplyHostMobHitCombatRefresh(Mob mob, int attackerUserId, int previousLife, int currentLife, bool replaySpecialHit)
+        {
+            if (mob == null || attackerUserId <= 0 || currentLife <= 0)
+                return;
+
+            var attacker = ResolveHostPlayerCombatEntity(attackerUserId);
+            if (attacker == null)
+            {
+                if (replaySpecialHit)
+                    TryAssignHostAttackTarget(mob);
+                return;
+            }
+
+            var threatDelta = System.Math.Max(0, previousLife - currentLife);
+
+            try
+            {
+                if (threatDelta > 0)
+                    mob.addThreat(attacker, threatDelta, HaxeProxy.Runtime.Ref<double>.Null);
+                else if (!replaySpecialHit)
+                    return;
+
+                mob.updateThreat();
+            }
+            catch
+            {
+            }
+
+            if (!TryGetCurrentHostAttackTarget(mob, out _))
+                TryAssignHostAttackTarget(mob);
         }
 
         private static bool TryResolveDetectedHostCombatTarget(Mob mob, out Entity selected)
@@ -1770,12 +1938,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static Entity? ResolveMobAttackTargetEntity(Mob mob, Entity? explicitTarget)
         {
-            if (explicitTarget != null && IsPlayerCombatTargetEntity(explicitTarget))
+            if (explicitTarget != null && IsPreservablePlayerCombatTargetForMob(mob, explicitTarget))
                 return explicitTarget;
 
             try
             {
-                if (mob.aTarget != null && IsPlayerCombatTargetEntity(mob.aTarget))
+                if (mob.aTarget != null && IsPreservablePlayerCombatTargetForMob(mob, mob.aTarget))
                     return mob.aTarget;
             }
             catch
@@ -1784,7 +1952,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                if (mob.nemesisTarget != null && IsPlayerCombatTargetEntity(mob.nemesisTarget))
+                if (mob.nemesisTarget != null && IsPreservablePlayerCombatTargetForMob(mob, mob.nemesisTarget))
                     return mob.nemesisTarget;
             }
             catch
@@ -1797,33 +1965,137 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return null;
         }
 
-        private static bool IsPlayerCombatTargetEntity(Entity entity)
+        private static bool IsEntityOnCurrentCombatIdentity(Entity? entity)
         {
             if (entity == null)
                 return false;
-            if (ModEntry.IsEntityDownedForCombat(entity))
+
+            try
+            {
+                lock (Sync)
+                {
+                    return DoesLevelMatchCurrentIdentityLocked(entity._level);
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsPreservablePlayerCombatTargetEntity(Entity entity)
+        {
+            if (entity == null)
+                return false;
+            if (IsCorpseLikeCombatTargetEntity(entity))
+                return false;
+            if (!IsKnownPlayerEntity(entity))
+                return false;
+            if (IsHardInvalidPlayerTargetEntity(entity))
                 return false;
 
-            return IsKnownPlayerEntity(entity);
+            try
+            {
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool IsInvalidPlayerTargetEntity(Entity? entity)
         {
-            var safeEntity = entity;
-            if (!IsKnownPlayerEntity(safeEntity) || safeEntity == null)
+            return IsHardInvalidPlayerTargetEntity(entity);
+        }
+
+        private static bool IsPreservablePlayerCombatTargetForMob(Mob mob, Entity entity)
+        {
+            if (mob == null || entity == null)
+                return false;
+            if (!IsPreservablePlayerCombatTargetEntity(entity))
                 return false;
 
-            if (ModEntry.IsEntityDownedForCombat(safeEntity))
+            try
+            {
+                if (!mob.isOpponent(entity))
+                    return false;
+            }
+            catch
+            {
+                return false;
+            }
+
+            try
+            {
+                if (!entity.canBeHitBy(mob))
+                    return false;
+            }
+            catch
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool IsAcquirablePlayerCombatTargetForMob(Mob mob, Entity entity, bool requireDetectArea = false)
+        {
+            if (!IsPreservablePlayerCombatTargetForMob(mob, entity))
+                return false;
+
+            try
+            {
+                if (!entity.canBeDetected())
+                    return false;
+                if (!entity.canBeHitBy(mob))
+                    return false;
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (!requireDetectArea)
                 return true;
 
             try
             {
-                return safeEntity.destroyed || safeEntity.life <= 0;
+                return mob.inDetectArea(entity);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsHardInvalidPlayerTargetEntity(Entity? entity)
+        {
+            var safeEntity = entity;
+            if (safeEntity == null)
+                return false;
+            if (IsCorpseLikeCombatTargetEntity(safeEntity))
+                return true;
+            if (!IsKnownPlayerEntity(safeEntity))
+                return false;
+            if (ModEntry.IsEntityDownedForCombat(safeEntity))
+                return true;
+            if (!IsEntityOnCurrentCombatIdentity(safeEntity))
+                return true;
+
+            try
+            {
+                return safeEntity.destroyed || safeEntity.life <= 0 || !safeEntity._targetable;
             }
             catch
             {
                 return true;
             }
+        }
+
+        private static bool IsCorpseLikeCombatTargetEntity(Entity? entity)
+        {
+            return entity is HeroDeadCorpse || entity is dc.en.deco.DeadCorpse;
         }
 
 

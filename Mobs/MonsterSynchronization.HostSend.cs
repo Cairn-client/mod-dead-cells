@@ -412,12 +412,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private void Hook_Mob_contactAttack(Hook_Mob.orig_contactAttack orig, Mob self, Entity pow)
         {
             var net = GameMenu.NetRef;
-            if (IsHost(net) && ModEntry.IsLocalPlayerDowned() && IsPlayerCombatTargetEntity(pow))
+            if (IsHost(net) && IsInvalidPlayerTargetEntity(pow))
                 return;
 
             orig(self, pow);
 
-            if (!IsHost(net) || !IsPlayerCombatTargetEntity(pow))
+            if (!IsHost(net) || !IsPreservablePlayerCombatTargetForMob(self, pow))
                 return;
 
             if (ShouldSendHostContactPacket(self, pow))
@@ -427,12 +427,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private void Hook_Mob_onTouch(Hook_Mob.orig_onTouch orig, Mob self, Entity atk)
         {
             var net = GameMenu.NetRef;
-            if (IsHost(net) && ModEntry.IsLocalPlayerDowned() && IsPlayerCombatTargetEntity(atk))
+            if (IsHost(net) && IsInvalidPlayerTargetEntity(atk))
                 return;
 
             orig(self, atk);
 
-            if (!IsHost(net) || !IsSyncMob(self) || !IsPlayerCombatTargetEntity(atk))
+            if (!IsHost(net) || !IsSyncMob(self) || !IsPreservablePlayerCombatTargetForMob(self, atk))
                 return;
 
             EnsureMobTracked(self);
