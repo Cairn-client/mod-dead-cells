@@ -30,8 +30,10 @@ jobs:
           $asset = $release.assets | Where-Object { $_.name -eq "win-x64.zip" }
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile dccm.zip
           Expand-Archive -Path dccm.zip -DestinationPath dccm
-          "DCCM_MDK_ROOT=$env:GITHUB_WORKSPACE\dccm\core\mdk" |
+          $mdkRoot = "$env:GITHUB_WORKSPACE\dccm\core\mdk"
+          "DCCM_MDK_ROOT=$mdkRoot" |
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          dotnet nuget add source "$mdkRoot\packages" --name dccm-local
 
       - name: Build
         run: dotnet build -c Release
