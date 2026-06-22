@@ -7,6 +7,7 @@ using HaxeProxy.Runtime;
 using Newtonsoft.Json;
 using ModCore.Utilities;
 using Microsoft.Win32;
+using DeadCellsMultiplayerMod.UI;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using ModCore.Modules;
@@ -57,131 +58,6 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private static void ShowHostStatusMenu(TitleScreen screen)
-        {
-            if (_menuRebuildDepth > 0)
-                return;
-            _menuRebuildDepth++;
-            var prevSuppress = _suppressAutoButton;
-            _suppressAutoButton = true;
-            var prevIsMain = GetIsMainMenu(screen);
-            try
-            {
-                SetIsMainMenu(screen, false);
-                screen.clearMenu();
-
-                var multiplayerSaveLabel = GetMultiplayerSaveButtonLabel();
-                AddMenuButton(screen, GetText.Instance.GetString("Play"), () => StartHostRun(screen), GetText.Instance.GetString("Launch game"));
-                AddMenuButton(screen, multiplayerSaveLabel, () => OpenMultiplayerSlotMenu(screen), Localize("Choose multiplayer save slot"));
-                AddMenuButton(screen, GetText.Instance.GetString("Back"), () =>
-                {
-                    StopNetworkFromMenu();
-                    SetRole(NetRole.None);
-                    _menuSelection = NetRole.None;
-                    ShowMultiplayerMenu(screen);
-                    screen.ShouldAutoHideConnectionUI(false);
-                }, GetText.Instance.GetString("Back to host setup"));
-
-                RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
-                RemoveDuplicatesKeepFirst(screen, GetText.Instance.GetString("Play"), multiplayerSaveLabel, GetText.Instance.GetString("Back"));
-                _inHostStatusMenu = true;
-                _inClientWaitingMenu = false;
-            }
-            catch (Exception ex)
-            {
-                _log?.Warning("[NetMod] Failed to open host status menu: {Message}", ex.Message);
-            }
-            finally
-            {
-                SetIsMainMenu(screen, prevIsMain);
-                _suppressAutoButton = prevSuppress;
-                _menuRebuildDepth--;
-            }
-        }
-
-        private static void ShowClientWaitingMenu(TitleScreen screen)
-        {
-            if (_menuRebuildDepth > 0)
-                return;
-            _menuRebuildDepth++;
-            var prevSuppress = _suppressAutoButton;
-            _suppressAutoButton = true;
-            var prevIsMain = GetIsMainMenu(screen);
-            try
-            {
-                SetIsMainMenu(screen, false);
-                screen.clearMenu();
-
-                AddMenuButton(
-                    screen,
-                    GetText.Instance.GetString("Disconnect"),
-                    () => {DisconnectFromMenu(screen); screen.ShouldAutoHideConnectionUI(false);},
-                    GetText.Instance.GetString("Disconnect and return to main menu"));
-                var multiplayerSaveLabel = GetMultiplayerSaveButtonLabel();
-                AddMenuButton(screen, multiplayerSaveLabel, () => OpenMultiplayerSlotMenu(screen), Localize("Choose multiplayer save slot"));
-
-                RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
-                RemoveDuplicatesKeepFirst(screen, GetText.Instance.GetString("Disconnect"), multiplayerSaveLabel);
-                _inClientWaitingMenu = true;
-                _inHostStatusMenu = false;
-            }
-            catch (Exception ex)
-            {
-                _log?.Warning("[NetMod] Failed to open client waiting menu: {Message}", ex.Message);
-            }
-            finally
-            {
-                SetIsMainMenu(screen, prevIsMain);
-                _suppressAutoButton = prevSuppress;
-                _menuRebuildDepth--;
-            }
-        }
-
-        private static void ShowLobbyNotFoundPopup(TitleScreen screen)
-        {
-            var prevSuppress = _suppressAutoButton;
-            _suppressAutoButton = true;
-            var prevIsMain = GetIsMainMenu(screen);
-            try
-            {
-                SetIsMainMenu(screen, false);
-                screen.clearMenu();
-
-                AddInfoLine(screen, GetText.Instance.GetString("Can't find lobby"), infoColor: 0xFF9090);
-                AddMenuButton(
-                    screen,
-                    GetText.Instance.GetString("OK"),
-                    () => ShowConnectionMenu(screen, NetRole.Client),
-                    GetText.Instance.GetString("Return to join menu"));
-
-                RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
-                RemoveDuplicatesKeepFirst(screen, GetText.Instance.GetString("OK"));
-                _inClientWaitingMenu = false;
-                _inHostStatusMenu = false;
-            }
-            catch (Exception ex)
-            {
-                _log?.Warning("[NetMod] Failed to open lobby not found popup: {Message}", ex.Message);
-            }
-            finally
-            {
-                SetIsMainMenu(screen, prevIsMain);
-                _suppressAutoButton = prevSuppress;
-            }
-        }
-
-        private static void DisconnectFromMenu(TitleScreen screen)
-        {
-            StopNetworkFromMenu();
-            _waitingForHost = false;
-            ResetClientConnectState();
-            _menuSelection = NetRole.None;
-            ResetSteamState();
-            _inHostStatusMenu = false;
-            _inClientWaitingMenu = false;
-            screen.mainMenu();
-        }
-
         private static void StopNetworkFromMenu()
         {
             ResetHostDisconnectCountdown();
@@ -195,18 +71,6 @@ namespace DeadCellsMultiplayerMod
                 _inActualRun = false;
             }
             ResetSteamState();
-        }
-
-        private static void EditUsername(TitleScreen screen)
-        {
-            OpenTextInput(screen, GetText.Instance.GetString("Username"), _username, value =>
-            {
-                var cleaned = CleanUsername(value);
-                _username = cleaned;
-                SaveConfig();
-                SendUsernameToRemote();
-                ShowConnectionMenu(screen, _menuSelection == NetRole.None ? NetRole.Host : _menuSelection);
-            }, noSpaces: true);
         }
 
         public static void NotifyRemoteConnected(NetRole role)
@@ -223,8 +87,7 @@ namespace DeadCellsMultiplayerMod
 
                 if (_menuSelection == NetRole.Host)
                 {
-                    var ts = GetTitleScreen();
-                    if (ts != null) ShowHostStatusMenu(ts);
+                    RefreshDccmMenuIfActive(DccmHostStatusMenu);
                 }
             }
             else if (role == NetRole.Client)
@@ -235,8 +98,7 @@ namespace DeadCellsMultiplayerMod
                 ConnectionUI.NotifyConnectionsChanged();
                 if (_menuSelection == NetRole.Client)
                 {
-                    var ts = GetTitleScreen();
-                    if (ts != null) ShowClientWaitingMenu(ts);
+                    RefreshDccmMenuIfActive(DccmClientWaitingMenu);
                 }
             }
         }
@@ -252,8 +114,7 @@ namespace DeadCellsMultiplayerMod
 
             if (_menuSelection == NetRole.Client)
             {
-                var ts = GetTitleScreen();
-                if (ts != null) ShowClientWaitingMenu(ts);
+                RefreshDccmMenuIfActive(DccmClientWaitingMenu);
             }
         }
 
@@ -264,8 +125,7 @@ namespace DeadCellsMultiplayerMod
             _waitingForHost = false;
             _menuSelection = NetRole.Client;
 
-            var ts = GetTitleScreen();
-            if (ts != null) ShowLobbyNotFoundPopup(ts);
+            OpenDccmMenu(DccmLobbyNotFoundMenu);
         }
 
         public static void NotifyRemoteDisconnected(NetRole role)
@@ -280,8 +140,7 @@ namespace DeadCellsMultiplayerMod
                 _seedArrived = false;
                 if (_menuSelection == NetRole.Host)
                 {
-                    var ts = GetTitleScreen();
-                    if (ts != null) ShowHostStatusMenu(ts);
+                    RefreshDccmMenuIfActive(DccmHostStatusMenu);
                 }
 
                 EnqueueMainThreadCoalesced("ui:refresh-layout-after-disconnect", () => ConnectionUI.RefreshLayoutAfterDisconnect());
@@ -295,8 +154,6 @@ namespace DeadCellsMultiplayerMod
             _menuSelection = NetRole.None;
             ResetSteamState();
             ClearNetworkCaches();
-            _inHostStatusMenu = false;
-            _inClientWaitingMenu = false;
             _remoteUsername = "guest";
             _localReady = false;
             _genArrived = false;
@@ -745,35 +602,6 @@ namespace DeadCellsMultiplayerMod
             return GetText.Instance.GetString("waiting for client");
         }
 
-        private static List<string> BuildPlayerLines(NetRole role)
-        {
-            var parts = new System.Collections.Generic.List<string>();
-            var net = NetRef;
-            if (role == NetRole.Host)
-            {
-                parts.Add(_username);
-                if (net != null && net.HasRemote)
-                    parts.Add(_remoteUsername);
-            }
-            else
-            {
-                parts.Add(_username);
-                if (net != null && net.HasRemote)
-                    parts.Add(_remoteUsername);
-            }
-
-            return parts;
-        }
-
-        private static void AddPlayerLines(TitleScreen screen, NetRole role, int? infoColor = null)
-        {
-            var prefix = GetText.Instance.GetString("- ");
-            foreach (var line in BuildPlayerLines(role))
-            {
-                AddInfoLine(screen, $"{prefix}{line}", infoColor: infoColor);
-            }
-        }
-
         private static void ResetClientConnectState()
         {
             lock (Sync)
@@ -1118,16 +946,15 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private static void TryAddMenuButton(TitleScreen screen, string label, Action onClick, string? help = null)
+        private static object? GetMemberValue(object? obj, string name, bool ignoreCase)
+            => TitleScreenReflection.GetMemberValue(obj, name, ignoreCase);
+
+        private static bool TrySetMember(object? obj, string name, object? value)
+            => TitleScreenReflection.TrySetMember(obj, name, value);
+
+        private static dc.String MakeHLString(string value)
         {
-            try
-            {
-                AddMenuButton(screen, label, onClick, help);
-            }
-            catch (Exception ex)
-            {
-                _log?.Warning("[NetMod] Menu add failed for {Label}: {Message}", label, ex.Message);
-            }
+            return value.AsHaxeString();
         }
 
         private static void AddMenuButton(TitleScreen screen, string label, Action onClick, string? help = null)
@@ -1139,235 +966,6 @@ namespace DeadCellsMultiplayerMod
             var color = Ref<int>.From(ref colorVal);
             screen.addMenu(labelStr, cb, helpStr, null, color);
         }
-
-        private static void AddInfoLine(TitleScreen screen, string text, int? infoColor = null)
-        {
-            int colorVal = infoColor ?? 0xFFFFFF;
-            var labelStr = MakeHLString(text);
-            var helpStr = MakeHLString(string.Empty);
-            var color = Ref<int>.From(ref colorVal);
-            var cb = new HlAction(() => { });
-            screen.addMenu(labelStr, cb, helpStr, false, color);
-        }
-
-        private static object? GetMemberValue(object? obj, string name, bool ignoreCase)
-        {
-            if (obj == null || string.IsNullOrWhiteSpace(name)) return null;
-
-            const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-            var type = obj.GetType();
-            var flags = ignoreCase ? Flags | BindingFlags.IgnoreCase : Flags;
-            try
-            {
-                var prop = type.GetProperty(name, flags);
-                if (prop != null) return prop.GetValue(obj);
-
-                var field = type.GetField(name, flags);
-                if (field != null) return field.GetValue(obj);
-            }
-            catch { }
-
-            return null;
-        }
-
-        private static bool TrySetMember(object? obj, string name, object? value)
-        {
-            if (obj == null || string.IsNullOrWhiteSpace(name)) return false;
-
-            const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase;
-            var type = obj.GetType();
-            try
-            {
-                var prop = type.GetProperty(name, Flags);
-                if (prop != null && prop.CanWrite)
-                {
-                    prop.SetValue(obj, value);
-                    return true;
-                }
-
-                var field = type.GetField(name, Flags);
-                if (field != null)
-                {
-                    field.SetValue(obj, value);
-                    return true;
-                }
-            }
-            catch { }
-
-            return false;
-        }
-
-        private static dc.String MakeHLString(string value)
-        {
-            return value.AsHaxeString();
-        }
-
-        private static bool GetIsMainMenu(TitleScreen screen)
-        {
-            try
-            {
-                var val = GetMemberValue(screen, "isMainMenu", true);
-                if (val is bool b) return b;
-            }
-            catch { }
-            return false;
-        }
-
-        private static void SetIsMainMenu(TitleScreen screen, bool value)
-        {
-            try
-            {
-                TrySetMember(screen, "isMainMenu", value);
-            }
-            catch { }
-        }
-
-        private static int GetArrayLength(object arrObj)
-        {
-            try
-            {
-                var lenObj = GetMemberValue(arrObj, "length", true);
-                if (lenObj is IConvertible conv)
-                    return conv.ToInt32(null);
-            }
-            catch { }
-            return 0;
-        }
-
-        private static int FindMenuIndexByLabel(object? arrObj, string label)
-        {
-            if (arrObj == null) return -1;
-            try
-            {
-                var type = arrObj.GetType();
-                var getDyn = type.GetMethod("getDyn", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                if (getDyn == null) return -1;
-
-                int len = GetArrayLength(arrObj);
-                for (int i = 0; i < len; i++)
-                {
-                    var item = getDyn.Invoke(arrObj, new object[] { i });
-                    var text = GetMenuLabel(item);
-                    if (text.Equals(label, StringComparison.OrdinalIgnoreCase))
-                        return i;
-                }
-            }
-            catch { }
-            return -1;
-        }
-
-        private static string GetMenuLabel(object? menuItem)
-        {
-            if (menuItem == null) return string.Empty;
-
-            try
-            {
-                var t = GetMemberValue(menuItem, "t", true);
-                if (t is dc.String ds)
-                    return ds.ToString() ?? string.Empty;
-
-                var textValue = GetMemberValue(t ?? menuItem, "text", true)
-                             ?? GetMemberValue(t ?? menuItem, "str", true);
-                if (textValue != null)
-                    return textValue.ToString() ?? string.Empty;
-
-                return t?.ToString() ?? menuItem.ToString() ?? string.Empty;
-            }
-            catch
-            {
-                return string.Empty;
-            }
-        }
-
-        private static void RemoveMenuItems(TitleScreen screen, params string[] labels)
-        {
-            if (labels.Length == 0) return;
-            var arrObj = GetMemberValue(screen, "menuItems", true);
-            if (arrObj == null) return;
-
-            try
-            {
-                var type = arrObj.GetType();
-                var getDyn = type.GetMethod("getDyn", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                var removeDyn = type.GetMethod("removeDyn", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                              ?? type.GetMethod("remove", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                if (getDyn == null || removeDyn == null) return;
-
-                var targets = new System.Collections.Generic.List<object>();
-                int len = GetArrayLength(arrObj);
-                for (int i = 0; i < len; i++)
-                {
-                    var item = getDyn.Invoke(arrObj, new object[] { i });
-                    if (item == null)
-                        continue;
-                    var label = GetMenuLabel(item);
-                    foreach (var l in labels)
-                    {
-                        if (label.Equals(l, StringComparison.OrdinalIgnoreCase))
-                        {
-                            targets.Add(item);
-                            break;
-                        }
-                    }
-                }
-
-                foreach (var it in targets)
-                {
-                    removeDyn.Invoke(arrObj, new object[] { it });
-                }
-            }
-            catch (Exception ex)
-            {
-                _log?.Warning("[NetMod] Failed to clean menu items: {Message}", ex.Message);
-            }
-        }
-
-        private static void RemoveDuplicatesKeepFirst(TitleScreen screen, params string[] labels)
-        {
-            if (labels.Length == 0) return;
-            var arrObj = GetMemberValue(screen, "menuItems", true);
-            if (arrObj == null) return;
-
-            try
-            {
-                var type = arrObj.GetType();
-                var getDyn = type.GetMethod("getDyn", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                var removeDyn = type.GetMethod("removeDyn", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                              ?? type.GetMethod("remove", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                if (getDyn == null || removeDyn == null) return;
-
-                var seen = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                var toRemove = new System.Collections.Generic.List<object>();
-
-                int len = GetArrayLength(arrObj);
-                for (int i = 0; i < len; i++)
-                {
-                    var item = getDyn.Invoke(arrObj, new object[] { i });
-                    if (item == null)
-                        continue;
-                    var label = GetMenuLabel(item);
-                    foreach (var l in labels)
-                    {
-                        if (label.Equals(l, StringComparison.OrdinalIgnoreCase))
-                        {
-                            if (!seen.Add(label))
-                                toRemove.Add(item);
-                            break;
-                        }
-                    }
-                }
-
-                foreach (var it in toRemove)
-                {
-                    removeDyn.Invoke(arrObj, new object[] { it });
-                }
-            }
-            catch (Exception ex)
-            {
-                _log?.Warning("[NetMod] Failed to clean duplicate menu items: {Message}", ex.Message);
-            }
-        }
-
 
         private static void StoreTitleScreen(TitleScreen ts)
         {

@@ -62,11 +62,7 @@ namespace DeadCellsMultiplayerMod
 
         private static void OpenMultiplayerSlotMenu(TitleScreen screen)
         {
-            _multiplayerSaveMenuReturnRole = _inHostStatusMenu
-                ? NetRole.Host
-                : _inClientWaitingMenu
-                    ? NetRole.Client
-                    : _role;
+            _multiplayerSaveMenuReturnRole = _menuSelection;
 
             OpenSaveMenu(screen, MultiplayerSaveMenuKind.MultiplayerSlots);
         }
@@ -115,12 +111,12 @@ namespace DeadCellsMultiplayerMod
 
             if (returnRole == NetRole.Host)
             {
-                ShowHostStatusMenu(self);
+                OpenDccmMenuFromTitle(self, DccmHostStatusMenu);
                 self.ShouldAutoHideConnectionUI(true);
             }
             else if (returnRole == NetRole.Client)
             {
-                ShowClientWaitingMenu(self);
+                OpenDccmMenuFromTitle(self, DccmClientWaitingMenu);
                 self.ShouldAutoHideConnectionUI(true);
             }
         }
