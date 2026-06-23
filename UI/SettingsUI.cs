@@ -205,26 +205,6 @@ public class SettingsUI :
             Ref<bool>.From(ref enabledNow),
             widgetParent);
 
-        double interpolationValue = MultiplayerSettingsStorage.MobsInterpolationQuality;
-        double interpolationStep = 0.02;
-        bool interpolationPercentDisplay = true;
-        bool interpolationRawDisplay = false;
-        double interpolationMin = 0.20;
-        double interpolationMax = 1.00;
-
-        self.addSliderWidget(
-            GameMenu.Localize("Mobs interpolation quality").AsHaxeString(),
-            new HlAction<double>(OnMobsInterpolationSliderChanged),
-            interpolationValue,
-            Ref<double>.From(ref interpolationStep),
-            widgetParent,
-            Ref<bool>.From(ref interpolationPercentDisplay),
-            Ref<bool>.From(ref interpolationRawDisplay),
-            Ref<double>.From(ref interpolationMin),
-            Ref<double>.From(ref interpolationMax),
-            null,
-            Ref<int>.Null);
-
         double mobsHpValue = MultiplayerSettingsStorage.MobsHpMultiplier;
         double mobsHpStep = 0.10;
         bool mobsHpPercentDisplay = false;
@@ -551,11 +531,6 @@ public class SettingsUI :
         var enabled = !MultiplayerSettingsStorage.ShowPerfLogs;
         MultiplayerSettingsStorage.ShowPerfLogs = enabled;
         return enabled;
-    }
-
-    private static void OnMobsInterpolationSliderChanged(double value)
-    {
-        MultiplayerSettingsStorage.MobsInterpolationQuality = value;
     }
 
     private static void OnMobsHpSliderChanged(double value)

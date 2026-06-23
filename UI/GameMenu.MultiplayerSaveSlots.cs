@@ -111,12 +111,12 @@ namespace DeadCellsMultiplayerMod
 
             if (returnRole == NetRole.Host)
             {
-                OpenDccmMenuFromTitle(self, DccmHostStatusMenu);
+                ShowHostStatusMenu(self);
                 self.ShouldAutoHideConnectionUI(true);
             }
             else if (returnRole == NetRole.Client)
             {
-                OpenDccmMenuFromTitle(self, DccmClientWaitingMenu);
+                ShowClientWaitingMenu(self);
                 self.ShouldAutoHideConnectionUI(true);
             }
         }

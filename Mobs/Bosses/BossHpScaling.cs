@@ -12,12 +12,12 @@ public static class BossHpScaling
 
         var net = DeadCellsMultiplayerMod.GameMenu.NetRef;
         var playerCount = (net != null && net.IsAlive) ? (1 + NetNode.ConnectedClientCount) : 1;
-        if (playerCount <= 1)
-            return;
 
         try
         {
             var mult = BossSyncHelpers.GetHpMultiplierForMob(mob, playerCount);
+            if (System.Math.Abs(mult - 1.0) <= 0.0001)
+                return;
             var maxLife = System.Math.Max(1, mob.maxLife);
             var life = mob.life;
 

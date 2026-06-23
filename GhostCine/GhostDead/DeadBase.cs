@@ -94,6 +94,9 @@ namespace DeadCellsMultiplayerMod
             DisposeCorpse();
             DisposeHomunculus();
 
+            if (!IsSafeToCreateCorpse())
+                return;
+
             try
             {
                 var corpse = new HeroDeadCorpse(this, _hero);
@@ -113,6 +116,27 @@ namespace DeadCellsMultiplayerMod
             {
                 _corpse = null;
             }
+        }
+
+        private bool IsSafeToCreateCorpse()
+        {
+            if (_hero == null || _hero.destroyed)
+                return false;
+
+            try
+            {
+                var level = _hero._level;
+                if (level == null || level.destroyed)
+                    return false;
+                if (level.game == null || level.game.destroyed)
+                    return false;
+            }
+            catch
+            {
+                return false;
+            }
+
+            return true;
         }
 
         private void EnsureCorpseFalling()

@@ -921,13 +921,14 @@ namespace DeadCellsMultiplayerMod
             _steamJoinLobbyResolvePending = true;
             _waitingForHost = true;
             _clientConnecting = true;
-            OpenDccmMenuFromTitle(screen, DccmClientWaitingMenu);
+            ShowClientWaitingMenu(screen);
             screen.ShouldAutoHideConnectionUI(true);
+            ConnectionUI.NotifyConnectionsChanged();
             _ = Task.Run(() =>
             {
                 _log?.Information("[NetMod][Steam] Overlay join resolving lobby (lobbyId={LobbyId})", lobbyId);
                 var ok = SteamConnect.TryResolveJoinEndpointFromLobbyId(lobbyId, out var join);
-                EnqueueMainThread(() => DccmApplySteamJoinResult(ok, join, fromOverlay: true));
+                EnqueueMainThread(() => ApplySteamJoinResult(screen, ok, join, fromOverlay: true));
             });
         }
 
@@ -979,10 +980,12 @@ namespace DeadCellsMultiplayerMod
                         if (_steamHostSteamId == 0UL)
                         {
                             _log?.Warning("[NetMod][Steam] Client start aborted: host Steam id is missing");
-                            ShowDccmError(
-                                GetText.Instance.GetString("Steam join failed"),
-                                GetText.Instance.GetString("Steam host id is missing. Check console logs."),
-                                () => OpenDccmMenu(DccmJoinLanMenu));
+                            var ts = GetTitleScreen();
+                            if (ts != null)
+                                ShowConnectionErrorPopup(ts,
+                                    GetText.Instance.GetString("Steam join failed"),
+                                    GetText.Instance.GetString("Steam host id is missing. Check console logs."),
+                                    () => ShowJoinTransportMenu(ts));
                             return;
                         }
                     }

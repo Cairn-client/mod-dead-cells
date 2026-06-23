@@ -30,12 +30,14 @@ public static class BossSyncHelpers
 
     public static double GetHpMultiplierForMob(Mob mob, int playerCount)
     {
-        if (mob == null || playerCount <= 1)
+        if (mob == null)
             return 1;
 
-        var baseMultiplier = IsBossMob(mob)
-            ? 1 + (playerCount - 1) * BossSyncConstants.BossHpMultiplierPerPlayer
-            : 1 + (playerCount - 1) * BossSyncConstants.RegularMobHpMultiplierPerPlayer;
+        var baseMultiplier = playerCount > 1
+            ? (IsBossMob(mob)
+                ? 1 + (playerCount - 1) * BossSyncConstants.BossHpMultiplierPerPlayer
+                : 1 + (playerCount - 1) * BossSyncConstants.RegularMobHpMultiplierPerPlayer)
+            : 1.0;
 
         var userMultiplier = IsBossMob(mob)
             ? MultiplayerSettingsStorage.BossesHpMultiplier

@@ -84,11 +84,6 @@ namespace DeadCellsMultiplayerMod
                 SendCachedDataToRemote();
                 SendCachedGeneratePayload();
                 ConnectionUI.NotifyConnectionsChanged();
-
-                if (_menuSelection == NetRole.Host)
-                {
-                    RefreshDccmMenuIfActive(DccmHostStatusMenu);
-                }
             }
             else if (role == NetRole.Client)
             {
@@ -96,10 +91,6 @@ namespace DeadCellsMultiplayerMod
                 _clientConnecting = false;
                 _clientConnectAttempt = 0;
                 ConnectionUI.NotifyConnectionsChanged();
-                if (_menuSelection == NetRole.Client)
-                {
-                    RefreshDccmMenuIfActive(DccmClientWaitingMenu);
-                }
             }
         }
 
@@ -112,10 +103,7 @@ namespace DeadCellsMultiplayerMod
                 _waitingForHost = true;
             }
 
-            if (_menuSelection == NetRole.Client)
-            {
-                RefreshDccmMenuIfActive(DccmClientWaitingMenu);
-            }
+            ConnectionUI.NotifyConnectionsChanged();
         }
 
         internal static void NotifyClientConnectFailed()
@@ -125,7 +113,22 @@ namespace DeadCellsMultiplayerMod
             _waitingForHost = false;
             _menuSelection = NetRole.Client;
 
-            OpenDccmMenu(DccmLobbyNotFoundMenu);
+            EnqueueMainThread(() =>
+            {
+                var screen = GetTitleScreen();
+                if (screen != null)
+                {
+                    screen.clearMenu();
+                    AddInfoLine(screen, Localize("Can't find lobby"), 0xFF9090);
+                    AddInfoLine(screen, Localize("Check the address or Steam lobby code."), 0xE0E0E0);
+                    AddMenuButton(screen, GetText.Instance.GetString("OK"), () =>
+                    {
+                        screen.clearMenu();
+                        ShowJoinTransportMenu(screen);
+                    }, Localize("Return to join menu"));
+                    screen.ShouldAutoHideConnectionUI(false);
+                }
+            });
         }
 
         public static void NotifyRemoteDisconnected(NetRole role)
@@ -136,11 +139,8 @@ namespace DeadCellsMultiplayerMod
                 MultiplayerUI.PushSystemMessage(FormatLocalized("{0} disconnected from the server.", disconnectedName));
                 _remoteUsername = "guest";
                 _seedArrived = false;
-                if (_menuSelection == NetRole.Host)
-                {
-                    RefreshDccmMenuIfActive(DccmHostStatusMenu);
-                }
 
+                ConnectionUI.NotifyConnectionsChanged();
                 EnqueueMainThreadCoalesced("ui:refresh-layout-after-disconnect", () => ConnectionUI.RefreshLayoutAfterDisconnect());
                 return;
             }
