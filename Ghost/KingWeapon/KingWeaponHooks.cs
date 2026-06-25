@@ -945,6 +945,16 @@ internal static class KingWeaponHooks
         if(attack == null)
             return false;
 
+        // During ghost-weapon replication (IsInKingContext), let the mob get
+        // staggered/interrupted so it doesn't counter-attack the local player with an
+        // invisible hit (desync).  Host sends authoritative mob HP via mob-state sync
+        // which overwrites any local HP change, so the net effect is correct HP +
+        // correct stagger visual.  The same pattern already exists for dive attacks
+        // (IsLocalHeroDamageAllowedInKingContext = true) which bypass the suppression
+        // at the check below; this just extends it to all ghost weapon hits.
+        if(KingWeaponSupport.IsInKingContext)
+            return false;
+
         // When local player is downed, KingSkin must be able to damage mobs with KingWeapon.
         if(ModEntry.IsLocalPlayerDowned())
             return false;
