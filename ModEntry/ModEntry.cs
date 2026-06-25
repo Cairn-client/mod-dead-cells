@@ -720,6 +720,7 @@ namespace DeadCellsMultiplayerMod
             GameMenu.ProcessMainThreadQueue();
             GameMenu.HandleTextInputClipboardShortcuts();
             _ghost?.UpdateLabels();
+            ProcessCameraSpectateInput();
         }
 
 
