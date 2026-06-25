@@ -10,17 +10,22 @@ English • [Русский](README_ru.md)
 The mod adds **co-op / multiplayer gameplay** via a **local or virtual network**:  
 one player hosts a server, another connects — and both players can **play through levels together in real time**.
 
-> ## ⚠️ The project is currently frozen!
-
 ---
 
 ## 🎮 Features
 
 - ✅ Real-time synchronization between two players  
-- ✅ Local TCP-based multiplayer server  
-- ✅ Host / Client architecture    
+- ✅ Local TCP or Steam P2P multiplayer  
+- ✅ Host / Client architecture  
 - ✅ Automatic game start for connected clients  
-- 🧪 Experimental multiplayer gameplay  
+- ✅ Camera spectate — cycle between players with `,` / `.` keys or gamepad  
+- ✅ Boss HP scaling and boss rune sync  
+- ✅ Client mob attack synchronization and interruption  
+- ✅ Ghost weapon, head, and cosmetic sync  
+- ✅ Death/revive handling and restart sync  
+- ✅ Level graph reload sync (boss cell doors, level transitions)  
+- ✅ Multiplayer save slots and continue support  
+- ✅ Custom mode and stream mode support  
 
 ---
 
@@ -38,15 +43,13 @@ Every bit of feedback helps improve multiplayer support for **Dead Cells**.
 
 - **Dead Cells (PC)**
 - **Dead Cells Core Modding API (DCCM)**
-- Local network or virtual LAN software (for online play)
+- Local network, Steam, or virtual LAN software (for online play)
 
 ---
 
 ## 📦 Installation
 
-## 1️⃣ Install Dead Cells Core Modding API (DCCM)
-
-### 🔹 Steam version
+### 1️⃣ Install Dead Cells Core Modding API (DCCM)
 
 If you are using the **Steam version** of the game, follow the official installation guide:
 
@@ -54,44 +57,15 @@ If you are using the **Steam version** of the game, follow the official installa
 
 This method will automatically install and keep DCCM up to date.
 
----
-
-### 🔹 Non-Steam version
-If you are using a **non-Steam version** of Dead Cells:
-
-1. Download the latest release of **DCCM** from the official repository:
-   👉 [https://github.com/dead-cells-core-modding/core](https://github.com/dead-cells-core-modding/core)
-
-2. Open your Dead Cells game directory.
-
-3. Create a folder named `coremod`.
-
-4. Extract the downloaded DCCM files into the `coremod` folder.
-
-5. Open modcore.json that's in `your_game_path\Dead Cells\coremod\config\modcore.json`
-
-6. Ensure that EnableGoldberg is true! 
-<img width="351" height="163" alt="image" src="https://github.com/user-attachments/assets/8886c291-e0fc-45fe-80e8-4a40550b61aa" />
-
-
----
-
-## 2️⃣ Install DeadCellsMultiplayerMod
-
-### 🔹 Steam version
+### 2️⃣ Install DeadCellsMultiplayerMod
 
 If you are using the **Steam version** of the game:
-1. Open [https://steamcommunity.com/sharedfiles/filedetails/?id=3655044722](https://steamcommunity.com/sharedfiles/filedetails/?id=3657857836)
+1. Open [https://steamcommunity.com/sharedfiles/filedetails/?id=3657857836](https://steamcommunity.com/sharedfiles/filedetails/?id=3657857836)
 2. Install the mod in one click.
 
----
-
-### 🔹 Non-Steam version(DCCM doesn't support non-steam play now)
-
-If you are using a **non-Steam version** of Dead Cells:
-
+If you are using a **non-Steam version** of Dead Cells (DCCM required):
 1. Navigate to your **DCCM directory**
-2. Create a folder named `mods` (if it doesn’t exist)
+2. Create a folder named `mods` (if it doesn't exist)
 3. Extract the **DeadCellsMultiplayerMod** folder into the `mods` directory
 
 Example:
@@ -101,8 +75,6 @@ Your game path/
     └── mods/
         └── DeadCellsMultiplayerMod/
 ```
-
----
 
 ### 3️⃣ Run the game via DCCM
 
@@ -116,27 +88,32 @@ On the first launch, required configuration files will be generated automaticall
 1. Launch the game via **DCCM**
 2. Click **Play Multiplayer**
 3. Choose **Host** or **Join**
-4. Enter **IP address** and **port**
+4. Enter **IP address** and **port** (TCP) or connect via Steam
 5. When the host starts the game, the client will automatically join the session
 
-🌐 **For online play**, use one of the following virtual LAN tools:
+🌐 **For online play**, use one of the following:
 - Hamachi  
 - Radmin VPN  
 - ZeroTier  
+- Steam P2P (built-in)
 
 ---
 
 ## 🧪 Development Status / TODO
 
-- [x] Create second player ghost  
-- [x] Synchronize new game world data  
-- [x] Add player ghost animations  
-- [x] Improve ghost animation quality  
-- [x] Synchronize level generation  
-- [x] Synchronize enemies
-- [x] Implement death handling for ghost player
-- [x] Implement more interactions
-- [x] Synchronize bosses  
+- [x] Second player ghost  
+- [x] World data synchronization  
+- [x] Ghost animations  
+- [x] Level generation sync  
+- [x] Enemy synchronization  
+- [x] Boss synchronization, HP scaling, boss rune sync  
+- [x] Death handling and restart sync  
+- [x] Player ghost weapon, head, and cosmetic sync  
+- [x] Level graph reload (boss cells, transitions)  
+- [x] Multiplayer save slots and continue  
+- [x] Camera spectate mode  
+- [ ] Custom mode  
+- [x] Steam P2P connectivity  
 
 ---
 
@@ -146,8 +123,6 @@ On the first launch, required configuration files will be generated automaticall
   https://github.com/dead-cells-core-modding/core
 
 ---
-
-
 
 <!--
 Keywords: Dead Cells multiplayer mod, Dead Cells co-op mod, Dead Cells online, DCCM mod, Dead Cells TCP multiplayer
