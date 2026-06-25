@@ -27,7 +27,7 @@ public class LevelExitSync :
         public Entity? Door;
         public string DoorKey = string.Empty;
         public Graphics? Circle;
-        public dc.h2d.Text? Counter;
+        public dc.ui.Text? Counter;
         public bool? LastActive;
         public int LastTextWidth = -1;
         public int LastReadyCount = -1;
@@ -821,9 +821,9 @@ public class LevelExitSync :
                 var expected = net != null && net.IsAlive ? _cachedExpectedPlayerCount : System.Math.Max(1, _activePlayerIds.Count);
                 var initialLabel = BuildCounterLabel(0, expected);
                 visual.Counter = Assets.Class.makeText(initialLabel.AsHaxeString(), dc.ui.Text.Class.COLORS.get("WO".AsHaxeString()), false, parent);
+                visual.Counter.customScale = CounterScale;
+                visual.Counter.onResize();
                 visual.Counter.textColor = CounterColor;
-                visual.Counter.scaleX = CounterScale;
-                visual.Counter.scaleY = CounterScale;
                 visual.Counter.alpha = 1.0;
                 visual.Counter.y = -ExitCounterYOffsetPx;
                 visual.Counter.visible = true;

@@ -15,11 +15,11 @@ namespace DeadCellsMultiplayerMod
     {
         private sealed class LabelState
         {
-            public dc.h2d.Text Label { get; }
+            public dc.ui.Text Label { get; }
             public string TextValue { get; set; }
             public int TextLength { get; set; }
 
-            public LabelState(dc.h2d.Text label, string textValue)
+            public LabelState(dc.ui.Text label, string textValue)
             {
                 Label = label;
                 TextValue = textValue;
@@ -181,15 +181,15 @@ namespace DeadCellsMultiplayerMod
                 _labels.Remove(entity);
             }
             _Assets _Assets = Assets.Class;
-            dc.h2d.Text text_h2d = _Assets.makeText(normalizedText.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), null, entity.spr);
+            var nicknameColor = dc.ui.Text.Class.COLORS.get("ST".AsHaxeString());
+            dc.ui.Text text_h2d = _Assets.makeText(normalizedText.AsHaxeString(), nicknameColor, null, entity.spr);
             var targetScale = GetNicknameScale();
             text_h2d.y -= 80;
             text_h2d.x -= 2.5 * normalizedText.Length;
-            text_h2d.font.size = 12;
             text_h2d.alpha = 0.8;
-            text_h2d.scaleX = targetScale;
-            text_h2d.scaleY = targetScale;
-            text_h2d.textColor = 0;
+            text_h2d.customScale = targetScale;
+            text_h2d.onResize();
+            text_h2d.textColor = nicknameColor;
             _labels[entity] = new LabelState(text_h2d, normalizedText);
         }
 
@@ -215,17 +215,17 @@ namespace DeadCellsMultiplayerMod
 
                 var targetX = -2.5 * state.TextLength;
                 var targetY = -80;
+                label.customScale = targetScale;
+                label.onResize();
                 if (entity.dir < 0)
                 {
-                    label.scaleX = -targetScale;
+                    label.scaleX = -label.scaleX;
                     label.x = -targetX;
                 }
                 else
                 {
-                    label.scaleX = targetScale;
                     label.x = targetX;
                 }
-                label.scaleY = targetScale;
                 label.y = targetY;
             }
 

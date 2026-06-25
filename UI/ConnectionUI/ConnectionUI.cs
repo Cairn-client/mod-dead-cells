@@ -370,14 +370,16 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                     : isConnecting
                     ? GetText.Instance.GetString("connecting...")
                     : $"{GetText.Instance.GetString("- ")}{name}";
+                var nameColor = Tools.MultiColor.ColorFromHex("#c9c9c9");
                 dc.ui.Text player2 = Assets.Class.makeText(
                 displayName.AsHaxeString(),
-                Tools.MultiColor.ColorFromHex("#c9c9c9"),
+                nameColor,
                 false,
                 null
             );
-                player2.scaleX = 0.5 * uiScale;
-                player2.scaleY = 0.5 * uiScale;
+                player2.customScale = 0.5 * uiScale;
+                player2.onResize();
+                player2.textColor = nameColor;
                 this.MainTitleflow.addChild(player2);
                 this.connectionLabels.Add(player2);
             }
@@ -418,36 +420,35 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
             if (this.lobbyCodeTitleLabel == null)
             {
+                var titleColor = Tools.MultiColor.ColorFromHex("#9ea8b3");
                 this.lobbyCodeTitleLabel = Assets.Class.makeText(
                     GetText.Instance.GetString("Lobby code").AsHaxeString(),
-                    Tools.MultiColor.ColorFromHex("#9ea8b3"),
+                    titleColor,
                     false,
                     null);
                 this.lobbyCodeFlow.addChild(this.lobbyCodeTitleLabel);
+                this.lobbyCodeTitleLabel.textColor = titleColor;
             }
 
             if (this.lobbyIdLabel == null)
             {
+                var idColor = Tools.MultiColor.ColorFromHex("#7fd4ff");
                 this.lobbyIdLabel = Assets.Class.makeText(
                     string.Empty.AsHaxeString(),
-                    Tools.MultiColor.ColorFromHex("#7fd4ff"),
+                    idColor,
                     true,
                     null);
                 this.lobbyCodeFlow.addChild(this.lobbyIdLabel);
+                this.lobbyIdLabel.textColor = idColor;
             }
 
             var lobbyCodeScale = 0.55 * uiScale;
-            this.lobbyCodeTitleLabel.scaleX = lobbyCodeScale;
-            this.lobbyCodeTitleLabel.scaleY = lobbyCodeScale;
-            this.lobbyIdLabel.scaleX = lobbyCodeScale;
-            this.lobbyIdLabel.scaleY = lobbyCodeScale;
-
-            try
-            {
-                this.lobbyCodeTitleLabel.font.size = 14;
-                this.lobbyIdLabel.font.size = 16;
-            }
-            catch { /* font may not be available on dc.ui.Text */ }
+            this.lobbyCodeTitleLabel.customScale = lobbyCodeScale;
+            this.lobbyCodeTitleLabel.onResize();
+            this.lobbyCodeTitleLabel.textColor = Tools.MultiColor.ColorFromHex("#9ea8b3");
+            this.lobbyIdLabel.customScale = lobbyCodeScale;
+            this.lobbyIdLabel.onResize();
+            this.lobbyIdLabel.textColor = Tools.MultiColor.ColorFromHex("#7fd4ff");
         }
 
         private void UpdateLobbyIdLabel(bool forceRefreshText)

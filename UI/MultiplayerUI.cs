@@ -506,8 +506,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
                 dc.ui.Text.Class.COLORS.get("WO".AsHaxeString()),
                 false,
                 flowContainer);
-            text.scaleX = SystemMsgScale;
-            text.scaleY = SystemMsgScale;
+            text.customScale = SystemMsgScale;
+            text.onResize();
             text.textColor = 0xFFFFFF;
             text.alpha = 1;
 
