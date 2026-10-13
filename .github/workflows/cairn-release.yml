@@ -1,0 +1,82 @@
+name: Cairn release
+
+# A Cairn release is a bare X.Y.Z tag on main. It builds the mod as the project's own workflow does, against the Dead Cells Core Modding API release
+# the pack carries (pinned by sha256), puts both into a Cairn mod pack (.github/cairn/Build-Pack.ps1) and publishes the pack, pack-index.json and
+# game.json: the Cairn launcher reads the index to install and update this mod. RELEASE_CHANNEL=beta publishes a pre-release (only players who
+# chose beta are offered it).
+on:
+  push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: The tag must be on main and equal VERSION
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) { throw "tag $env:GITHUB_REF_NAME is not on main" }
+          $v = (Get-Content VERSION -TotalCount 1).Trim()
+          if ($v -ne $env:GITHUB_REF_NAME) { throw "tag $env:GITHUB_REF_NAME is not VERSION ($v)" }
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Get the Dead Cells Core Modding API the pack is made with
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force dl | Out-Null
+          gh release download v35.13.8 -R dead-cells-core-modding/core -p win-x64.zip -D dl
+          $h = (Get-FileHash dl/win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "win-x64.zip v35.13.8 sha256 $h"
+          if ($h -ne '2b442320e8f9c4b6d43b8d9b9a4c33ce3cc47117249c8308332514a464546741') { throw "the Dead Cells Core Modding API is not the one this pack was made with ($h)" }
+          Expand-Archive -Path dl/win-x64.zip -DestinationPath dccm
+          $mdkRoot = "$env:GITHUB_WORKSPACE\dccm\core\mdk"
+          "DCCM_MDK_ROOT=$mdkRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          dotnet nuget add source "$mdkRoot\packages" --name dccm-local
+
+      - name: Build the mod
+        run: dotnet build -c Release
+
+      - name: Build the pack
+        shell: pwsh
+        run: |
+          $modVersion = [regex]::Match((Get-Content BuildInfo.cs -Raw), 'const string Version = "([0-9.]+)"').Groups[1].Value
+          if (-not $modVersion) { throw 'could not read the mod version from BuildInfo.cs' }
+          ./.github/cairn/Build-Pack.ps1 -DccmZip dl/win-x64.zip -ModDir bin/Release/net10.0/output/DeadCellsMultiplayerMod -UpstreamVersion $modVersion
+
+      - name: Changelog
+        shell: pwsh
+        run: ./.github/cairn/New-ReleaseNotes.ps1 -OutFile notes.md -Tag $env:GITHUB_REF_NAME
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cairn-pack
+          path: |
+            release/Cairn-Pack-dead-cells-*.zip
+            release/pack-index.json
+            .github/cairn/game/game.json
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = @("release/Cairn-Pack-dead-cells-$env:GITHUB_REF_NAME.zip", 'release/pack-index.json') + (Get-ChildItem .github/cairn/game -File | ForEach-Object { $_.FullName })
+          $flags = @()
+          if ((Get-Content RELEASE_CHANNEL -Raw).Trim() -eq 'beta') { $flags += '--prerelease' }
+          gh release create $env:GITHUB_REF_NAME @assets --title $env:GITHUB_REF_NAME --notes-file notes.md --verify-tag @flags

@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "id": "dead-cells",
+  "name": "Dead Cells",
+  "developer": "Motion Twin",
+  "franchise": "Dead Cells",
+  "steamAppId": 588650,
+  "exe": "deadcells.exe",
+  "description": "Fight through the Prisoners' Quarters side by side. The Dead Cells Multiplayer Mod puts two players in the same run: the same levels, enemies and bosses, in real time.",
+  "accent": "#E0613D",
+  "images": {
+    "background": "dead-cells.jpg",
+    "logo": "dead-cells-logo.png",
+    "hero": "dead-cells-hero.jpg",
+    "poster": "dead-cells-poster.jpg",
+    "screenshots": [ "dead-cells-shot-1.jpg", "dead-cells-shot-2.jpg" ]
+  },
+  "ownSession": true,
+  "setup": [
+    { "kind": "steam-running" },
+    { "kind": "steam-app", "appId": 588650, "title": "Dead Cells", "detail": "Install Dead Cells from your Steam library." },
+    { "kind": "game-found" },
+    { "kind": "mod-installed", "detail": "Download the mod above: Cairn puts it, and the modding API it runs on, in the game's coremod folder." }
+  ],
+  "hostSteps": [
+    "Download the mod above. Cairn puts the mod and the Dead Cells Core Modding API in the game's coremod folder and keeps them up to date.",
+    "Press Play: Cairn starts the game through the modding API's own launcher, not through Steam directly.",
+    "In the main menu choose Play Multiplayer, then Host (Steam P2P) or Host (TCP, port 1234).",
+    "Invite your friend with the Steam overlay, or share your address and port, then pick a save slot and start the game."
+  ],
+  "joinSteps": [
+    "Download the mod above, the same version as the host's, then press Play.",
+    "In the main menu choose Play Multiplayer and join through the host's Steam invite, or with the host's address and port (Join TCP).",
+    "When both of you are in the lobby the host starts the game and you spawn together."
+  ],
+  "features": [
+    { "title": "Sessions", "items": [
+      { "name": "Host and join", "detail": "Play over Steam peer to peer, or by address on a local network or a virtual one. Both players need the same version of the mod.", "status": "inTest" },
+      { "name": "Kept up to date", "detail": "Cairn installs the mod and the modding API it runs on in the game's folder and updates them when a new version is released." }
+    ] },
+    { "title": "Co-op", "items": [
+      { "name": "Two players, one run", "detail": "Levels, enemies, bosses and rune progress are kept in step between the players.", "status": "inTest" },
+      { "name": "Spectating and revives", "detail": "Switch the camera between players, and handle deaths and restarts together.", "status": "inTest" }
+    ] }
+  ]
+}
