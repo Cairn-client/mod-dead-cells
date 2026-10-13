@@ -56,7 +56,11 @@ jobs:
         run: |
           $modVersion = [regex]::Match((Get-Content BuildInfo.cs -Raw), 'const string Version = "([0-9.]+)"').Groups[1].Value
           if (-not $modVersion) { throw 'could not read the mod version from BuildInfo.cs' }
-          ./.github/cairn/Build-Pack.ps1 -DccmZip dl/win-x64.zip -ModDir bin/Release/net10.0/output/DeadCellsMultiplayerMod -UpstreamVersion $modVersion
+          # the folder the build laid the mod out in: the one with modinfo.json
+          $info = @(Get-ChildItem . -Recurse -Filter modinfo.json -File | Where-Object { $_.FullName -notmatch '[\/](dccm|dl)[\/]' -and $_.FullName -match '[\/]bin[\/]' })
+          Write-Host "modinfo.json found: $($info.FullName -join '; ')"
+          if ($info.Count -ne 1) { throw "expected one built mod folder, found $($info.Count)" }
+          ./.github/cairn/Build-Pack.ps1 -DccmZip dl/win-x64.zip -ModDir $info[0].DirectoryName -UpstreamVersion $modVersion
 
       - name: Changelog
         shell: pwsh
